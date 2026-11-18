@@ -131,6 +131,21 @@ enum Cmd {
         #[arg(long, default_value_t = 0)]
         seconds: u64,
     },
+    /// Сценарий активации: проверка прошивки → ожидание ADB → root → версия
+    Activate {
+        #[arg(long)]
+        addr: String,
+        #[arg(long)]
+        manifest: Option<PathBuf>,
+        #[arg(long)]
+        platform: Option<String>,
+        #[arg(long)]
+        version: Option<String>,
+        #[arg(long)]
+        firmware: Option<PathBuf>,
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Устройство: ADB-подключение и сведения
     Device {
         #[command(subcommand)]
@@ -413,6 +428,14 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
             &firmware,
             seconds,
         ),
+        Cmd::Activate {
+            addr,
+            manifest,
+            platform,
+            version,
+            firmware,
+            dry_run,
+        } => run_activate(&cfg, &addr, manifest, platform, version, firmware, dry_run),
         Cmd::Device { cmd } => run_device(cmd),
         Cmd::Ota { cmd } => run_ota(cmd),
         Cmd::Telemetry { cmd } => run_telemetry(&cfg, cmd),
@@ -717,6 +740,65 @@ fn run_local_ota(
     }
     server.stop();
     Ok(ExitCode::SUCCESS)
+}
+
+fn run_activate(
+    cfg: &Config,
+    addr: &str,
+    manifest: Option<PathBuf>,
+    platform: Option<String>,
+    version: Option<String>,
+    firmware: Option<PathBuf>,
+    dry_run: bool,
+) -> cockpit_core::Result<ExitCode> {
+    use std::sync::Arc;
+
+    use cockpit_core::{Context, JsonlJournal, Runner};
+    use cockpit_net::SystemRunner;
+
+    let runner: Arc<dyn cockpit_net::CommandRunner> = Arc::new(SystemRunner);
+
+    let known = match (manifest, platform, version, firmware) {
+        (Some(m), Some(p), Some(v), Some(f)) => {
+            let base = cockpit_ota::Manifest::load(&m)
+                .map_err(|e| CockpitError::Config(format!("{}: {e}", m.display())))?;
+            let entry = base
+                .entries(&p)
+                .map_err(|e| CockpitError::Config(e.to_string()))?
+                .get(&v)
+                .cloned()
+                .ok_or_else(|| CockpitError::Config(format!("нет {p} {v} в манифесте")))?;
+            Some((f, entry))
+        }
+        _ => None,
+    };
+
+    let journal = JsonlJournal::open(cfg.journal_path())?;
+    let ctx = Context::new(cfg.data_dir(), dry_run);
+    let steps = cockpit_device::steps::plan(runner, addr, known);
+    let report = Runner::new(&journal, "activate")
+        .with_steps(steps)
+        .run(&ctx);
+
+    match report {
+        Ok(r) => {
+            println!(
+                "активация завершена{} (шагов: {})",
+                if dry_run { " (dry-run)" } else { "" },
+                r.executed.len()
+            );
+            println!("журнал: {}", journal.path().display());
+            Ok(ExitCode::SUCCESS)
+        }
+        Err(e) => {
+            println!("активация прервана: {e}");
+            if let Some(hint) = e.hint() {
+                println!("  подсказка: {hint}");
+            }
+            println!("журнал: {}", journal.path().display());
+            Ok(ExitCode::FAILURE)
+        }
+    }
 }
 
 fn run_device(cmd: DeviceCmd) -> cockpit_core::Result<ExitCode> {

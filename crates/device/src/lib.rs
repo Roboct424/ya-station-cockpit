@@ -3,6 +3,8 @@
 //! Никакой магии: команды строятся и выполняются через `CommandRunner`,
 //! поэтому в тестах используются заглушки, а в реальной работе — `adb`.
 
+pub mod steps;
+
 use std::sync::Arc;
 
 use cockpit_net::{CommandRunner, CommandSpec, NetError};
