@@ -44,6 +44,31 @@ pub struct CertAuthority {
 impl CertAuthority {
     pub fn generate() -> Result<Self, TlsError> {
         let ca_key = KeyPair::generate()?;
+        Self::from_key(ca_key)
+    }
+
+    /// Загружает ключ CA с диска или создаёт и сохраняет новый.
+    ///
+    /// GOTCHA: G-025 — CA обязан быть постоянным: устройство доверяет
+    /// конкретному сертификату, и после перезапуска с новым ключом любое
+    /// соединение падает с `UnknownCA`.
+    pub fn load_or_create(key_path: &std::path::Path) -> Result<Self, TlsError> {
+        if key_path.exists() {
+            let pem = std::fs::read_to_string(key_path)?;
+            let key = KeyPair::from_pem(&pem)?;
+            return Self::from_key(key);
+        }
+        let key = KeyPair::generate()?;
+        if let Some(dir) = key_path.parent() {
+            if !dir.as_os_str().is_empty() {
+                std::fs::create_dir_all(dir)?;
+            }
+        }
+        std::fs::write(key_path, key.serialize_pem())?;
+        Self::from_key(key)
+    }
+
+    fn from_key(ca_key: KeyPair) -> Result<Self, TlsError> {
         let mut params = CertificateParams::new(vec!["cockpit-local-ca".to_string()])?;
         params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
         params
@@ -195,6 +220,14 @@ pub struct ForwardOptions {
 impl Default for ForwardOptions {
     fn default() -> Self {
         let mut roots = rustls::RootCertStore::empty();
+        // GOTCHA: G-026 — только webpki-roots недостаточно: у Яндекса часть
+        // сертификатов выпущена российскими корневыми CA, которых нет в
+        // списке Mozilla. Поэтому сначала берём системное хранилище Windows,
+        // затем добавляем Mozilla как запас.
+        let native = rustls_native_certs::load_native_certs();
+        for cert in native.certs {
+            let _ = roots.add(cert);
+        }
         roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
         Self {
             upstream_port: 443,
@@ -210,6 +243,14 @@ pub struct LocalRoutes {
     pub sync_info: Option<Vec<u8>>,
     /// (путь к файлу, имя для URL)
     pub firmware: Option<(PathBuf, String)>,
+    /// Куда отдавать всё, что не совпало с локальными маршрутами.
+    ///
+    /// GOTCHA: G-023 — если отвечать 404 на незнакомое, станция решает, что
+    /// интернета нет (`setup_endpoint: NO_INTERNET`), и сбрасывает настройку.
+    /// Поэтому незнакомые запросы уходят в настоящее облако.
+    pub forward: Option<ForwardOptions>,
+    /// Подменять ответ `/token` локальным (регистрация без облака).
+    pub local_auth: bool,
 }
 
 enum Mode {
@@ -266,12 +307,23 @@ impl TlsInterceptor {
                         let ca = ca.clone();
                         let seen = seen_flag.clone();
                         let mode = mode.clone();
-                        // По одному соединению: фаза 4, честная простота.
-                        let _ = match mode.as_ref() {
-                            Mode::Serve => serve(stream, ca, seen),
-                            Mode::Forward(opts) => serve_forward(stream, ca, opts.clone(), seen),
-                            Mode::Local(routes) => serve_local(stream, ca, routes.clone(), seen),
-                        };
+                        // GOTCHA: G-024 — по одному соединению нельзя: станция
+                        // открывает несколько параллельно, и очередь блокирует
+                        // все остальные (ошибки «не удалось завершить доставку»).
+                        std::thread::spawn(move || {
+                            let result = match mode.as_ref() {
+                                Mode::Serve => serve(stream, ca, seen),
+                                Mode::Forward(opts) => {
+                                    serve_forward(stream, ca, opts.clone(), seen)
+                                }
+                                Mode::Local(routes) => {
+                                    serve_local(stream, ca, routes.clone(), seen)
+                                }
+                            };
+                            if let Err(e) = result {
+                                eprintln!("[tls] ошибка соединения: {e}");
+                            }
+                        });
                     }
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                         std::thread::sleep(Duration::from_millis(50));
@@ -568,17 +620,37 @@ fn serve_local(
         None => stream.local_addr()?.ip().to_string(),
     };
     if let Ok(mut log) = seen.lock() {
-        log.push(host);
+        log.push(host.clone());
     }
+    eprintln!("[tls] sni={host} порт={}", stream.local_addr()?.port());
 
-    let config = ca.config_for("quasar.yandex.net")?;
+    // Сертификат — на реальный SNI: устройство ходит и в oauth, и в quasar.
+    let cert_host = if host.is_empty() || host.parse::<std::net::IpAddr>().is_ok() {
+        "quasar.yandex.net".to_string()
+    } else {
+        host.clone()
+    };
+    let config = ca.config_for(&cert_host)?;
     let conn = ServerConnection::new(config)?;
     let mut tls = StreamOwned::new(conn, stream);
     tls_accept(&mut tls.conn, &mut tls.sock)?;
 
-    let (method, path, headers) = read_request(&mut tls)?;
-    let _ = method;
+    let (method, path, headers, raw) = read_request(&mut tls)?;
+    eprintln!("[local] {method} {path}");
 
+    if path.contains("generate_204") || path.contains("/gen_204") || path.contains("/connectivity")
+    {
+        return write_response(&mut tls, 204, "text/plain", b"", None);
+    }
+    if routes.local_auth && path.contains("/token") {
+        let body = br#"{"access_token":"y0__localCockpit","expires_in":31536000,"token_type":"bearer","uid":1000000001,"refresh_token":"local:refresh:0"}"#;
+        return write_response(&mut tls, 200, "application/json", body, None);
+    }
+    // Регистрация «в себе»: станция считает аккаунт привязанным, облако не нужно.
+    if routes.local_auth && path.ends_with("/register") {
+        let body = br#"{"status":"ok","hasCriticalUpdate":false}"#;
+        return write_response(&mut tls, 200, "application/json", body, None);
+    }
     if path.contains("/check_updates") {
         if let Some(body) = &routes.check_updates {
             return write_response(&mut tls, 200, "application/json", body, None);
@@ -597,6 +669,12 @@ fn serve_local(
         }
     }
 
+    // Не наш путь: отдаём в настоящее облако, иначе станция считает,
+    // что интернета нет (G-023).
+    if let Some(options) = &routes.forward {
+        return forward_request(tls, &raw, &host, options);
+    }
+
     write_response(
         &mut tls,
         404,
@@ -606,9 +684,51 @@ fn serve_local(
     )
 }
 
+/// Проксирует запрос в настоящее облако поверх нового TLS-соединения.
+fn forward_request(
+    mut tls: StreamOwned<ServerConnection, TcpStream>,
+    raw: &[u8],
+    host: &str,
+    options: &ForwardOptions,
+) -> Result<(), TlsError> {
+    if host.is_empty() || host.parse::<std::net::IpAddr>().is_ok() {
+        return write_response(
+            &mut tls,
+            404,
+            "application/json",
+            b"{\"status\":\"no_host\"}",
+            None,
+        );
+    }
+
+    let addr = resolve_upstream(host, options)?;
+    let mut up_sock = TcpStream::connect_timeout(&addr, Duration::from_secs(10))?;
+    up_sock.set_read_timeout(Some(Duration::from_secs(20)))?;
+    up_sock.set_write_timeout(Some(Duration::from_secs(20)))?;
+
+    let name = ServerName::try_from(host.to_string()).map_err(|_| {
+        TlsError::Io(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("недопустимое имя: {host}"),
+        ))
+    })?;
+    let mut up_tls = ClientConnection::new(Arc::new(client_config(&options.roots)?), name)?;
+    tls_connect(&mut up_tls, &mut up_sock)?;
+
+    // Отдаём ровно те байты, что прислало устройство (вместе с телом, если оно
+    // успело прийти), затем перекачиваем ответ обратно.
+    up_tls.writer().write_all(raw)?;
+    while up_tls.wants_write() {
+        up_tls.write_tls(&mut up_sock)?;
+    }
+
+    pump(&mut tls.conn, &mut tls.sock, &mut up_tls, &mut up_sock)
+}
+
+#[allow(clippy::type_complexity)]
 fn read_request(
     tls: &mut StreamOwned<ServerConnection, TcpStream>,
-) -> Result<(String, String, HashMap<String, String>), TlsError> {
+) -> Result<(String, String, HashMap<String, String>, Vec<u8>), TlsError> {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 4096];
     while buf.len() < 64 * 1024 {
@@ -639,7 +759,7 @@ fn read_request(
             headers.insert(k.trim().to_lowercase(), v.trim().to_string());
         }
     }
-    Ok((method, path, headers))
+    Ok((method, path, headers, buf))
 }
 
 fn write_response(
@@ -656,7 +776,8 @@ fn write_response(
         _ => "OK",
     };
     let mut head = format!(
-        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n",
+        "HTTP/1.1 {status} {reason}\r\nDate: {}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n",
+        chrono::Utc::now().format("%a, %d %b %Y %H:%M:%S GMT"),
         body.len()
     );
     if let Some(extra) = extra {

@@ -5,6 +5,7 @@
 //! без зависимостей; формат DNS для A/AAAA — сотня строк. Когда понадобятся
 //! EDNS/DoH/подписи — заменим на `hickory-proto`, не меняя API сервера.
 
+pub mod http;
 pub mod tls;
 
 use std::io;

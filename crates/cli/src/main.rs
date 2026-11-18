@@ -131,6 +131,15 @@ enum Cmd {
         firmware: PathBuf,
         #[arg(long, default_value_t = 0)]
         seconds: u64,
+        /// Всё, что не наш маршрут, отдавать в настоящее облако.
+        ///
+        /// Без этого станция видит 404 на проверки связи и говорит
+        /// «нет доступа к интернету» (G-023).
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        forward: bool,
+        /// Где отвечать 204 на проверку связи (порт 80).
+        #[arg(long, default_value = "0.0.0.0:80")]
+        http_bind: String,
     },
     /// Сценарий активации: проверка прошивки → ожидание ADB → root → версия
     Activate {
@@ -467,6 +476,8 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
             version,
             firmware,
             seconds,
+            forward,
+            http_bind,
         } => run_local_ota(
             &bind,
             ca_out.as_ref(),
@@ -475,6 +486,8 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
             &version,
             &firmware,
             seconds,
+            forward,
+            &http_bind,
         ),
         Cmd::Activate {
             addr,
@@ -720,6 +733,7 @@ fn maybe_prompt_consent(cfg: &Config) {
     println!();
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_local_ota(
     bind: &str,
     ca_out: Option<&PathBuf>,
@@ -728,6 +742,8 @@ fn run_local_ota(
     version: &str,
     firmware: &Path,
     seconds: u64,
+    forward: bool,
+    http_bind: &str,
 ) -> cockpit_core::Result<ExitCode> {
     use cockpit_intercept::tls::{CertAuthority, LocalRoutes, TlsInterceptor};
 
@@ -758,7 +774,8 @@ fn run_local_ota(
         .to_string();
 
     let ca = std::sync::Arc::new(
-        CertAuthority::generate().map_err(|e| CockpitError::Internal(format!("CA: {e}")))?,
+        CertAuthority::load_or_create(&ca_key_path())
+            .map_err(|e| CockpitError::Internal(format!("CA: {e}")))?,
     );
 
     if let Some(path) = ca_out {
@@ -777,6 +794,12 @@ fn run_local_ota(
         check_updates: Some(cockpit_ota::check_updates_json(&entry, &download_url)),
         sync_info: Some(cockpit_ota::sync_info_json()),
         firmware: Some((firmware.to_path_buf(), name.clone())),
+        forward: if forward {
+            Some(cockpit_intercept::tls::ForwardOptions::default())
+        } else {
+            None
+        },
+        local_auth: true,
     };
 
     let server = TlsInterceptor::start_local(addr, ca, routes)
@@ -789,6 +812,29 @@ fn run_local_ota(
     );
     println!("  /get_sync_info → adbd.network = true");
     println!("  /firmware/{name} → {}", firmware.display());
+    println!(
+        "  остальное → {}",
+        if forward {
+            "настоящее облако"
+        } else {
+            "404 (станция решит, что интернета нет)"
+        }
+    );
+    // Проверка связи: станция просит http://scbh.yandex.net/generate_204
+    // и берёт время из заголовка Date.
+    let http = match http_bind.parse::<std::net::SocketAddr>() {
+        Ok(addr) => match cockpit_intercept::http::HttpResponder::start(addr) {
+            Ok(r) => {
+                println!("проверка связи (204) на {}", r.addr());
+                Ok(r)
+            }
+            Err(e) => Err(e),
+        },
+        Err(e) => Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)),
+    };
+    if let Err(e) = &http {
+        println!("проверка связи не поднялась: {e} (нужны права на порт 80)");
+    }
 
     if seconds == 0 {
         loop {
@@ -798,6 +844,9 @@ fn run_local_ota(
         std::thread::sleep(Duration::from_secs(seconds));
     }
     server.stop();
+    if let Ok(http) = http {
+        http.stop();
+    }
     Ok(ExitCode::SUCCESS)
 }
 
@@ -869,6 +918,8 @@ fn run_activate(
             check_updates: Some(cockpit_ota::check_updates_json(&entry, &url)),
             sync_info: Some(cockpit_ota::sync_info_json()),
             firmware: Some((file, name)),
+            forward: Some(cockpit_intercept::tls::ForwardOptions::default()),
+            local_auth: true,
         };
         let server = cockpit_intercept::tls::TlsInterceptor::start_local(bind, ca, routes)
             .map_err(|e| CockpitError::Internal(format!("local-ota: {e}")))?;
@@ -1025,6 +1076,11 @@ fn run_capture(cfg: &Config, cmd: CaptureCmd) -> cockpit_core::Result<ExitCode> 
 
 fn now_stamp() -> String {
     chrono::Utc::now().to_rfc3339()
+}
+
+/// Где лежит постоянный ключ локального CA.
+fn ca_key_path() -> PathBuf {
+    PathBuf::from("data").join("ca.key")
 }
 
 fn run_ota(cmd: OtaCmd) -> cockpit_core::Result<ExitCode> {
@@ -1263,7 +1319,8 @@ fn run_tls(
         .map_err(|e| CockpitError::Config(format!("--bind {bind}: {e}")))?;
 
     let ca = std::sync::Arc::new(
-        CertAuthority::generate().map_err(|e| CockpitError::Internal(format!("CA: {e}")))?,
+        CertAuthority::load_or_create(&ca_key_path())
+            .map_err(|e| CockpitError::Internal(format!("CA: {e}")))?,
     );
 
     if let Some(path) = ca_out {

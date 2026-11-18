@@ -72,6 +72,8 @@ fn serves_check_updates_and_sync() {
             check_updates: Some(check),
             sync_info: Some(sync),
             firmware: Some((fw, "fw.zip".into())),
+            forward: None,
+            local_auth: true,
         },
     )
     .unwrap();

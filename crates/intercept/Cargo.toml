@@ -6,6 +6,8 @@ license.workspace = true
 
 [dependencies]
 thiserror.workspace = true
+chrono.workspace = true
 rcgen.workspace = true
 rustls.workspace = true
 webpki-roots.workspace = true
+rustls-native-certs = "0.8"
