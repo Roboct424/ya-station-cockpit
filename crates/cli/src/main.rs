@@ -830,7 +830,7 @@ fn run_local_ota(
     routes_file: &std::path::Path,
     certs: &[PathBuf],
 ) -> cockpit_core::Result<ExitCode> {
-    use cockpit_intercept::tls::{CertAuthority, LocalRoutes, TlsInterceptor};
+    use cockpit_intercept::tls::{LocalRoutes, TlsInterceptor};
 
     let addr: std::net::SocketAddr = bind
         .parse()
@@ -1561,7 +1561,7 @@ fn run_tls(
     forward: bool,
     certs: &[PathBuf],
 ) -> cockpit_core::Result<ExitCode> {
-    use cockpit_intercept::tls::{CertAuthority, TlsInterceptor};
+    use cockpit_intercept::tls::TlsInterceptor;
 
     let addr: std::net::SocketAddr = bind
         .parse()
