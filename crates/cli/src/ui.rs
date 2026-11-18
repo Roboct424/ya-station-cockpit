@@ -122,7 +122,7 @@ fn handle(mut stream: TcpStream) -> std::io::Result<()> {
     let response = format!(
         "HTTP/1.1 {status} OK\r\nContent-Type: text/{}; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         if status == 200 { "html" } else { "plain" },
-        text.as_bytes().len(),
+        text.len(),
         text
     );
     stream.write_all(response.as_bytes())?;
