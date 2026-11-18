@@ -838,12 +838,12 @@ fn run_activate(
     if let Some(script) = guard {
         let content = std::fs::read_to_string(&script)
             .map_err(|e| CockpitError::Config(format!("{}: {e}", script.display())))?;
-        steps.push(Box::new(cockpit_device::steps::InstallGuard {
+        steps.push(Box::new(cockpit_device::steps::InstallGuard::new(
             runner,
-            addr: addr.to_string(),
-            path: "/etc/init.d/S99adbguard".into(),
+            addr,
+            "/etc/init.d/S99adbguard",
             content,
-        }));
+        )));
     }
     let report = Runner::new(&journal, "activate")
         .with_steps(steps)

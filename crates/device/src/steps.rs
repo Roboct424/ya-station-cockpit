@@ -225,6 +225,25 @@ pub struct InstallGuard {
     pub addr: String,
     pub path: String,
     pub content: String,
+    /// Был ли существующий файл сохранён в `.bak` (нужно для отката).
+    pub backed_up: std::sync::atomic::AtomicBool,
+}
+
+impl InstallGuard {
+    pub fn new(
+        runner: Arc<dyn CommandRunner>,
+        addr: impl Into<String>,
+        path: impl Into<String>,
+        content: impl Into<String>,
+    ) -> Self {
+        Self {
+            runner,
+            addr: addr.into(),
+            path: path.into(),
+            content: content.into(),
+            backed_up: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
 }
 
 impl Step for InstallGuard {
@@ -249,6 +268,20 @@ impl Step for InstallGuard {
         let tmp = std::env::temp_dir().join("cockpit-guard.sh");
         std::fs::write(&tmp, &self.content)
             .map_err(|e| CockpitError::Internal(format!("временный файл: {e}")))?;
+
+        // Бэкап существующего сторожа: без него откат не вернёт прежний.
+        let exists = adb
+            .shell(&format!("test -f {} && echo yes || echo no", self.path))
+            .map_err(|e| CockpitError::Internal(e.to_string()))?;
+        if exists.trim() == "yes" {
+            adb.shell(&format!("cp -f {} {}.bak", self.path, self.path))
+                .map_err(|e| CockpitError::StepFailed {
+                    step: "install-guard".into(),
+                    reason: format!("backup: {e}"),
+                })?;
+            self.backed_up
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
 
         adb.push(&tmp, &self.path)
             .map_err(|e| CockpitError::StepFailed {
@@ -278,8 +311,13 @@ impl Step for InstallGuard {
 
     fn rollback(&self, _ctx: &Context) -> Result<()> {
         let adb = Adb::new(self.runner.clone(), self.addr.clone());
-        adb.shell(&format!("rm -f {}", self.path))
-            .map_err(|e| CockpitError::Internal(e.to_string()))?;
+        if self.backed_up.load(std::sync::atomic::Ordering::SeqCst) {
+            adb.shell(&format!("mv -f {}.bak {}", self.path, self.path))
+                .map_err(|e| CockpitError::Internal(e.to_string()))?;
+        } else {
+            adb.shell(&format!("rm -f {}", self.path))
+                .map_err(|e| CockpitError::Internal(e.to_string()))?;
+        }
         Ok(())
     }
 }
