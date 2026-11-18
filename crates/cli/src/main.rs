@@ -575,6 +575,9 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
         Cmd::Telemetry { cmd } => run_telemetry(&cfg, cmd),
         Cmd::Capture { cmd } => run_capture(&cfg, cmd),
         Cmd::Ui { port } => {
+            if !ui::ensure_admin() {
+                return Ok(ExitCode::SUCCESS);
+            }
             ui::serve(port).map_err(|e| CockpitError::Internal(format!("панель {port}: {e}")))?;
             Ok(ExitCode::SUCCESS)
         }
