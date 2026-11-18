@@ -11,6 +11,7 @@ use cockpit_core::{CockpitError, Context, Journal, JsonlJournal, Record, Runner,
 use cockpit_scenarios::Scenario;
 
 mod selfcheck;
+mod ui;
 
 #[derive(Parser)]
 #[command(
@@ -160,6 +161,11 @@ enum Cmd {
     Device {
         #[command(subcommand)]
         cmd: DeviceCmd,
+    },
+    /// Локальная веб-панель (мастер + журнал + диагностика)
+    Ui {
+        #[arg(long, default_value_t = 8899)]
+        port: u16,
     },
     /// Версия
     Version,
@@ -457,6 +463,10 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
         Cmd::Ota { cmd } => run_ota(cmd),
         Cmd::Telemetry { cmd } => run_telemetry(&cfg, cmd),
         Cmd::Capture { cmd } => run_capture(&cfg, cmd),
+        Cmd::Ui { port } => {
+            ui::serve(port).map_err(|e| CockpitError::Internal(format!("панель {port}: {e}")))?;
+            Ok(ExitCode::SUCCESS)
+        }
         Cmd::Version => {
             println!("cockpit {}", env!("CARGO_PKG_VERSION"));
             println!("  сценариев: selfcheck, YAML");
