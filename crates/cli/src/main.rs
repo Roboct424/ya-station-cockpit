@@ -114,6 +114,23 @@ enum Cmd {
         #[command(subcommand)]
         cmd: CaptureCmd,
     },
+    /// Локальный сервер OTA/sync: отдаёт прошивку и конфиг с adbd
+    LocalOta {
+        #[arg(long, default_value = "127.0.0.1:18443")]
+        bind: String,
+        #[arg(long)]
+        ca_out: Option<PathBuf>,
+        #[arg(long)]
+        manifest: PathBuf,
+        #[arg(long)]
+        platform: String,
+        #[arg(long)]
+        version: String,
+        #[arg(long)]
+        firmware: PathBuf,
+        #[arg(long, default_value_t = 0)]
+        seconds: u64,
+    },
     /// Устройство: ADB-подключение и сведения
     Device {
         #[command(subcommand)]
@@ -379,6 +396,23 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
             seconds,
         } => run_dns(&bind, &answer, seconds),
 
+        Cmd::LocalOta {
+            bind,
+            ca_out,
+            manifest,
+            platform,
+            version,
+            firmware,
+            seconds,
+        } => run_local_ota(
+            &bind,
+            ca_out.as_ref(),
+            &manifest,
+            &platform,
+            &version,
+            &firmware,
+            seconds,
+        ),
         Cmd::Device { cmd } => run_device(cmd),
         Cmd::Ota { cmd } => run_ota(cmd),
         Cmd::Telemetry { cmd } => run_telemetry(&cfg, cmd),
@@ -602,6 +636,87 @@ fn maybe_prompt_consent(cfg: &Config) {
     }
     let _ = consent.save(cfg.data_dir());
     println!();
+}
+
+fn run_local_ota(
+    bind: &str,
+    ca_out: Option<&PathBuf>,
+    manifest: &Path,
+    platform: &str,
+    version: &str,
+    firmware: &Path,
+    seconds: u64,
+) -> cockpit_core::Result<ExitCode> {
+    use cockpit_intercept::tls::{CertAuthority, LocalRoutes, TlsInterceptor};
+
+    let addr: std::net::SocketAddr = bind
+        .parse()
+        .map_err(|e| CockpitError::Config(format!("--bind {bind}: {e}")))?;
+
+    let base = cockpit_ota::Manifest::load(manifest)
+        .map_err(|e| CockpitError::Config(format!("{}: {e}", manifest.display())))?;
+    let entry = base
+        .entries(platform)
+        .map_err(|e| CockpitError::Config(e.to_string()))?
+        .get(version)
+        .ok_or_else(|| CockpitError::Config(format!("нет {platform} {version} в манифесте")))?
+        .clone();
+
+    if !firmware.exists() {
+        return Err(CockpitError::Config(format!(
+            "нет файла прошивки: {}",
+            firmware.display()
+        )));
+    }
+
+    let name = firmware
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("firmware.zip")
+        .to_string();
+
+    let ca = std::sync::Arc::new(
+        CertAuthority::generate().map_err(|e| CockpitError::Internal(format!("CA: {e}")))?,
+    );
+
+    if let Some(path) = ca_out {
+        if let Some(dir) = path.parent() {
+            if !dir.as_os_str().is_empty() {
+                std::fs::create_dir_all(dir).map_err(|e| CockpitError::Internal(e.to_string()))?;
+            }
+        }
+        std::fs::write(path, ca.ca_pem())
+            .map_err(|e| CockpitError::Internal(format!("{}: {e}", path.display())))?;
+        println!("корневой CA: {}", path.display());
+    }
+
+    let download_url = format!("https://quasar.yandex.net/firmware/{name}");
+    let routes = LocalRoutes {
+        check_updates: Some(cockpit_ota::check_updates_json(&entry, &download_url)),
+        sync_info: Some(cockpit_ota::sync_info_json()),
+        firmware: Some((firmware.to_path_buf(), name.clone())),
+    };
+
+    let server = TlsInterceptor::start_local(addr, ca, routes)
+        .map_err(|e| CockpitError::Internal(format!("local-ota {addr}: {e}")))?;
+    println!("локальный OTA/sync на {}", server.addr());
+    println!(
+        "  /check_updates → {} ({})",
+        entry.version,
+        entry.crc32.map(|c| format!("{c:08x}")).unwrap_or_default()
+    );
+    println!("  /get_sync_info → adbd.network = true");
+    println!("  /firmware/{name} → {}", firmware.display());
+
+    if seconds == 0 {
+        loop {
+            std::thread::sleep(Duration::from_secs(3600));
+        }
+    } else {
+        std::thread::sleep(Duration::from_secs(seconds));
+    }
+    server.stop();
+    Ok(ExitCode::SUCCESS)
 }
 
 fn run_device(cmd: DeviceCmd) -> cockpit_core::Result<ExitCode> {

@@ -505,3 +505,30 @@ impl Registry {
         Ok(out)
     }
 }
+
+/// Ответ на `/check_updates` из локального манифеста.
+pub fn check_updates_json(entry: &Entry, download_url: &str) -> Vec<u8> {
+    let body = serde_json::json!({
+        "hasUpdate": true,
+        "version": entry.version,
+        "downloadUrl": download_url,
+        "fallbackUrl": download_url,
+        "crc32": entry.crc32,
+        "critical": entry.critical,
+        "updateId": entry.update_id,
+    });
+    serde_json::to_vec(&body).unwrap_or_default()
+}
+
+/// Ответ на `/get_sync_info`: конфиг, включающий сетевой ADB.
+pub fn sync_info_json() -> Vec<u8> {
+    let body = serde_json::json!({
+        "status": "ok",
+        "config": {
+            "system_config": {
+                "adbd": { "remoteActivation": true, "network": true }
+            }
+        }
+    });
+    serde_json::to_vec(&body).unwrap_or_default()
+}

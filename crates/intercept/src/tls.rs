@@ -12,6 +12,7 @@
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -203,9 +204,18 @@ impl Default for ForwardOptions {
     }
 }
 
+/// Локальные ответы вместо облака: OTA и sync.
+pub struct LocalRoutes {
+    pub check_updates: Option<Vec<u8>>,
+    pub sync_info: Option<Vec<u8>>,
+    /// (путь к файлу, имя для URL)
+    pub firmware: Option<(PathBuf, String)>,
+}
+
 enum Mode {
     Serve,
     Forward(Arc<ForwardOptions>),
+    Local(Arc<LocalRoutes>),
 }
 
 pub struct TlsInterceptor {
@@ -227,6 +237,15 @@ impl TlsInterceptor {
         options: ForwardOptions,
     ) -> io::Result<Self> {
         Self::start_with(bind, ca, Mode::Forward(Arc::new(options)))
+    }
+
+    /// Локальный сервер: отвечает OTA/sync из наших данных, без облака.
+    pub fn start_local(
+        bind: SocketAddr,
+        ca: Arc<CertAuthority>,
+        routes: LocalRoutes,
+    ) -> io::Result<Self> {
+        Self::start_with(bind, ca, Mode::Local(Arc::new(routes)))
     }
 
     fn start_with(bind: SocketAddr, ca: Arc<CertAuthority>, mode: Mode) -> io::Result<Self> {
@@ -251,6 +270,7 @@ impl TlsInterceptor {
                         let _ = match mode.as_ref() {
                             Mode::Serve => serve(stream, ca, seen),
                             Mode::Forward(opts) => serve_forward(stream, ca, opts.clone(), seen),
+                            Mode::Local(routes) => serve_local(stream, ca, routes.clone(), seen),
                         };
                     }
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
@@ -529,4 +549,155 @@ fn pump(
         std::thread::sleep(Duration::from_millis(2));
     }
     Ok(())
+}
+
+// ------------------------------------------------------- локальные ответы ----
+
+fn serve_local(
+    stream: TcpStream,
+    ca: Arc<CertAuthority>,
+    routes: Arc<LocalRoutes>,
+    seen: Arc<Mutex<Vec<String>>>,
+) -> Result<(), TlsError> {
+    stream.set_nonblocking(false)?;
+    stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(10)))?;
+
+    let host = match peek_sni(&stream)? {
+        Some(name) => name,
+        None => stream.local_addr()?.ip().to_string(),
+    };
+    if let Ok(mut log) = seen.lock() {
+        log.push(host);
+    }
+
+    let config = ca.config_for("quasar.yandex.net")?;
+    let conn = ServerConnection::new(config)?;
+    let mut tls = StreamOwned::new(conn, stream);
+    tls_accept(&mut tls.conn, &mut tls.sock)?;
+
+    let (method, path, headers) = read_request(&mut tls)?;
+    let _ = method;
+
+    if path.contains("/check_updates") {
+        if let Some(body) = &routes.check_updates {
+            return write_response(&mut tls, 200, "application/json", body, None);
+        }
+    }
+    if path.contains("/get_sync_info") {
+        if let Some(body) = &routes.sync_info {
+            return write_response(&mut tls, 200, "application/json", body, None);
+        }
+    }
+    if let Some((file, name)) = &routes.firmware {
+        if path.contains(name) || path.contains("/firmware/") {
+            let data = std::fs::read(file)?;
+            let range = headers.get("range").cloned();
+            return write_firmware(&mut tls, &data, range.as_deref());
+        }
+    }
+
+    write_response(
+        &mut tls,
+        404,
+        "application/json",
+        b"{\"status\":\"not_found\"}",
+        None,
+    )
+}
+
+fn read_request(
+    tls: &mut StreamOwned<ServerConnection, TcpStream>,
+) -> Result<(String, String, HashMap<String, String>), TlsError> {
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 4096];
+    while buf.len() < 64 * 1024 {
+        match tls.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => break,
+            Err(e) => return Err(e.into()),
+        }
+        if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+            break;
+        }
+    }
+
+    let text = String::from_utf8_lossy(&buf).to_string();
+    let mut lines = text.lines();
+    let first = lines.next().unwrap_or("");
+    let mut parts = first.split_whitespace();
+    let method = parts.next().unwrap_or("GET").to_string();
+    let path = parts.next().unwrap_or("/").to_string();
+
+    let mut headers = HashMap::new();
+    for line in lines {
+        if line.trim().is_empty() {
+            break;
+        }
+        if let Some((k, v)) = line.split_once(':') {
+            headers.insert(k.trim().to_lowercase(), v.trim().to_string());
+        }
+    }
+    Ok((method, path, headers))
+}
+
+fn write_response(
+    tls: &mut StreamOwned<ServerConnection, TcpStream>,
+    status: u16,
+    content_type: &str,
+    body: &[u8],
+    extra: Option<&str>,
+) -> Result<(), TlsError> {
+    let reason = match status {
+        200 => "OK",
+        206 => "Partial Content",
+        404 => "Not Found",
+        _ => "OK",
+    };
+    let mut head = format!(
+        "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n",
+        body.len()
+    );
+    if let Some(extra) = extra {
+        head.push_str(extra);
+    }
+    head.push_str("\r\n");
+    tls.write_all(head.as_bytes())?;
+    tls.write_all(body)?;
+    tls.flush()?;
+    Ok(())
+}
+
+fn write_firmware(
+    tls: &mut StreamOwned<ServerConnection, TcpStream>,
+    data: &[u8],
+    range: Option<&str>,
+) -> Result<(), TlsError> {
+    if let Some(range) = range {
+        if let Some(spec) = range.strip_prefix("bytes=") {
+            let mut parts = spec.split('-');
+            let start: usize = parts.next().unwrap_or("0").parse().unwrap_or(0);
+            let end: usize = parts
+                .next()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(data.len().saturating_sub(1))
+                .min(data.len().saturating_sub(1));
+            if start <= end {
+                let slice = &data[start..=end];
+                let extra = format!(
+                    "Content-Range: bytes {start}-{end}/{}\r\nAccept-Ranges: bytes\r\n",
+                    data.len()
+                );
+                return write_response(tls, 206, "application/zip", slice, Some(&extra));
+            }
+        }
+    }
+    write_response(
+        tls,
+        200,
+        "application/zip",
+        data,
+        Some("Accept-Ranges: bytes\r\n"),
+    )
 }

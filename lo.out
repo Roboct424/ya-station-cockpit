@@ -1,0 +1,5 @@
+корневой CA: data\ca.pem
+локальный OTA/sync на 127.0.0.1:18443
+  /check_updates → 0.369.1.46.4778262943.20261013.299 (5ae0076e)
+  /get_sync_info → adbd.network = true
+  /firmware/0.369.1.46.4778262943.20261013.299.zip.off → C:\Users\Admin\Desktop\ya-station-root-shell-main\poc\win\firmware\0.369.1.46.4778262943.20261013.299.zip.off
