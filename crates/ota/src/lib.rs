@@ -372,3 +372,60 @@ pub fn verify_file(path: impl AsRef<Path>, entry: &FirmwareEntry) -> Result<(), 
     }
     Ok(())
 }
+
+/// «Взяли один раз — храним вечно»: импорт файла без облака.
+///
+/// Если версия есть в базе — сверяем хеши. Если нет — считаем их сами и
+/// сохраняем локальный провенанс, чтобы файл можно было применять офлайн.
+pub fn import_file(
+    platform: &str,
+    version: &str,
+    file: impl AsRef<Path>,
+    store: impl AsRef<Path>,
+    known: Option<&FirmwareEntry>,
+) -> Result<Provenance, OtaError> {
+    let data = fs::read(file.as_ref())?;
+
+    let crc = crc32(&data);
+    let sha = sha256_hex(&data);
+    if let Some(entry) = known {
+        if data.len() as u64 != entry.size {
+            return Err(OtaError::Manifest(format!(
+                "размер {} != {}",
+                data.len(),
+                entry.size
+            )));
+        }
+        if crc != entry.crc32 {
+            return Err(OtaError::Crc {
+                expected: entry.crc32,
+                actual: crc,
+            });
+        }
+        if sha != entry.sha256 {
+            return Err(OtaError::Manifest("SHA-256 не совпал с базой".into()));
+        }
+    }
+
+    let dir = store.as_ref().join(platform);
+    fs::create_dir_all(&dir)?;
+    let dest = dir.join(format!("{version}.zip"));
+    fs::write(&dest, &data)?;
+
+    let provenance = Provenance {
+        platform: platform.to_string(),
+        version: version.to_string(),
+        url: format!("local:{}", file.as_ref().display()),
+        size: data.len(),
+        crc32: crc,
+        sha256: sha,
+        update_id: None,
+        fetched_at: chrono_like_now(),
+        file: dest.display().to_string(),
+    };
+    fs::write(
+        dir.join(format!("{version}.json")),
+        serde_json::to_vec_pretty(&provenance).unwrap_or_default(),
+    )?;
+    Ok(provenance)
+}

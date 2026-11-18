@@ -129,3 +129,30 @@ fn firmware_db_verifies_hash() {
 
     fs::remove_dir_all(dir).ok();
 }
+
+#[test]
+fn import_pins_unknown_version_locally() {
+    let dir = temp_dir("import");
+    let file = dir.join("fw.zip");
+    fs::write(&file, b"payload").unwrap();
+
+    let prov = cockpit_ota::import_file("p", "9.9", &file, dir.join("store"), None).unwrap();
+    assert_eq!(prov.size, 7);
+    assert!(PathBuf::from(&prov.file).exists());
+    assert!(prov.url.starts_with("local:"));
+
+    // повторный импорт с неверной базой должен быть отклонён
+    let entry = cockpit_ota::FirmwareEntry {
+        platform: "p".into(),
+        version: "9.9".into(),
+        size: 999,
+        crc32: 1,
+        sha256: "00".into(),
+        source: None,
+        mirrors: vec![],
+        adb: false,
+        notes: None,
+    };
+    assert!(cockpit_ota::import_file("p", "9.9", &file, dir.join("store"), Some(&entry)).is_err());
+    fs::remove_dir_all(dir).ok();
+}

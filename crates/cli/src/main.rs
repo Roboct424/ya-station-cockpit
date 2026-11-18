@@ -181,6 +181,20 @@ enum OtaCmd {
         #[arg(long)]
         platform: Option<String>,
     },
+    /// Импортировать архив в локальное хранилище (офлайн, «взяли один раз»)
+    Import {
+        #[arg(long)]
+        platform: String,
+        #[arg(long)]
+        version: String,
+        #[arg(long)]
+        file: PathBuf,
+        #[arg(long, default_value = "data/ota")]
+        store: PathBuf,
+        /// Если задана — сверить с базой перед сохранением
+        #[arg(long)]
+        db: Option<PathBuf>,
+    },
     /// Сверить файл прошивки с базой
     Verify {
         #[arg(long, default_value = "firmware/db.json")]
@@ -665,6 +679,36 @@ fn run_ota(cmd: OtaCmd) -> cockpit_core::Result<ExitCode> {
                 prov.size, prov.crc32, prov.sha256
             );
             Ok(ExitCode::SUCCESS)
+        }
+        OtaCmd::Import {
+            platform,
+            version,
+            file,
+            store,
+            db,
+        } => {
+            let known = match &db {
+                Some(path) => {
+                    let base = cockpit_ota::FirmwareDb::load(path)
+                        .map_err(|e| CockpitError::Config(format!("{}: {e}", path.display())))?;
+                    Some(base.find(&platform, &version).cloned().ok_or_else(|| {
+                        CockpitError::Config(format!("в базе нет {platform} {version}"))
+                    })?)
+                }
+                None => None,
+            };
+
+            match cockpit_ota::import_file(&platform, &version, &file, &store, known.as_ref()) {
+                Ok(p) => {
+                    println!("импортировано: {}", p.file);
+                    println!("  crc32 {:08x}, sha256 {}", p.crc32, p.sha256);
+                    Ok(ExitCode::SUCCESS)
+                }
+                Err(e) => {
+                    println!("импорт отклонён: {e}");
+                    Ok(ExitCode::FAILURE)
+                }
+            }
         }
         OtaCmd::Db { db, platform } => {
             let base = cockpit_ota::FirmwareDb::load(&db)
