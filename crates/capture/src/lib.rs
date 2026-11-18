@@ -7,6 +7,8 @@
 //!
 //! Включается только явно (см. docs/CAPTURE.md): по умолчанию выключено.
 
+pub mod consent;
+
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};

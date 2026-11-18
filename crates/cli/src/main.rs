@@ -104,6 +104,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: OtaCmd,
     },
+    /// Согласие на сбор метаданных
+    Telemetry {
+        #[command(subcommand)]
+        cmd: TelemetryCmd,
+    },
     /// Сбор статистики (только метаданные)
     Capture {
         #[command(subcommand)]
@@ -169,6 +174,16 @@ enum OtaCmd {
         #[arg(long, default_value = "data/ota")]
         store: PathBuf,
     },
+}
+
+#[derive(Subcommand)]
+enum TelemetryCmd {
+    /// Текущее состояние согласия
+    Status,
+    /// Включить сбор (метаданные, без тел)
+    Enable,
+    /// Выключить и забыть согласие
+    Disable,
 }
 
 #[derive(Subcommand)]
@@ -239,7 +254,10 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
             target,
             dry_run,
             vars,
-        } => run_target(&cfg, &cfg_path, &target, dry_run, &vars),
+        } => {
+            maybe_prompt_consent(&cfg);
+            run_target(&cfg, &cfg_path, &target, dry_run, &vars)
+        }
 
         Cmd::Scenario { cmd } => match cmd {
             ScenarioCmd::Check { path } => {
@@ -283,7 +301,8 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
         } => run_dns(&bind, &answer, seconds),
 
         Cmd::Ota { cmd } => run_ota(cmd),
-        Cmd::Capture { cmd } => run_capture(cmd),
+        Cmd::Telemetry { cmd } => run_telemetry(&cfg, cmd),
+        Cmd::Capture { cmd } => run_capture(&cfg, cmd),
         Cmd::Version => {
             println!("cockpit {}", env!("CARGO_PKG_VERSION"));
             println!("  сценариев: selfcheck, YAML");
@@ -462,6 +481,117 @@ fn watch_config(path: &Path) -> cockpit_core::Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// Первый запуск: один раз объясняем, что собираем, и спрашиваем.
+/// Не интерактивно (CI, скрипты) — молча остаёмся выключенными.
+fn maybe_prompt_consent(cfg: &Config) {
+    use std::io::{IsTerminal, Write};
+
+    use cockpit_capture::consent::Consent;
+
+    let path = Consent::path(cfg.data_dir());
+    if path.exists() || !std::io::stdin().is_terminal() {
+        return;
+    }
+
+    println!();
+    println!("Помочь проекту? Можно включить сбор метаданных обмена с облаком.");
+    println!("  пишем: время, хост, метод, путь без query, размеры, SHA-256 тел");
+    println!("  не пишем: тела, токены, device_id, SSID, пароли");
+    println!("  куда: локальный файл data/capture.jsonl, никуда не отправляется");
+    print!("Включить сбор? [y/N]: ");
+    let _ = std::io::stdout().flush();
+
+    let mut answer = String::new();
+    let enabled = std::io::stdin()
+        .read_line(&mut answer)
+        .map(|_| {
+            matches!(
+                answer.trim().to_ascii_lowercase().as_str(),
+                "y" | "yes" | "д" | "да"
+            )
+        })
+        .unwrap_or(false);
+
+    let mut consent = Consent::load(cfg.data_dir());
+    if enabled {
+        consent.enable(&now_stamp());
+        println!("спасибо: сбор включён, отключить можно в любой момент");
+    } else {
+        consent.disable();
+        println!("ок, сбор выключен (включить: cockpit telemetry enable)");
+    }
+    let _ = consent.save(cfg.data_dir());
+    println!();
+}
+
+fn run_telemetry(cfg: &Config, cmd: TelemetryCmd) -> cockpit_core::Result<ExitCode> {
+    use cockpit_capture::consent::Consent;
+
+    let mut consent = Consent::load(cfg.data_dir());
+    match cmd {
+        TelemetryCmd::Status => {
+            println!(
+                "телеметрия: {} (политика v{})",
+                if consent.enabled {
+                    "включена"
+                } else {
+                    "выключена"
+                },
+                consent.policy_version
+            );
+            if let Some(at) = &consent.granted_at {
+                println!("  согласие дано: {at}");
+            }
+            println!("  пишем: время, хост, метод, путь без query, размеры, SHA-256 тел");
+            println!("  не пишем: тела, токены, device_id, SSID, пароли");
+        }
+        TelemetryCmd::Enable => {
+            consent.enable(&now_stamp());
+            consent
+                .save(cfg.data_dir())
+                .map_err(|e| CockpitError::Internal(e.to_string()))?;
+            println!("телеметрия включена; отключить: cockpit telemetry disable");
+        }
+        TelemetryCmd::Disable => {
+            consent.disable();
+            consent
+                .save(cfg.data_dir())
+                .map_err(|e| CockpitError::Internal(e.to_string()))?;
+            println!("телеметрия выключена");
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn run_capture(cfg: &Config, cmd: CaptureCmd) -> cockpit_core::Result<ExitCode> {
+    use cockpit_capture::consent::Consent;
+
+    if !Consent::load(cfg.data_dir()).enabled {
+        println!("сбор метаданных выключен.");
+        println!("  включить: cockpit telemetry enable");
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    match cmd {
+        CaptureCmd::Stats { log } => {
+            let cap = cockpit_capture::Capture::open(&log)
+                .map_err(|e| CockpitError::Internal(e.to_string()))?;
+            let samples = cap
+                .read_all()
+                .map_err(|e| CockpitError::Internal(e.to_string()))?;
+            println!("записей: {}", samples.len());
+            for (host, count) in cockpit_capture::summary_by_host(&samples) {
+                println!("  {host}: {count}");
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+    }
+}
+
+fn now_stamp() -> String {
+    chrono::Utc::now().to_rfc3339()
+}
+
 fn run_ota(cmd: OtaCmd) -> cockpit_core::Result<ExitCode> {
     use cockpit_ota::{check, fetch, list_store, CurlFetcher, Manifest};
 
@@ -528,23 +658,6 @@ fn run_ota(cmd: OtaCmd) -> cockpit_core::Result<ExitCode> {
                     "{} {} · {} байт · crc32 {:08x} · {}",
                     p.platform, p.version, p.size, p.crc32, p.fetched_at
                 );
-            }
-            Ok(ExitCode::SUCCESS)
-        }
-    }
-}
-
-fn run_capture(cmd: CaptureCmd) -> cockpit_core::Result<ExitCode> {
-    match cmd {
-        CaptureCmd::Stats { log } => {
-            let cap = cockpit_capture::Capture::open(&log)
-                .map_err(|e| CockpitError::Internal(e.to_string()))?;
-            let samples = cap
-                .read_all()
-                .map_err(|e| CockpitError::Internal(e.to_string()))?;
-            println!("записей: {}", samples.len());
-            for (host, count) in cockpit_capture::summary_by_host(&samples) {
-                println!("  {host}: {count}");
             }
             Ok(ExitCode::SUCCESS)
         }
