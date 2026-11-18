@@ -1,0 +1,19 @@
+[package]
+name = "cockpit-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "cockpit"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+cockpit-core.workspace = true
+cockpit-config.workspace = true
+cockpit-doctor.workspace = true
