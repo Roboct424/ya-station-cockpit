@@ -6,10 +6,21 @@ use std::sync::Mutex;
 use crate::error::{CockpitError, Result};
 use crate::event::Record;
 
+/// Результат чтения журнала.
+///
+/// `skipped` — строки, которые не удалось разобрать. Это важно: одна битая
+/// строка (обрыв записи, ручная правка, сторонний инструмент) не должна
+/// скрывать всю историю. См. docs/GOTCHAS.md, запись про JSONL.
+#[derive(Debug, Clone, Default)]
+pub struct JournalRead {
+    pub records: Vec<Record>,
+    pub skipped: Vec<String>,
+}
+
 /// Абстракция журнала: ядро не знает, куда именно пишем.
 pub trait Journal: Send + Sync {
     fn append(&self, rec: &Record) -> Result<()>;
-    fn read_all(&self) -> Result<Vec<Record>>;
+    fn read_all(&self) -> Result<JournalRead>;
 }
 
 /// Журнал в формате JSON Lines.
@@ -56,24 +67,28 @@ impl Journal for JsonlJournal {
             .file
             .lock()
             .map_err(|_| CockpitError::Journal("блокировка журнала отравлена".into()))?;
+        // flush обязателен: журнал должен переживать падение сразу после шага.
         writeln!(file, "{line}")
             .and_then(|_| file.flush())
             .map_err(|e| CockpitError::Journal(format!("запись: {e}")))
     }
 
-    fn read_all(&self) -> Result<Vec<Record>> {
+    // GOTCHA: G-002 — одна битая строка не должна скрывать всю историю.
+    fn read_all(&self) -> Result<JournalRead> {
         let file = File::open(&self.path).map_err(|e| {
             CockpitError::Journal(format!("не открыть {}: {e}", self.path.display()))
         })?;
-        let mut out = Vec::new();
+
+        let mut out = JournalRead::default();
         for (i, line) in BufReader::new(file).lines().enumerate() {
             let line = line.map_err(|e| CockpitError::Journal(format!("чтение: {e}")))?;
             if line.trim().is_empty() {
                 continue;
             }
-            let rec: Record = serde_json::from_str(&line)
-                .map_err(|e| CockpitError::Journal(format!("строка {}: {e}", i + 1)))?;
-            out.push(rec);
+            match serde_json::from_str::<Record>(&line) {
+                Ok(rec) => out.records.push(rec),
+                Err(e) => out.skipped.push(format!("строка {}: {e}", i + 1)),
+            }
         }
         Ok(out)
     }

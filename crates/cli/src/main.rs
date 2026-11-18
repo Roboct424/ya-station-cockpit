@@ -17,9 +17,13 @@ mod selfcheck;
                   сценарии с проверками и откатом, журнал каждого шага."
 )]
 struct Cli {
-    /// Путь к файлу конфигурации
-    #[arg(long, global = true, value_name = "FILE", default_value = cockpit_config::DEFAULT_PATH)]
-    config: PathBuf,
+    /// Путь к файлу конфигурации (по умолчанию cockpit.toml)
+    ///
+    /// Именно Option, а не default_value: иначе нельзя отличить «пользователь
+    /// не указал» от «указал ровно дефолт», и опечатка в пути молча игнорируется.
+    /// См. docs/GOTCHAS.md.
+    #[arg(long, global = true, value_name = "FILE")]
+    config: Option<PathBuf>,
 
     #[command(subcommand)]
     cmd: Cmd,
@@ -92,7 +96,8 @@ fn main() -> ExitCode {
 }
 
 fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
-    let cfg = Config::load(&cli.config)?;
+    let cfg_path = resolve_config_path(&cli.config)?;
+    let cfg = Config::load(&cfg_path)?;
     init_logging(&cfg);
 
     match cli.cmd {
@@ -115,14 +120,14 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
 
         Cmd::Config { cmd } => match cmd {
             ConfigCmd::Init => {
-                Config::write_default(&cli.config)?;
-                println!("создан {}", cli.config.display());
+                Config::write_default(&cfg_path)?;
+                println!("создан {}", cfg_path.display());
                 Ok(ExitCode::SUCCESS)
             }
             ConfigCmd::Check => {
                 let problems = cfg.validate();
                 if problems.is_empty() {
-                    println!("конфигурация в порядке");
+                    println!("конфигурация в порядке: {}", cfg_path.display());
                     Ok(ExitCode::SUCCESS)
                 } else {
                     for p in &problems {
@@ -139,9 +144,14 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
 
         Cmd::Journal { cmd } => {
             let journal = JsonlJournal::open(cfg.journal_path())?;
+            let read = journal.read_all()?;
+            for warning in &read.skipped {
+                eprintln!("предупреждение: {warning}");
+            }
+            let all = read.records;
+
             match cmd {
                 JournalCmd::Tail { lines } => {
-                    let all = journal.read_all()?;
                     let skip = all.len().saturating_sub(lines);
                     for rec in &all[skip..] {
                         println!(
@@ -157,7 +167,6 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
                     Ok(ExitCode::SUCCESS)
                 }
                 JournalCmd::Stats => {
-                    let all = journal.read_all()?;
                     let runs = all
                         .iter()
                         .filter(|r| matches!(r, Record::RunStarted { .. }))
@@ -224,6 +233,24 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
     }
 }
 
+/// Явно указанный путь должен существовать: молча подставлять умолчания —
+/// значит скрывать опечатку. Если путь не указан — берём cockpit.toml.
+fn resolve_config_path(explicit: &Option<PathBuf>) -> cockpit_core::Result<PathBuf> {
+    match explicit {
+        Some(path) => {
+            if !path.exists() {
+                return Err(CockpitError::Config(format!(
+                    "файл не найден: {}",
+                    path.display()
+                )));
+            }
+            Ok(path.clone())
+        }
+        None => Ok(PathBuf::from(cockpit_config::DEFAULT_PATH)),
+    }
+}
+
+// GOTCHA: G-006 — try_init() срабатывает только один раз, повтор игнорируем.
 fn init_logging(cfg: &Config) {
     use tracing_subscriber::EnvFilter;
 

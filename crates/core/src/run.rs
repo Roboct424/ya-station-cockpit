@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use chrono::Utc;
@@ -188,11 +189,17 @@ impl<'a> Runner<'a> {
     }
 }
 
+/// GOTCHA: G-005 — время не идентификатор; счётчик обязателен.
+/// Счётчик делает run_id уникальным даже при двух запусках в одну миллисекунду.
+static RUN_SEQ: AtomicU64 = AtomicU64::new(0);
+
 fn new_run_id() -> String {
     let now = Utc::now();
+    let seq = RUN_SEQ.fetch_add(1, Ordering::Relaxed);
     format!(
-        "{:x}{:03x}",
+        "{:x}-{:03x}-{:x}",
         now.timestamp_millis(),
-        now.timestamp_subsec_micros() % 0x1000
+        now.timestamp_subsec_micros() % 0x1000,
+        seq
     )
 }

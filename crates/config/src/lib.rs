@@ -10,6 +10,8 @@ use cockpit_core::{CockpitError, Result};
 
 pub const DEFAULT_PATH: &str = "cockpit.toml";
 
+// GOTCHA: G-003 — deny_unknown_fields нельзя сочетать с serde(flatten).
+// GOTCHA: G-004 — None-поля не попадают в TOML (см. docs/GOTCHAS.md).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {

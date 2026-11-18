@@ -8,6 +8,6 @@ pub mod step;
 
 pub use error::{CockpitError, Result};
 pub use event::Record;
-pub use journal::{Journal, JsonlJournal};
+pub use journal::{Journal, JournalRead, JsonlJournal};
 pub use run::{RunReport, Runner};
 pub use step::{Context, Step};

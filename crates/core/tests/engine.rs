@@ -107,7 +107,7 @@ fn journal_roundtrip() {
     };
     journal.append(&rec).unwrap();
 
-    let all = journal.read_all().unwrap();
+    let all = journal.read_all().unwrap().records;
     assert_eq!(all.len(), 1);
     assert_eq!(all[0].kind(), "note");
     assert!(all[0].summary().contains("привет"));
@@ -129,7 +129,7 @@ fn runner_success_writes_all_events() {
     assert!(report.ok);
     assert_eq!(report.executed, vec!["a", "b"]);
 
-    let all = journal.read_all().unwrap();
+    let all = journal.read_all().unwrap().records;
     let kinds: Vec<&str> = all.iter().map(|r| r.kind()).collect();
     assert_eq!(kinds.first(), Some(&"run_started"));
     assert_eq!(kinds.last(), Some(&"run_finished"));
@@ -165,7 +165,7 @@ fn runner_rolls_back_only_executed_steps() {
         "упавший шаг не должен откатываться"
     );
 
-    let all = journal.read_all().unwrap();
+    let all = journal.read_all().unwrap().records;
     let finished = all
         .iter()
         .filter(|r| matches!(r, Record::RunFinished { ok: false, .. }))
@@ -186,4 +186,42 @@ fn dry_run_does_not_touch_disk() {
         .unwrap();
 
     assert!(!data.exists());
+}
+
+#[test]
+fn corrupt_line_does_not_hide_history() {
+    let tmp = TempDir::new("journal-corrupt");
+    let path = tmp.0.join("journal.jsonl");
+    let journal = JsonlJournal::open(&path).unwrap();
+
+    journal
+        .append(&Record::Note {
+            ts: chrono::Utc::now(),
+            run_id: None,
+            text: "первая".into(),
+        })
+        .unwrap();
+
+    // имитируем обрыв записи: строка без закрывающей скобки
+    let mut f = fs::OpenOptions::new().append(true).open(&path).unwrap();
+    use std::io::Write;
+    writeln!(f, "{{\"kind\": \"note\", \"text\": \"обрыв").unwrap();
+    drop(f);
+
+    journal
+        .append(&Record::Note {
+            ts: chrono::Utc::now(),
+            run_id: None,
+            text: "третья".into(),
+        })
+        .unwrap();
+
+    let read = journal.read_all().unwrap();
+    assert_eq!(read.records.len(), 2, "валидные записи должны читаться");
+    assert_eq!(
+        read.skipped.len(),
+        1,
+        "битая строка должна попасть в skipped"
+    );
+    assert!(read.skipped[0].contains("строка 2"), "{:?}", read.skipped);
 }
