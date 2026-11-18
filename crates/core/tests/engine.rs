@@ -2,6 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use cockpit_core::error::CockpitError;
 use cockpit_core::{Context, Journal, JsonlJournal, Record, Runner, Step};
@@ -224,4 +225,58 @@ fn corrupt_line_does_not_hide_history() {
         "битая строка должна попасть в skipped"
     );
     assert!(read.skipped[0].contains("строка 2"), "{:?}", read.skipped);
+}
+
+struct SlowStep {
+    started: Arc<AtomicBool>,
+}
+
+impl Step for SlowStep {
+    fn id(&self) -> &str {
+        "slow"
+    }
+
+    fn title(&self) -> &str {
+        "медленный"
+    }
+
+    fn timeout_ms(&self) -> Option<u64> {
+        Some(50)
+    }
+
+    fn run(&self, _ctx: &Context) -> cockpit_core::Result<String> {
+        self.started.store(true, Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(300));
+        Ok("готово".into())
+    }
+}
+
+#[test]
+fn timeout_returns_without_waiting_for_step() {
+    let tmp = TempDir::new("timeout");
+    let journal = JsonlJournal::open(tmp.0.join("journal.jsonl")).unwrap();
+    let ctx = Context::new(tmp.0.join("data"), false);
+
+    let started = Arc::new(AtomicBool::new(false));
+    let t0 = Instant::now();
+    let err = Runner::new(&journal, "unit")
+        .with_step(Box::new(SlowStep {
+            started: started.clone(),
+        }))
+        .run(&ctx)
+        .unwrap_err();
+
+    assert!(matches!(err, CockpitError::Timeout { .. }), "{err}");
+    assert_eq!(err.code(), "run.timeout");
+    assert!(
+        t0.elapsed() < Duration::from_millis(250),
+        "ждали слишком долго: {:?}",
+        t0.elapsed()
+    );
+    assert!(started.load(Ordering::SeqCst));
+
+    let all = journal.read_all().unwrap().records;
+    assert!(all
+        .iter()
+        .any(|r| matches!(r, Record::RunFinished { ok: false, .. })));
 }

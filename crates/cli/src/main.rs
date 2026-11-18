@@ -72,6 +72,18 @@ enum Cmd {
         #[command(subcommand)]
         cmd: NetCmd,
     },
+    /// DNS-перехватчик: отвечает своим адресом на A, пусто на AAAA
+    Dns {
+        /// Адрес прослушивания
+        #[arg(long, default_value = "127.0.0.1:5353")]
+        bind: String,
+        /// Какой IPv4 отдавать
+        #[arg(long, default_value = "192.168.137.1")]
+        answer: String,
+        /// Остановиться через N секунд (0 = до Ctrl+C)
+        #[arg(long, default_value_t = 0)]
+        seconds: u64,
+    },
     /// Версия
     Version,
 }
@@ -193,6 +205,12 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
                 Ok(ExitCode::SUCCESS)
             }
         },
+
+        Cmd::Dns {
+            bind,
+            answer,
+            seconds,
+        } => run_dns(&bind, &answer, seconds),
 
         Cmd::Version => {
             println!("cockpit {}", env!("CARGO_PKG_VERSION"));
@@ -369,6 +387,32 @@ fn watch_config(path: &Path) -> cockpit_core::Result<ExitCode> {
             Err(e) => eprintln!("ошибка конфига: {e}; старый остаётся в силе"),
         }
     }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn run_dns(bind: &str, answer: &str, seconds: u64) -> cockpit_core::Result<ExitCode> {
+    use std::net::Ipv4Addr;
+
+    let addr: std::net::SocketAddr = bind
+        .parse()
+        .map_err(|e| CockpitError::Config(format!("--bind {bind}: {e}")))?;
+    let ip: Ipv4Addr = answer
+        .parse()
+        .map_err(|e| CockpitError::Config(format!("--answer {answer}: {e}")))?;
+
+    let server = cockpit_intercept::DnsServer::start(cockpit_intercept::DnsConfig::new(addr, ip))
+        .map_err(|e| CockpitError::Internal(format!("DNS {addr}: {e}")))?;
+    println!("DNS слушает {} → A {ip}", server.addr());
+    println!("проверка: nslookup example.com {}", server.addr());
+
+    if seconds == 0 {
+        loop {
+            std::thread::sleep(Duration::from_secs(3600));
+        }
+    } else {
+        std::thread::sleep(Duration::from_secs(seconds));
+    }
+    server.stop();
     Ok(ExitCode::SUCCESS)
 }
 

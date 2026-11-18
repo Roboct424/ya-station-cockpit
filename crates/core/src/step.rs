@@ -30,6 +30,15 @@ pub trait Step: Send + Sync {
 
     fn title(&self) -> &str;
 
+    /// Ограничение на выполнение шага. `None` — без ограничения.
+    ///
+    /// Важно: по истечении времени шаг не прерывается физически (поток
+    /// отсоединяется). Для файловых операций это безопасно; для сетевых
+    /// понадобится токен отмены — см. docs/DEVLOG.md.
+    fn timeout_ms(&self) -> Option<u64> {
+        None
+    }
+
     fn is_done(&self, _ctx: &Context) -> Result<bool> {
         Ok(false)
     }

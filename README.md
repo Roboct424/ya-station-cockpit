@@ -9,8 +9,9 @@
 проверку результата (`check`), условие пропуска (`skip_if`) и компенсацию
 (`rollback`). При ошибке выполненные шаги откатываются, всё пишется в журнал.
 
-**Статус: фаза 1.** Есть ядро, конфиг с горячей перезагрузкой, диагностика,
-YAML-сценарии, контракт сетевого слоя (реализация — фаза 2) и CLI.
+**Статус: фаза 2.** Ядро с таймаутами, конфиг с горячей перезагрузкой,
+YAML-сценарии, слой системных команд с dry-run, DNS-перехватчик, CLI.
+Хотспот и TLS-подмена — в следующих фазах.
 
 ### Быстрый старт
 
@@ -32,6 +33,7 @@ cargo run -- journal tail           # что произошло
 | `cockpit run <selfcheck\|file.yaml> [--dry-run] [--var k=v]` | запуск сценария |
 | `cockpit scenario check <file.yaml>` | проверка сценария без запуска |
 | `cockpit net info` | выбранный сетевой адаптер |
+| `cockpit dns --bind ADDR --answer IP` | DNS-перехватчик (A → свой адрес) |
 | `cockpit version` | версия |
 
 ### Сценарий — это данные
@@ -59,7 +61,8 @@ steps:
 crates/core       события, журнал (JSONL), шаги, исполнитель, ошибки
 crates/config     TOML-конфиг, валидация, горячая перезагрузка (arc-swap + notify)
 crates/doctor     пробы окружения с подсказками
-crates/net        трейт NetAdapter и заглушки Windows/Linux
+crates/net        NetAdapter, слой системных команд (real/dry-run), Windows/Linux
+crates/intercept  DNS-перехватчик: свой парсер, A/AAAA
 crates/scenarios  YAML-сценарии: модель, загрузка, проверка, исполнение
 crates/cli        команды cockpit
 examples/demo.yaml
@@ -84,8 +87,9 @@ a result check (`check`), a skip condition (`skip_if`) and a compensation
 (`rollback`). On failure the completed steps are rolled back and everything goes
 to the journal.
 
-**Status: phase 1.** Core, config with hot reload, diagnostics, YAML scenarios,
-network-layer contract (implementation in phase 2) and CLI.
+**Status: phase 2.** Core with timeouts, config with hot reload, YAML scenarios,
+system-command layer with dry-run, DNS interceptor, CLI. Hotspot and TLS
+interception come next.
 
 ### Quick start
 
@@ -107,6 +111,7 @@ cargo run -- journal tail
 | `cockpit run <selfcheck\|file.yaml> [--dry-run] [--var k=v]` | run a scenario |
 | `cockpit scenario check <file.yaml>` | validate a scenario |
 | `cockpit net info` | selected network adapter |
+| `cockpit dns --bind ADDR --answer IP` | DNS interceptor (A → our address) |
 | `cockpit version` | version |
 
 ### Layout
@@ -115,7 +120,8 @@ cargo run -- journal tail
 crates/core       events, JSONL journal, steps, runner, errors
 crates/config     TOML config, validation, hot reload (arc-swap + notify)
 crates/doctor     environment probes with hints
-crates/net        NetAdapter trait and Windows/Linux stubs
+crates/net        NetAdapter, system command layer (real/dry-run), Windows/Linux
+crates/intercept  DNS interceptor: own parser, A/AAAA
 crates/scenarios  YAML scenarios: model, loading, validation, execution
 crates/cli        cockpit commands
 examples/demo.yaml

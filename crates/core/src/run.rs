@@ -1,5 +1,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Instant;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use chrono::Utc;
 
@@ -20,13 +21,16 @@ pub struct RunReport {
 
 /// Исполнитель сценария.
 ///
-/// Порядок для каждого шага: is_done → run → verify.
+/// Порядок для каждого шага: skip_if → run → verify.
 /// При любой ошибке — откат уже выполненных шагов в обратном порядке,
 /// запись в журнал и возврат типизированной ошибки.
+///
+/// Шаги хранятся как `Arc<dyn Step>`: это позволяет запускать шаг с таймаутом
+/// в отдельном потоке и при этом сохранять возможность отката.
 pub struct Runner<'a> {
     journal: &'a dyn Journal,
     name: String,
-    steps: Vec<Box<dyn Step>>,
+    steps: Vec<Arc<dyn Step>>,
 }
 
 impl<'a> Runner<'a> {
@@ -39,12 +43,17 @@ impl<'a> Runner<'a> {
     }
 
     pub fn with_step(mut self, step: Box<dyn Step>) -> Self {
-        self.steps.push(step);
+        self.steps.push(Arc::from(step));
         self
     }
 
     pub fn with_steps(mut self, steps: Vec<Box<dyn Step>>) -> Self {
-        self.steps.extend(steps);
+        self.steps.extend(steps.into_iter().map(Arc::from));
+        self
+    }
+
+    pub fn with_shared(mut self, step: Arc<dyn Step>) -> Self {
+        self.steps.push(step);
         self
     }
 
@@ -89,19 +98,17 @@ impl<'a> Runner<'a> {
             })?;
 
             let started = Instant::now();
-            let result = step
-                .run(ctx)
-                .and_then(|done| step.verify(ctx).map(|checked| format!("{done}; {checked}")));
+            let result = execute(Arc::clone(step), ctx);
             let duration_ms = started.elapsed().as_millis() as u64;
 
             match result {
-                Ok(detail) => {
+                Ok((done, checked)) => {
                     self.log(Record::StepFinished {
                         ts: Utc::now(),
                         run_id: run_id.clone(),
                         step: id.clone(),
                         ok: true,
-                        detail,
+                        detail: format!("{done}; {checked}"),
                         duration_ms,
                     })?;
                     executed.push(id);
@@ -132,14 +139,16 @@ impl<'a> Runner<'a> {
                 failed: Some(failed_step.clone()),
             })?;
 
-            let _ = rolled_back;
             let final_err = match err {
-                e @ (CockpitError::StepFailed { .. } | CockpitError::CheckFailed { .. }) => e,
+                e @ (CockpitError::StepFailed { .. }
+                | CockpitError::CheckFailed { .. }
+                | CockpitError::Timeout { .. }) => e,
                 other => CockpitError::StepFailed {
                     step: failed_step,
                     reason: other.to_string(),
                 },
             };
+            let _ = rolled_back;
             return Err(final_err);
         }
 
@@ -187,6 +196,36 @@ impl<'a> Runner<'a> {
     fn log(&self, rec: Record) -> Result<()> {
         self.journal.append(&rec)
     }
+}
+
+/// Выполняет шаг, соблюдая его таймаут.
+///
+/// GOTCHA: G-014 — по таймауту поток не убивается (в Rust это невозможно
+/// безопасно): он отсоединяется и доживает до конца операции. Поэтому шаг
+/// обязан быть идемпотентным, а долгие операции должны проверять контекст.
+fn execute(step: Arc<dyn Step>, ctx: &Context) -> Result<(String, String)> {
+    let Some(ms) = step.timeout_ms() else {
+        return run_and_verify(step.as_ref(), ctx);
+    };
+
+    let id = step.id().to_string();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let worker_ctx = ctx.clone();
+    std::thread::spawn(move || {
+        let result = run_and_verify(step.as_ref(), &worker_ctx);
+        let _ = tx.send(result);
+    });
+
+    match rx.recv_timeout(Duration::from_millis(ms)) {
+        Ok(result) => result,
+        Err(_) => Err(CockpitError::Timeout { step: id, ms }),
+    }
+}
+
+fn run_and_verify(step: &dyn Step, ctx: &Context) -> Result<(String, String)> {
+    let done = step.run(ctx)?;
+    let checked = step.verify(ctx)?;
+    Ok((done, checked))
 }
 
 /// GOTCHA: G-005 — время не идентификатор; счётчик обязателен.

@@ -16,6 +16,9 @@ pub enum CockpitError {
     #[error("проверка «{name}» не пройдена: {details}")]
     CheckFailed { name: String, details: String },
 
+    #[error("шаг «{step}» не уложился в {ms} мс")]
+    Timeout { step: String, ms: u64 },
+
     #[error("операция отменена")]
     Cancelled,
 
@@ -30,6 +33,7 @@ impl CockpitError {
             Self::Journal(_) => "journal.unavailable",
             Self::StepFailed { .. } => "run.step_failed",
             Self::CheckFailed { .. } => "run.check_failed",
+            Self::Timeout { .. } => "run.timeout",
             Self::Cancelled => "run.cancelled",
             Self::Internal(_) => "internal",
         }
@@ -41,6 +45,7 @@ impl CockpitError {
             Self::Journal(_) => Some("проверьте права на каталог data/"),
             Self::StepFailed { .. } => Some("откройте журнал: cockpit journal tail"),
             Self::CheckFailed { .. } => Some("запустите диагностику: cockpit doctor"),
+            Self::Timeout { .. } => Some("увеличьте timeout_ms или проверьте, не завис ли шаг"),
             Self::Cancelled => None,
             Self::Internal(_) => Some("приложите журнал к issue"),
         }

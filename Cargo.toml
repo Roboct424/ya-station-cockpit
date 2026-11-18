@@ -6,6 +6,7 @@ members = [
     "crates/doctor",
     "crates/net",
     "crates/scenarios",
+    "crates/intercept",
     "crates/cli",
 ]
 
@@ -34,6 +35,7 @@ cockpit-config = { path = "crates/config" }
 cockpit-doctor = { path = "crates/doctor" }
 cockpit-net = { path = "crates/net" }
 cockpit-scenarios = { path = "crates/scenarios" }
+cockpit-intercept = { path = "crates/intercept" }
 
 [profile.release]
 lto = "thin"

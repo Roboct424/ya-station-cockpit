@@ -176,6 +176,7 @@ dependencies = [
  "cockpit-config",
  "cockpit-core",
  "cockpit-doctor",
+ "cockpit-intercept",
  "cockpit-net",
  "cockpit-scenarios",
  "notify",
@@ -213,6 +214,13 @@ dependencies = [
  "cockpit-core",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "cockpit-intercept"
+version = "0.1.0"
+dependencies = [
+ "thiserror",
 ]
 
 [[package]]
