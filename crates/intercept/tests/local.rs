@@ -3,11 +3,11 @@ use std::net::TcpStream;
 use std::sync::Arc;
 use std::time::Duration;
 
-use cockpit_intercept::tls::{CertAuthority, LocalRoutes, TlsInterceptor};
+use cockpit_intercept::tls::{CertAuthority, CertPool, LocalRoutes, TlsInterceptor};
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 
-fn client(ca: &CertAuthority) -> Arc<ClientConfig> {
+fn client(ca: &CertPool) -> Arc<ClientConfig> {
     let mut roots = RootCertStore::empty();
     roots.add(ca.ca_der()).unwrap();
     Arc::new(
@@ -19,7 +19,7 @@ fn client(ca: &CertAuthority) -> Arc<ClientConfig> {
     )
 }
 
-fn get(addr: std::net::SocketAddr, ca: &CertAuthority, path: &str, range: Option<&str>) -> String {
+fn get(addr: std::net::SocketAddr, ca: &CertPool, path: &str, range: Option<&str>) -> String {
     let conn = ClientConnection::new(
         client(ca),
         ServerName::try_from("quasar.yandex.net").unwrap(),
@@ -64,7 +64,7 @@ fn serves_check_updates_and_sync() {
     let check = br#"{"hasUpdate":true,"version":"1.0","crc32":1}"#.to_vec();
     let sync = br#"{"status":"ok","config":{"system_config":{"adbd":{"network":true}}}}"#.to_vec();
 
-    let ca = Arc::new(CertAuthority::generate().unwrap());
+    let ca = Arc::new(CertPool::single(CertAuthority::generate().unwrap()));
     let server = TlsInterceptor::start_local(
         "127.0.0.1:0".parse().unwrap(),
         ca.clone(),

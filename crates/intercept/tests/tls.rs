@@ -2,11 +2,11 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::Arc;
 
-use cockpit_intercept::tls::{CertAuthority, TlsInterceptor};
+use cockpit_intercept::tls::{CertAuthority, CertPool, TlsInterceptor};
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 
-fn client_for(ca: &CertAuthority) -> Arc<ClientConfig> {
+fn client_for(ca: &CertPool) -> Arc<ClientConfig> {
     let mut roots = RootCertStore::empty();
     roots.add(ca.ca_der()).unwrap();
 
@@ -21,7 +21,7 @@ fn client_for(ca: &CertAuthority) -> Arc<ClientConfig> {
 
 #[test]
 fn handshake_uses_generated_certificate_for_sni() {
-    let ca = Arc::new(CertAuthority::generate().unwrap());
+    let ca = Arc::new(CertPool::single(CertAuthority::generate().unwrap()));
     let server = TlsInterceptor::start("127.0.0.1:0".parse().unwrap(), ca.clone()).unwrap();
     let addr = server.addr();
 
@@ -50,7 +50,7 @@ fn handshake_uses_generated_certificate_for_sni() {
 
 #[test]
 fn unknown_sni_falls_back_without_failing() {
-    let ca = Arc::new(CertAuthority::generate().unwrap());
+    let ca = Arc::new(CertPool::single(CertAuthority::generate().unwrap()));
     let server = TlsInterceptor::start("127.0.0.1:0".parse().unwrap(), ca.clone()).unwrap();
     let addr = server.addr();
 

@@ -4,13 +4,13 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use cockpit_intercept::tls::{CertAuthority, ForwardOptions, TlsInterceptor};
+use cockpit_intercept::tls::{CertAuthority, CertPool, ForwardOptions, TlsInterceptor};
 use rustls::pki_types::ServerName;
 use rustls::{
     ClientConfig, ClientConnection, RootCertStore, ServerConfig, ServerConnection, StreamOwned,
 };
 
-fn root_store_with(ca: &CertAuthority) -> RootCertStore {
+fn root_store_with(ca: &CertPool) -> RootCertStore {
     let mut roots = RootCertStore::empty();
     roots.add(ca.ca_der()).unwrap();
     roots
@@ -27,7 +27,7 @@ fn client_config(roots: RootCertStore) -> Arc<ClientConfig> {
 }
 
 /// Локальный «настоящий» сервер: отвечает upstream-ok.
-fn start_upstream(ca: &CertAuthority, host: &str) -> (SocketAddr, JoinHandle<()>) {
+fn start_upstream(ca: &CertPool, host: &str) -> (SocketAddr, JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let config: Arc<ServerConfig> = ca.config_for(host).unwrap();
@@ -51,7 +51,7 @@ fn start_upstream(ca: &CertAuthority, host: &str) -> (SocketAddr, JoinHandle<()>
 
 #[test]
 fn forwarding_tunnels_to_upstream() {
-    let ca = Arc::new(CertAuthority::generate().unwrap());
+    let ca = Arc::new(CertPool::single(CertAuthority::generate().unwrap()));
     let (upstream_addr, upstream_handle) = start_upstream(&ca, "example.com");
 
     let options = ForwardOptions {
@@ -100,8 +100,8 @@ fn forwarding_tunnels_to_upstream() {
 #[test]
 fn forwarding_rejects_untrusted_upstream() {
     // Апстрим с сертификатом от чужого CA: клиент прокси не должен ему доверять.
-    let ca = Arc::new(CertAuthority::generate().unwrap());
-    let foreign = Arc::new(CertAuthority::generate().unwrap());
+    let ca = Arc::new(CertPool::single(CertAuthority::generate().unwrap()));
+    let foreign = Arc::new(CertPool::single(CertAuthority::generate().unwrap()));
     let (upstream_addr, _handle) = start_upstream(&foreign, "example.com");
 
     let options = ForwardOptions {

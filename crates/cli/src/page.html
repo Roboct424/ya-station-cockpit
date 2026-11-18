@@ -116,7 +116,18 @@ pre{background:#0b0e12;border:1px solid #1e242c;border-radius:10px;padding:11px;
   </div>
 
   <div class="card">
-    <h2>3. Экстра</h2>
+    <h2>3. Сертификаты</h2>
+    <p class="hint">Станция принимает только те цепочки, которым доверяет. Отметьте
+    активные: если выбрано несколько — сервер будет перебирать их при отказе,
+    пока станция не согласится.</p>
+    <div id="certlist"></div>
+    <button class="act" id="btnCerts" onclick="saveCerts()">Применить выбор</button>
+    <span id="r_certs" class="chip wait">не выполнялось</span>
+    <p class="hint" id="cert_hint"></p>
+  </div>
+
+  <div class="card">
+    <h2>4. Экстра</h2>
     <div class="check"><input type="checkbox" id="ex_update"><span>Заставить станцию обновиться на выбранную прошивку</span></div>
     <div class="row">
       <div class="col"><label>Версия</label><input type="text" id="version" value="0.369.1.46.4778262943.20261013.299"></div>
@@ -304,6 +315,27 @@ async function stackState() {
   }
 }
 
+async function loadCerts() {
+  const j = await (await fetch('/api/certs')).json();
+  $('certlist').innerHTML = j.items.map((c, i) => `
+    <div class="check">
+      <input type="checkbox" id="cert_${i}" data-path="${c.path}" ${c.active ? 'checked' : ''}>
+      <span>${c.name} <span class="muted">${c.path}</span></span>
+    </div>`).join('');
+}
+
+async function saveCerts() {
+  const f = new URLSearchParams();
+  document.querySelectorAll('#certlist input').forEach(el => {
+    if (el.checked) f.append('cert_' + Math.random().toString(36).slice(2), el.dataset.path);
+  });
+  $('btnCerts').disabled = true; chip('r_certs', false, 'применяю…');
+  const r = await (await fetch('/api/certs', {method: 'POST', body: f})).json();
+  $('btnCerts').disabled = false;
+  chip('r_certs', r.ok, r.text);
+  $('cert_hint').textContent = r.ok ? 'выбор сохранён в data/certs/active.txt' : '';
+}
+
 async function state() {
   const j = await (await fetch('/api/state')).json();
   const set = (id, ok, text, cls) => {
@@ -320,6 +352,7 @@ async function state() {
 async function init() {
   ITEMS = (await (await fetch('/api/items')).json()).items;
   renderItems();
+  loadCerts();
   state(); stackState();
   setInterval(state, 5000);
   setInterval(poll, 1200);

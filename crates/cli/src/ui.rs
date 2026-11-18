@@ -257,6 +257,8 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
             (200, "application/json", json.to_string())
         }
         ("GET", "/api/stack") => (200, "application/json", stack_json()),
+        ("GET", "/api/certs") => (200, "application/json", certs_json()),
+        ("POST", "/api/certs") => (200, "application/json", set_certs(body)),
         ("POST", "/api/cleanup") => {
             let ctx = ctx_from(body);
             let result = run_module("env.cleanup", ctx);
@@ -346,6 +348,111 @@ fn process_alive(pid: u32) -> bool {
         Ok(out) => String::from_utf8_lossy(&out.stdout).contains(&pid.to_string()),
         Err(_) => false,
     }
+}
+
+/// Каталог с сертификатами мастера.
+fn certs_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from("data").join("certs")
+}
+
+fn active_certs() -> Vec<std::path::PathBuf> {
+    let list = certs_dir().join("active.txt");
+    let mut out = Vec::new();
+    if let Ok(text) = std::fs::read_to_string(&list) {
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let path = if line.starts_with("data/") {
+                std::path::PathBuf::from(line)
+            } else {
+                certs_dir().join(line)
+            };
+            if path.exists() {
+                out.push(path);
+            }
+        }
+    }
+    if out.is_empty() {
+        out.push(std::path::PathBuf::from("data").join("ca.pem"));
+    }
+    out
+}
+
+fn certs_json() -> String {
+    let active = active_certs();
+    let mut items = vec![serde_json::json!({
+        "name": "cockpit (наш)",
+        "path": "data/ca.pem",
+        "active": active.iter().any(|p| p.ends_with("ca.pem")),
+        "ours": true
+    })];
+    if let Ok(entries) = std::fs::read_dir(certs_dir()) {
+        let mut files: Vec<_> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().map(|e| e == "pem").unwrap_or(false))
+            .collect();
+        files.sort();
+        for path in files {
+            let name = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("ca")
+                .to_string();
+            items.push(serde_json::json!({
+                "name": name,
+                "path": path.to_string_lossy().replace('\\', "/"),
+                "active": active.iter().any(|a| a == &path),
+                "ours": false
+            }));
+        }
+    }
+    serde_json::json!({ "items": items }).to_string()
+}
+
+fn set_certs(body: &str) -> String {
+    let _ = std::fs::create_dir_all(certs_dir());
+    let mut chosen = Vec::new();
+    for item in certs_json_items(body) {
+        if item.1 {
+            chosen.push(item.0);
+        }
+    }
+    if chosen.is_empty() {
+        chosen.push("data/ca.pem".to_string());
+    }
+    let text = chosen.join("\n");
+    if let Err(e) = std::fs::write(certs_dir().join("active.txt"), text) {
+        return serde_json::json!({ "ok": false, "text": format!("не записалось: {e}") })
+            .to_string();
+    }
+    push_log(format!("сертификаты: активно {}", chosen.len()));
+    serde_json::json!({
+        "ok": true,
+        "text": if chosen.len() > 1 {
+            format!("активно {} — будет перебор", chosen.len())
+        } else {
+            "активен один".to_string()
+        }
+    })
+    .to_string()
+}
+
+/// Пары (путь, выбран) из тела запроса `cert_<index>=1`.
+fn certs_json_items(body: &str) -> Vec<(String, bool)> {
+    let mut out = Vec::new();
+    for pair in body.split('&') {
+        let Some((k, v)) = pair.split_once('=') else {
+            continue;
+        };
+        if let Some(index) = k.strip_prefix("cert_") {
+            let _ = index;
+            out.push((percent_decode(v), true));
+        }
+    }
+    out
 }
 
 fn stack_json() -> String {
@@ -485,6 +592,12 @@ fn start_stack(body: &str) -> String {
         "--http-bind",
         "0.0.0.0:80",
     ]);
+    let certs = active_certs()
+        .iter()
+        .map(|p| p.to_string_lossy().to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    cmd.args(["--certs", &certs]);
     if let Some(out) = log {
         cmd.stdout(out);
     }

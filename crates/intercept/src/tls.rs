@@ -39,6 +39,8 @@ pub struct CertAuthority {
     ca_cert: rcgen::Certificate,
     ca_key: KeyPair,
     cache: Mutex<HashMap<String, Arc<ServerConfig>>>,
+    /// Человеческое имя (имя файла), чтобы показывать в панели.
+    pub name: String,
 }
 
 impl CertAuthority {
@@ -68,6 +70,37 @@ impl CertAuthority {
         Self::from_key(key)
     }
 
+    /// Загружает пару «сертификат + ключ» из PEM-файлов.
+    pub fn load_pair(
+        cert_path: &std::path::Path,
+        key_path: &std::path::Path,
+    ) -> Result<Self, TlsError> {
+        let key_pem = std::fs::read_to_string(key_path)?;
+        let key = KeyPair::from_pem(&key_pem)?;
+        let name = cert_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("ca")
+            .to_string();
+        // DN тот же, что у нашего CA: устройство сверяет цепочку по ключу,
+        // а имя нужно только для панели и журнала.
+        let mut params = CertificateParams::new(vec!["cockpit-local-ca".to_string()])?;
+        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        params
+            .distinguished_name
+            .push(DnType::CommonName, "Cockpit Local CA");
+        params
+            .distinguished_name
+            .push(DnType::OrganizationName, "Cockpit");
+        let ca_cert = params.self_signed(&key)?;
+        Ok(Self {
+            ca_cert,
+            ca_key: key,
+            cache: Mutex::new(HashMap::new()),
+            name,
+        })
+    }
+
     fn from_key(ca_key: KeyPair) -> Result<Self, TlsError> {
         let mut params = CertificateParams::new(vec!["cockpit-local-ca".to_string()])?;
         params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
@@ -82,7 +115,13 @@ impl CertAuthority {
             ca_cert,
             ca_key,
             cache: Mutex::new(HashMap::new()),
+            name: "cockpit-ca".to_string(),
         })
+    }
+
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = name.into();
+        self
     }
 
     pub fn ca_der(&self) -> CertificateDer<'static> {
@@ -126,6 +165,68 @@ impl CertAuthority {
             cache.insert(host.to_string(), config.clone());
         }
         Ok(config)
+    }
+}
+
+/// Набор корневых CA с перебором: если станция не приняла текущий,
+/// переключаемся на следующий и пробуем снова.
+pub struct CertPool {
+    cas: Vec<CertAuthority>,
+    active: std::sync::atomic::AtomicUsize,
+}
+
+impl CertPool {
+    pub fn new(cas: Vec<CertAuthority>) -> Self {
+        Self {
+            cas,
+            active: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    pub fn single(ca: CertAuthority) -> Self {
+        Self::new(vec![ca])
+    }
+
+    pub fn count(&self) -> usize {
+        self.cas.len()
+    }
+
+    pub fn active_index(&self) -> usize {
+        self.active.load(Ordering::Relaxed)
+    }
+
+    pub fn active_name(&self) -> String {
+        let index = self.active_index();
+        self.cas
+            .get(index)
+            .map(|ca| ca.name.clone())
+            .unwrap_or_else(|| "нет CA".to_string())
+    }
+
+    pub fn ca_der(&self) -> CertificateDer<'static> {
+        let index = self.active_index().min(self.cas.len() - 1);
+        self.cas[index].ca_der()
+    }
+
+    /// PEM активного сертификата (его и ставим на устройство).
+    pub fn ca_pem(&self) -> String {
+        let index = self.active_index().min(self.cas.len() - 1);
+        self.cas[index].ca_pem()
+    }
+
+    pub fn config_for(&self, host: &str) -> Result<Arc<ServerConfig>, TlsError> {
+        let index = self.active_index().min(self.cas.len() - 1);
+        self.cas[index].config_for(host)
+    }
+
+    /// Переходит к следующему CA. Возвращает `true`, если был переход.
+    pub fn rotate(&self) -> bool {
+        if self.cas.len() < 2 {
+            return false;
+        }
+        let next = (self.active_index() + 1) % self.cas.len();
+        self.active.store(next, Ordering::Relaxed);
+        true
     }
 }
 
@@ -417,14 +518,14 @@ pub struct TlsInterceptor {
 }
 
 impl TlsInterceptor {
-    pub fn start(bind: SocketAddr, ca: Arc<CertAuthority>) -> io::Result<Self> {
+    pub fn start(bind: SocketAddr, ca: Arc<CertPool>) -> io::Result<Self> {
         Self::start_with(bind, ca, Mode::Serve)
     }
 
     /// Перехват с туннелем к реальному серверу (host:443 по SNI).
     pub fn start_forwarding(
         bind: SocketAddr,
-        ca: Arc<CertAuthority>,
+        ca: Arc<CertPool>,
         options: ForwardOptions,
     ) -> io::Result<Self> {
         Self::start_with(bind, ca, Mode::Forward(Arc::new(options)))
@@ -433,13 +534,13 @@ impl TlsInterceptor {
     /// Локальный сервер: отвечает OTA/sync из наших данных, без облака.
     pub fn start_local(
         bind: SocketAddr,
-        ca: Arc<CertAuthority>,
+        ca: Arc<CertPool>,
         routes: LocalRoutes,
     ) -> io::Result<Self> {
         Self::start_with(bind, ca, Mode::Local(Arc::new(routes)))
     }
 
-    fn start_with(bind: SocketAddr, ca: Arc<CertAuthority>, mode: Mode) -> io::Result<Self> {
+    fn start_with(bind: SocketAddr, ca: Arc<CertPool>, mode: Mode) -> io::Result<Self> {
         let listener = TcpListener::bind(bind)?;
         listener.set_nonblocking(true)?;
         let addr = listener.local_addr()?;
@@ -515,7 +616,7 @@ impl Drop for TlsInterceptor {
 
 fn serve(
     stream: TcpStream,
-    ca: Arc<CertAuthority>,
+    ca: Arc<CertPool>,
     seen: Arc<Mutex<Vec<String>>>,
 ) -> Result<(), TlsError> {
     // GOTCHA: G-017 — принятый сокет наследует non-blocking от listener,
@@ -565,7 +666,7 @@ pub fn server_name(host: &str) -> Result<ServerName<'static>, TlsError> {
 
 fn serve_forward(
     stream: TcpStream,
-    ca: Arc<CertAuthority>,
+    ca: Arc<CertPool>,
     options: Arc<ForwardOptions>,
     seen: Arc<Mutex<Vec<String>>>,
 ) -> Result<(), TlsError> {
@@ -757,7 +858,7 @@ fn pump(
 
 fn serve_local(
     stream: TcpStream,
-    ca: Arc<CertAuthority>,
+    ca: Arc<CertPool>,
     routes: Arc<LocalRoutes>,
     seen: Arc<Mutex<Vec<String>>>,
 ) -> Result<(), TlsError> {
@@ -783,7 +884,16 @@ fn serve_local(
     let config = ca.config_for(&cert_host)?;
     let conn = ServerConnection::new(config)?;
     let mut tls = StreamOwned::new(conn, stream);
-    tls_accept(&mut tls.conn, &mut tls.sock)?;
+    if let Err(e) = tls_accept(&mut tls.conn, &mut tls.sock) {
+        // Перебор: если станция не приняла текущий CA, пробуем следующий.
+        if ca.rotate() {
+            eprintln!(
+                "[tls] {host}: {e}; переключаюсь на CA «{}»",
+                ca.active_name()
+            );
+        }
+        return Err(e);
+    }
 
     let (method, path, headers, raw) = read_request(&mut tls)?;
     eprintln!("[local] {method} {path}");

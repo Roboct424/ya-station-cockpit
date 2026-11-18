@@ -88,6 +88,9 @@ enum Cmd {
         /// Форвардить запросы на реальный сервер (по SNI), а не отдавать заглушку
         #[arg(long)]
         forward: bool,
+        /// Активные CA (PEM). Несколько — перебор при отказе станции.
+        #[arg(long, value_delimiter = ',')]
+        certs: Vec<PathBuf>,
     },
     /// DNS-перехватчик: отвечает своим адресом на A, пусто на AAAA
     Dns {
@@ -154,6 +157,9 @@ enum Cmd {
         /// Таблица маршрутов: что отдаём локально, что проксируем.
         #[arg(long, default_value = "data/routes.toml")]
         routes_file: PathBuf,
+        /// Активные CA (PEM). Несколько — перебор при отказе станции.
+        #[arg(long, value_delimiter = ',')]
+        certs: Vec<PathBuf>,
     },
     /// Сценарий активации: проверка прошивки → ожидание ADB → root → версия
     Activate {
@@ -527,7 +533,8 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
             ca_out,
             seconds,
             forward,
-        } => run_tls(&bind, &ca_out, seconds, forward),
+            certs,
+        } => run_tls(&bind, &ca_out, seconds, forward, &certs),
 
         Cmd::Dns {
             bind,
@@ -546,6 +553,7 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
             forward,
             http_bind,
             routes_file,
+            certs,
         } => run_local_ota(
             &bind,
             ca_out.as_ref(),
@@ -557,6 +565,7 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
             forward,
             &http_bind,
             &routes_file,
+            &certs,
         ),
         Cmd::Activate {
             addr,
@@ -819,6 +828,7 @@ fn run_local_ota(
     forward: bool,
     http_bind: &str,
     routes_file: &std::path::Path,
+    certs: &[PathBuf],
 ) -> cockpit_core::Result<ExitCode> {
     use cockpit_intercept::tls::{CertAuthority, LocalRoutes, TlsInterceptor};
 
@@ -848,10 +858,7 @@ fn run_local_ota(
         .unwrap_or("firmware.zip")
         .to_string();
 
-    let ca = std::sync::Arc::new(
-        CertAuthority::load_or_create(&ca_key_path())
-            .map_err(|e| CockpitError::Internal(format!("CA: {e}")))?,
-    );
+    let ca = std::sync::Arc::new(load_cert_pool(certs)?);
 
     if let Some(path) = ca_out {
         if let Some(dir) = path.parent() {
@@ -997,10 +1004,10 @@ fn run_activate(
         let bind: std::net::SocketAddr = ota_bind
             .parse()
             .map_err(|e| CockpitError::Config(format!("--ota-bind: {e}")))?;
-        let ca = std::sync::Arc::new(
+        let ca = std::sync::Arc::new(cockpit_intercept::tls::CertPool::single(
             cockpit_intercept::tls::CertAuthority::generate()
                 .map_err(|e| CockpitError::Internal(format!("CA: {e}")))?,
-        );
+        ));
         if let Some(path) = &ca_out {
             std::fs::write(path, ca.ca_pem())
                 .map_err(|e| CockpitError::Internal(format!("{}: {e}", path.display())))?;
@@ -1281,6 +1288,44 @@ fn run_pair(cmd: PairCmd) -> cockpit_core::Result<ExitCode> {
     }
 }
 
+/// Собирает пул CA из PEM-файлов. Для нашего CA ключ лежит рядом
+/// (`data/ca.key`), для остальных — `<имя>.key`.
+fn load_cert_pool(
+    paths: &[std::path::PathBuf],
+) -> cockpit_core::Result<cockpit_intercept::tls::CertPool> {
+    use cockpit_intercept::tls::{CertAuthority, CertPool};
+
+    let mut cas = Vec::new();
+    for path in paths {
+        let key = if *path == std::path::PathBuf::from("data").join("ca.pem") {
+            ca_key_path()
+        } else {
+            path.with_extension("key")
+        };
+        let loaded = if key.exists() {
+            CertAuthority::load_pair(path, &key)
+        } else {
+            CertAuthority::load_or_create(&ca_key_path())
+        };
+        match loaded {
+            Ok(ca) => {
+                cas.push(ca.with_name(path.file_stem().and_then(|s| s.to_str()).unwrap_or("ca")))
+            }
+            Err(e) => println!("CA {} пропущен: {e}", path.display()),
+        }
+    }
+    if cas.is_empty() {
+        cas.push(
+            CertAuthority::load_or_create(&ca_key_path())
+                .map_err(|e| CockpitError::Internal(format!("CA: {e}")))?,
+        );
+    }
+    if cas.len() > 1 {
+        println!("сертификатов в пуле: {} (перебор при отказе)", cas.len());
+    }
+    Ok(CertPool::new(cas))
+}
+
 /// Где лежит постоянный ключ локального CA.
 fn ca_key_path() -> PathBuf {
     PathBuf::from("data").join("ca.key")
@@ -1514,6 +1559,7 @@ fn run_tls(
     ca_out: &Option<PathBuf>,
     seconds: u64,
     forward: bool,
+    certs: &[PathBuf],
 ) -> cockpit_core::Result<ExitCode> {
     use cockpit_intercept::tls::{CertAuthority, TlsInterceptor};
 
@@ -1521,10 +1567,7 @@ fn run_tls(
         .parse()
         .map_err(|e| CockpitError::Config(format!("--bind {bind}: {e}")))?;
 
-    let ca = std::sync::Arc::new(
-        CertAuthority::load_or_create(&ca_key_path())
-            .map_err(|e| CockpitError::Internal(format!("CA: {e}")))?,
-    );
+    let ca = std::sync::Arc::new(load_cert_pool(certs)?);
 
     if let Some(path) = ca_out {
         if let Some(dir) = path.parent() {
