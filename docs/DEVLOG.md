@@ -589,3 +589,29 @@ http=200 size=577
 Осталось: `hybrid_request_factory: Backend unavailable` — станция считает
 облачный backend недоступным (websocket `uni.ws` к `uniproxy` не удерживается
 с локальным токеном). Проверяется голосом: отвечает ли Алиса.
+
+### Итог живой активации (2026-11-19)
+
+Станция прошла сопряжение полностью, без облачного аккаунта:
+
+```
+23:07:16 Backend returned code: 200
+23:07:16 Calling authd.change_user with uid=1000000001
+23:07:16 Successfully initialized
+23:07:16 New Configuration state: CONFIGURED
+```
+
+* `/data/quasar/registered` создан 23:07.
+* `Reseting wifi` и `Failed to connect to wifi` — **0 раз** за загрузку.
+* `id -u` → 0, root ADB живёт поверх `S99adbguard`.
+
+Две причины, которые держали станцию в цикле сопряжения:
+
+1. `setup_endpoint` проверяет интернет через 0 секунд после ассоциации —
+   DHCP не успевал. Вылечено статическим адресом в `/etc/dhcpcd.conf`.
+2. `/register` приходил с query-строкой, маршрут не совпадал и запрос уходил
+   в облако → `403` (G-032).
+
+Осталось: часы (`chrony` не берёт время из нашего `204`, после перезагрузки
+уходит назад) и `Backend unavailable` для `uni.ws` — с локальным токеном
+настоящий `uniproxy` соединение не держит. Проверяется голосом.

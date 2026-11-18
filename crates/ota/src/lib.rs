@@ -521,14 +521,30 @@ pub fn check_updates_json(entry: &Entry, download_url: &str) -> Vec<u8> {
 }
 
 /// Ответ на `/get_sync_info`: конфиг, включающий сетевой ADB.
+///
+/// GOTCHA: G-031 — без `remoteActivation` на верхнем уровне и в
+/// `system_config` станция не завершает привязку и уходит на повторный сброс
+/// (`wifi_reseter: Reseting completed`).
 pub fn sync_info_json() -> Vec<u8> {
     let body = serde_json::json!({
         "status": "ok",
+        "tags": [],
+        "subscription": { "mode": "transaction" },
         "config": {
             "system_config": {
-                "adbd": { "remoteActivation": true, "network": true }
-            }
-        }
+                "adbd": { "remoteActivation": true, "network": true },
+                "remoteActivation": true,
+                "experiments": {},
+                "env": "production"
+            },
+            "account_config": {},
+            "device_config": {}
+        },
+        "sync_info": {
+            "adbd": { "remoteActivation": true },
+            "network": { "connected": true }
+        },
+        "remoteActivation": true
     });
     serde_json::to_vec(&body).unwrap_or_default()
 }

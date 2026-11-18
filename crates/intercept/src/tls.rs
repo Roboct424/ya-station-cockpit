@@ -638,17 +638,22 @@ fn serve_local(
     let (method, path, headers, raw) = read_request(&mut tls)?;
     eprintln!("[local] {method} {path}");
 
+    // GOTCHA: G-032 — путь приходит с query-строкой
+    // (`/register?name=quasar&device_id=...`), поэтому маршруты сравниваем
+    // по части до `?`. Иначе запрос уходит в настоящее облако и получает 403.
+    let path_only = path.split('?').next().unwrap_or(&path);
+
     if path.contains("generate_204") || path.contains("/gen_204") || path.contains("/connectivity")
     {
         return write_response(&mut tls, 204, "text/plain", b"", None);
     }
-    if routes.local_auth && path.contains("/token") {
+    if routes.local_auth && path_only.ends_with("/token") {
         let body = br#"{"access_token":"y0__localCockpit","expires_in":31536000,"token_type":"bearer","uid":1000000001,"refresh_token":"local:refresh:0"}"#;
         return write_response(&mut tls, 200, "application/json", body, None);
     }
     // Регистрация «в себе»: станция считает аккаунт привязанным, облако не нужно.
-    if routes.local_auth && path.ends_with("/register") {
-        let body = br#"{"status":"ok","hasCriticalUpdate":false}"#;
+    if routes.local_auth && path_only.ends_with("/register") {
+        let body = br#"{"status":"ok","remoteActivation":true,"hasCriticalUpdate":false}"#;
         return write_response(&mut tls, 200, "application/json", body, None);
     }
     if path.contains("/check_updates") {
