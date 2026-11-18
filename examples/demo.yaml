@@ -1,0 +1,36 @@
+# Демонстрационный сценарий: показывает контракт шага.
+#   действие → проверка → откат
+# Запуск:
+#   cockpit run examples/demo.yaml --var ssid=MyWiFi
+id: demo
+title: "Демо: подготовка каталога и маркера"
+description: "Файловые шаги без сети: удобно проверять движок и журнал."
+
+match:
+  model: ["YNDX-00020"]
+  firmware: ">=0.369.1.46 <0.369.1.50"
+
+steps:
+  - id: ensure-dir
+    title: "Создать каталог устройства"
+    action:
+      kind: ensure_dir
+      path: "device"
+    check:
+      kind: dir_exists
+      path: "device"
+
+  - id: write-marker
+    title: "Записать метку с SSID"
+    action:
+      kind: write_file
+      path: "device/marker.txt"
+      content: "ssid={{ssid}}\n"
+    check:
+      kind: contains
+      path: "device/marker.txt"
+      text: "{{ssid}}"
+    rollback:
+      kind: remove_file
+      path: "device/marker.txt"
+    timeout_ms: 5000

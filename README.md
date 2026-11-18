@@ -5,52 +5,72 @@
 Локальная настройка и обслуживание Яндекс Станций: мастер, консоль и журнал
 каждого шага. Написан на Rust, работает на Windows и Linux.
 
-Принцип: **каждое действие — транзакция**. Шаг имеет предусловие (`is_done`),
-действие (`run`), проверку результата (`verify`) и компенсацию (`rollback`).
-При ошибке выполненные шаги откатываются, всё пишется в журнал.
+Принцип: **каждое действие — транзакция**. Шаг имеет действие (`run`),
+проверку результата (`check`), условие пропуска (`skip_if`) и компенсацию
+(`rollback`). При ошибке выполненные шаги откатываются, всё пишется в журнал.
 
-**Статус: фаза 0.** Готов скелет: ядро, конфиг, диагностика, журнал, CLI.
-Сети, перехвата и работы с устройством пока нет — они появятся в следующих фазах.
+**Статус: фаза 1.** Есть ядро, конфиг с горячей перезагрузкой, диагностика,
+YAML-сценарии, контракт сетевого слоя (реализация — фаза 2) и CLI.
 
 ### Быстрый старт
 
 ```bash
 cargo build
-cargo run -- doctor          # проверить окружение
-cargo run -- run selfcheck   # прогнать встроенный сценарий
-cargo run -- journal tail    # посмотреть, что произошло
+cargo run -- doctor                 # проверить окружение
+cargo run -- run selfcheck          # встроенный сценарий
+cargo run -- run examples/demo.yaml --var ssid=MyWiFi
+cargo run -- journal tail           # что произошло
 ```
 
 ### Команды
 
 | Команда | Назначение |
 |---|---|
-| `cockpit doctor [--json]` | диагностика окружения, ничего не меняет |
-| `cockpit config init\|check\|show` | конфигурация |
+| `cockpit doctor [--json]` | диагностика окружения |
+| `cockpit config init\|check\|show\|watch` | конфиг, в том числе горячая перезагрузка |
 | `cockpit journal tail\|stats` | журнал выполнения |
-| `cockpit run selfcheck [--dry-run]` | встроенный сценарий |
+| `cockpit run <selfcheck\|file.yaml> [--dry-run] [--var k=v]` | запуск сценария |
+| `cockpit scenario check <file.yaml>` | проверка сценария без запуска |
+| `cockpit net info` | выбранный сетевой адаптер |
 | `cockpit version` | версия |
+
+### Сценарий — это данные
+
+```yaml
+id: demo
+title: "Подготовка устройства"
+match:
+  model: ["YNDX-00020"]
+  firmware: ">=0.369.1.46 <0.369.1.50"
+steps:
+  - id: write-marker
+    title: "Записать метку с SSID"
+    action: { kind: write_file, path: "device/marker.txt", content: "ssid={{ssid}}" }
+    check:  { kind: contains, path: "device/marker.txt", text: "{{ssid}}" }
+    rollback: { kind: remove_file, path: "device/marker.txt" }
+```
+
+Поддерживаются `action`: `noop`, `ensure_dir`, `write_file`, `remove_file`;
+`check`: `file_exists`, `file_absent`, `dir_exists`, `contains`.
 
 ### Структура
 
 ```
-crates/core      события, журнал (JSONL), шаги, исполнитель, ошибки
-crates/config    TOML-конфиг с валидацией и шаблоном
-crates/doctor    пробы окружения с подсказками
-crates/cli       команды cockpit
-docs/DEVLOG.md   дневник разработки: решения, ошибки, проверки
-docs/GOTCHAS.md  журнал болячек библиотек: симптом → причина → решение
+crates/core       события, журнал (JSONL), шаги, исполнитель, ошибки
+crates/config     TOML-конфиг, валидация, горячая перезагрузка (arc-swap + notify)
+crates/doctor     пробы окружения с подсказками
+crates/net        трейт NetAdapter и заглушки Windows/Linux
+crates/scenarios  YAML-сценарии: модель, загрузка, проверка, исполнение
+crates/cli        команды cockpit
+examples/demo.yaml
+docs/DEVLOG.md    дневник: решения, ошибки, проверки
+docs/GOTCHAS.md   журнал болячек библиотек: симптом → причина → решение
 ```
 
-### Как это устроено
+### Журнал
 
-```
-шаг:  is_done ──► run ──► verify ──► (ok) дальше
-                      │
-                      └─ ошибка ──► rollback выполненных ──► журнал ──► ошибка с подсказкой
-```
-
-Журнал — `data/journal.jsonl`, append-only: падение процесса не теряет историю.
+`data/journal.jsonl`, append-only: падение процесса не теряет историю.
+Битая строка пропускается с предупреждением и не скрывает остальные записи.
 
 ---
 
@@ -59,12 +79,13 @@ docs/GOTCHAS.md  журнал болячек библиотек: симптом 
 Local setup and maintenance for Yandex Stations: a wizard, a console and a journal
 of every step. Written in Rust, runs on Windows and Linux.
 
-Principle: **every action is a transaction**. A step has a precondition (`is_done`),
-an action (`run`), a result check (`verify`) and a compensation (`rollback`).
-On failure the completed steps are rolled back and everything goes to the journal.
+Principle: **every action is a transaction**. A step has an action (`run`),
+a result check (`check`), a skip condition (`skip_if`) and a compensation
+(`rollback`). On failure the completed steps are rolled back and everything goes
+to the journal.
 
-**Status: phase 0.** The skeleton is ready: core, config, diagnostics, journal, CLI.
-Networking, interception and device work come in later phases.
+**Status: phase 1.** Core, config with hot reload, diagnostics, YAML scenarios,
+network-layer contract (implementation in phase 2) and CLI.
 
 ### Quick start
 
@@ -72,6 +93,7 @@ Networking, interception and device work come in later phases.
 cargo build
 cargo run -- doctor
 cargo run -- run selfcheck
+cargo run -- run examples/demo.yaml --var ssid=MyWiFi
 cargo run -- journal tail
 ```
 
@@ -79,22 +101,28 @@ cargo run -- journal tail
 
 | Command | Purpose |
 |---|---|
-| `cockpit doctor [--json]` | environment diagnostics, read-only |
-| `cockpit config init\|check\|show` | configuration |
+| `cockpit doctor [--json]` | environment diagnostics |
+| `cockpit config init\|check\|show\|watch` | config, including hot reload |
 | `cockpit journal tail\|stats` | execution journal |
-| `cockpit run selfcheck [--dry-run]` | built-in scenario |
+| `cockpit run <selfcheck\|file.yaml> [--dry-run] [--var k=v]` | run a scenario |
+| `cockpit scenario check <file.yaml>` | validate a scenario |
+| `cockpit net info` | selected network adapter |
 | `cockpit version` | version |
 
 ### Layout
 
 ```
-crates/core      events, JSONL journal, steps, runner, errors
-crates/config    TOML config with validation and a sample
-crates/doctor    environment probes with hints
-crates/cli       cockpit commands
-docs/DEVLOG.md   development diary: decisions, bugs, verification
+crates/core       events, JSONL journal, steps, runner, errors
+crates/config     TOML config, validation, hot reload (arc-swap + notify)
+crates/doctor     environment probes with hints
+crates/net        NetAdapter trait and Windows/Linux stubs
+crates/scenarios  YAML scenarios: model, loading, validation, execution
+crates/cli        cockpit commands
+examples/demo.yaml
+docs/DEVLOG.md    development diary
+docs/GOTCHAS.md   library gotchas: symptom → cause → fix
 ```
 
-## Licence / Лицензия
+## Лицензия / License
 
 MIT.

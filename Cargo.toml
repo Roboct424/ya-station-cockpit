@@ -4,6 +4,8 @@ members = [
     "crates/core",
     "crates/config",
     "crates/doctor",
+    "crates/net",
+    "crates/scenarios",
     "crates/cli",
 ]
 
@@ -23,10 +25,15 @@ clap = { version = "4", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+serde_yaml = "0.9"
+notify = "8"
+arc-swap = "1"
 
 cockpit-core = { path = "crates/core" }
 cockpit-config = { path = "crates/config" }
 cockpit-doctor = { path = "crates/doctor" }
+cockpit-net = { path = "crates/net" }
+cockpit-scenarios = { path = "crates/scenarios" }
 
 [profile.release]
 lto = "thin"

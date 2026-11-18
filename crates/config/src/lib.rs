@@ -215,3 +215,85 @@ https_port = 443
 dry_run_default = false     # true = ничего не менять без явного --apply
 require_confirmation = true # спрашивать перед необратимыми шагами
 "#;
+
+/// «Живой» конфиг: читается один раз, дальше подменяется атомарно.
+///
+/// GOTCHA: G-009 — `arc_swap` даёт дешёвое чтение без блокировок, но
+/// подменять значение нужно только после успешной валидации: иначе
+/// один опечатанный файл обрушит работающий процесс.
+pub struct LiveConfig {
+    path: PathBuf,
+    current: arc_swap::ArcSwap<Config>,
+}
+
+impl LiveConfig {
+    pub fn load(path: impl AsRef<Path>) -> Result<Self> {
+        let path = path.as_ref().to_path_buf();
+        let cfg = Config::load(&path)?;
+        Ok(Self {
+            path,
+            current: arc_swap::ArcSwap::from_pointee(cfg),
+        })
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn get(&self) -> std::sync::Arc<Config> {
+        self.current.load_full()
+    }
+
+    /// Перечитывает файл. `Ok(true)` — конфиг изменился и применён.
+    /// При ошибке старый конфиг остаётся в силе.
+    pub fn reload(&self) -> Result<bool> {
+        let fresh = Config::load(&self.path)?;
+        let same = match (self.current.load().to_toml(), fresh.to_toml()) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => false,
+        };
+        if same {
+            return Ok(false);
+        }
+        self.current.store(std::sync::Arc::new(fresh));
+        Ok(true)
+    }
+}
+
+/// Запускает наблюдение за файлом. Возвращённый watcher нужно держать живым.
+///
+/// GOTCHA: G-010 — `notify` присылает несколько событий на одно сохранение
+/// (в том числе `Rename` при атомарной записи), поэтому вызывающая сторона
+/// обязана дебаунсить (мы ждём 200 мс перед перечитыванием).
+pub fn watch(
+    path: impl AsRef<Path>,
+    on_change: impl Fn() + Send + 'static,
+) -> Result<notify::RecommendedWatcher> {
+    use notify::{RecursiveMode, Watcher};
+
+    let path = path.as_ref().to_path_buf();
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."));
+
+    let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+        if let Ok(event) = res {
+            let touches = event
+                .paths
+                .iter()
+                .any(|p| p == &path || p.file_name() == path.file_name());
+            if touches {
+                on_change();
+            }
+        }
+    })
+    .map_err(|e| CockpitError::Config(format!("наблюдение: {e}")))?;
+
+    watcher
+        .watch(&parent, RecursiveMode::NonRecursive)
+        .map_err(|e| CockpitError::Config(format!("наблюдение {}: {e}", parent.display())))?;
+
+    Ok(watcher)
+}

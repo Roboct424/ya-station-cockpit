@@ -1,0 +1,11 @@
+[package]
+name = "cockpit-scenarios"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_yaml.workspace = true
+thiserror.workspace = true
+cockpit-core.workspace = true

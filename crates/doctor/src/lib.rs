@@ -122,6 +122,7 @@ pub fn run_all(cfg: &Config) -> Report {
         probe_config(cfg),
         probe_data_dir(cfg),
         probe_journal(cfg),
+        probe_resolver(),
         probe_dns_port(cfg),
         probe_http_ports(cfg),
         probe_capture_support(),
@@ -294,4 +295,25 @@ fn probe_capture_support() -> Probe {
                 .with_hint("модуль tun не загружен"),
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn probe_resolver() -> Probe {
+    match std::fs::read_to_string("/etc/resolv.conf") {
+        Ok(text) if text.contains("127.0.0.53") => {
+            Probe::new("резолвер", Status::Warn, "systemd-resolved на 127.0.0.53")
+                .with_hint("он держит :53; для перехвата понадобится отдельный адрес/порт")
+        }
+        Ok(_) => Probe::new(
+            "резолвер",
+            Status::Ok,
+            "/etc/resolv.conf без systemd-resolved",
+        ),
+        Err(_) => Probe::new("резолвер", Status::Skip, "нет /etc/resolv.conf"),
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn probe_resolver() -> Probe {
+    Probe::new("резолвер", Status::Skip, "не применимо на этой платформе")
 }
