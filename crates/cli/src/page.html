@@ -1,0 +1,331 @@
+<!doctype html><html lang="ru"><meta charset="utf-8">
+<title>cockpit — получение ADB</title>
+<style>
+:root{color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:#0f1216;color:#e8ecf1;font:14px/1.45 system-ui,Segoe UI,sans-serif}
+header{display:flex;align-items:center;gap:12px;padding:13px 18px;background:#151a21;border-bottom:1px solid #232a34}
+header h1{font-size:15px;margin:0;font-weight:600}
+.badge{padding:3px 9px;border-radius:999px;font-size:11px;background:#23303f;color:#9fb4cc;white-space:nowrap}
+.badge.ok{background:#173a28;color:#7ee2a8}
+.badge.bad{background:#3a1b1b;color:#ff9a9a}
+nav{display:flex;gap:4px;margin-left:auto}
+nav button{background:transparent;border:0;color:#8b97a8;padding:8px 14px;border-radius:9px;cursor:pointer;font-size:13px}
+nav button.on{background:#22303f;color:#e8ecf1}
+main{padding:16px 18px;max-width:1220px;margin:0 auto}
+section{display:none}section.on{display:block}
+.row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start}
+.col{flex:1 1 340px;min-width:320px}
+.card{background:#161b22;border:1px solid #232a34;border-radius:12px;padding:13px;margin-bottom:12px}
+.card h2{font-size:13px;margin:0 0 6px;color:#b9c6d6;font-weight:600}
+.card p.hint{font-size:12px;color:#8b97a8;margin:0 0 8px}
+label{display:block;color:#8b97a8;font-size:12px;margin:9px 0 4px}
+input[type=text],input[type=number],select,textarea{width:100%;padding:8px 9px;background:#0f1319;color:#e8ecf1;
+ border:1px solid #2a3341;border-radius:8px;font:13px system-ui}
+textarea{font:12px ui-monospace,Consolas,monospace;min-height:52px}
+button.act{padding:9px 13px;border:0;border-radius:9px;background:#3d7eff;color:#fff;font-weight:600;cursor:pointer;margin:8px 6px 0 0}
+button.ghost{background:#232b36;color:#cfd8e4}
+button:disabled{opacity:.55;cursor:default}
+.chip{display:inline-block;margin-left:8px;font-size:12px;padding:2px 8px;border-radius:999px}
+.chip.ok{background:#173a28;color:#7ee2a8}.chip.bad{background:#3a1b1b;color:#ff9a9a}
+.chip.wait{background:#2a3341;color:#9fb4cc}
+.check{display:flex;gap:9px;align-items:center;padding:7px 0;border-bottom:1px solid #1d232b}
+.check:last-child{border-bottom:0}
+.check input{width:16px;height:16px}
+.check span{flex:1}
+.ansgrid{display:grid;grid-template-columns:1fr 190px;gap:8px 12px;align-items:center}
+.ansgrid .nm{font-size:12px;color:#c7d2e0}
+pre{background:#0b0e12;border:1px solid #1e242c;border-radius:10px;padding:11px;margin:0;
+ white-space:pre-wrap;font:12px/1.45 ui-monospace,Consolas,monospace;height:430px;overflow:auto;color:#cbd5e1}
+.muted{color:#7f8ea3;font-size:12px}
+.bar{height:6px;background:#1d2430;border-radius:99px;overflow:hidden;margin:8px 0}
+.bar i{display:block;height:100%;background:#3d7eff;width:0;transition:width .4s}
+</style>
+
+<header>
+  <h1>cockpit · получение ADB</h1>
+  <span id="b_admin" class="badge">права: ?</span>
+  <span id="b_hosts" class="badge">hosts: ?</span>
+  <span id="b_station" class="badge">станция: ?</span>
+  <nav>
+    <button class="on" data-tab="s1">1 · Окружение</button>
+    <button data-tab="s2">2 · Перехват</button>
+    <button data-tab="s3">3 · Сопряжение</button>
+  </nav>
+</header>
+
+<main>
+<section id="s1" class="on">
+  <div class="row">
+    <div class="col">
+      <div class="card">
+        <h2>1. Чистка системы — обязательно</h2>
+        <p class="hint">Пока в системе остаются чужие записи и старые прокси, станция
+        получает неверные ответы и сбрасывается. Чистим до начала работы.</p>
+        <div class="check"><input type="checkbox" checked disabled><span>Записи старых прокси в hosts ноутбука</span></div>
+        <div class="check"><input type="checkbox" checked disabled><span>Запущенные Python-прокси (probe204, net_force3, fake-quasar)</span></div>
+        <div class="check"><input type="checkbox" checked disabled><span>Занятые порты 80 и 443</span></div>
+        <button class="act" id="btnClean" onclick="cleanup()">Очистить</button>
+        <span id="r_clean" class="chip wait">не выполнялось</span>
+        <pre id="o_clean" style="height:120px;margin-top:10px">—</pre>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="card">
+        <h2>2. Точка доступа для станции</h2>
+        <p class="hint">Станция подключится к этой сети после звукового кода.
+        Адрес выдаётся автоматически, вводить ничего не нужно.</p>
+        <label>SSID</label><input type="text" id="ssid" value="YaRig">
+        <label>Пароль (не короче 8 символов)</label><input type="text" id="pass" value="11111111">
+        <button class="act" id="btnAp" onclick="hotspot()">Поднять точку доступа</button>
+        <span id="r_ap" class="chip wait">не выполнялось</span>
+        <p class="hint" id="ap_hint"></p>
+      </div>
+
+      <div class="card">
+        <h2>3. Бэкап — только после разблокировки</h2>
+        <p class="hint">Единственное действие через ADB на этом шаге. Снимает конфиги
+        и скрипты станции в <code>data/backups/</code>, пока доступ ещё есть.</p>
+        <button class="act ghost" id="btnBackup" onclick="backup()">Сделать бэкап</button>
+        <span id="r_backup" class="chip wait">не выполнялось</span>
+        <pre id="o_backup" style="height:110px;margin-top:10px">—</pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="s2">
+  <div class="card">
+    <h2>1. Что перехватываем</h2>
+    <p class="hint">Отмеченное остаётся у нас. Неотмеченное уходит в настоящее облако.
+    Можно снять всё — тогда станция не получит ни одного нашего ответа.</p>
+    <div class="row" style="gap:24px">
+      <div class="col" id="listA"></div>
+      <div class="col" id="listB"></div>
+    </div>
+    <button class="act ghost" onclick="selectAll(true)">Выбрать всё</button>
+    <button class="act ghost" onclick="selectAll(false)">Снять всё</button>
+  </div>
+
+  <div class="card">
+    <h2>2. Чем отвечаем</h2>
+    <p class="hint">Для каждого перехваченного пакета — тип ответа. «Не отвечать»
+    означает молчание: запрос не получит ответа и не уйдёт в облако.</p>
+    <div id="answers" class="ansgrid"></div>
+  </div>
+
+  <div class="card">
+    <h2>3. Экстра</h2>
+    <div class="check"><input type="checkbox" id="ex_update"><span>Заставить станцию обновиться на выбранную прошивку</span></div>
+    <div class="row">
+      <div class="col"><label>Версия</label><input type="text" id="version" value="0.369.1.46.4778262943.20261013.299"></div>
+      <div class="col"><label>Файл прошивки</label><input type="text" id="firmware" value="firmware/0.369.1.46.4778262943.20261013.299.zip.off"></div>
+    </div>
+    <button class="act" id="btnStack" onclick="startStack()">Подтвердить и продолжить</button>
+    <span id="r_stack" class="chip wait">стек не запущен</span>
+    <p class="hint" id="stack_hint"></p>
+  </div>
+</section>
+
+<section id="s3">
+  <div class="row">
+    <div class="col" style="flex:0 0 360px">
+      <div class="card">
+        <h2>Звук сопряжения</h2>
+        <label>SSID</label><input type="text" id="pssid" value="YaRig">
+        <label>Пароль</label><input type="text" id="ppass" value="11111111">
+        <label>Громкость (рабочая 0.5)</label><input type="text" id="gain" value="0.5">
+        <label>Повторов</label><input type="text" id="repeat" value="2">
+        <button class="act" id="btnPair" onclick="pair()">Проиграть код</button>
+        <span id="r_pair" class="chip wait">не выполнялось</span>
+      </div>
+      <div class="card">
+        <h2>Прогресс</h2>
+        <div class="bar"><i id="bar"></i></div>
+        <div id="prog" class="muted">стек не запущен</div>
+        <button class="act ghost" onclick="stopStack()">Остановить стек</button>
+      </div>
+    </div>
+    <div class="col">
+      <div class="card">
+        <h2>Терминал</h2>
+        <pre id="log">готов</pre>
+      </div>
+    </div>
+  </div>
+</section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+let ITEMS = [], cursor = 0;
+
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
+  document.querySelectorAll('section').forEach(s => s.classList.toggle('on', s.id === b.dataset.tab));
+});
+
+const ACTIONS = [
+  ['204', '204 пустой ответ'],
+  ['token', 'локальный токен'],
+  ['register', 'локальная регистрация'],
+  ['check_updates', 'наша прошивка'],
+  ['sync_info', 'конфиг с adbd'],
+  ['firmware', 'файл прошивки'],
+  ['custom', 'свой ответ (JSON)'],
+  ['proxy', 'отдать в облако'],
+  ['-', 'не отвечать']
+];
+
+function body(extra) {
+  return new URLSearchParams(Object.assign({
+    ssid: $('ssid').value, password: $('pass').value
+  }, extra || {}));
+}
+
+function chip(id, ok, text) {
+  const el = $(id);
+  el.className = 'chip ' + (ok ? 'ok' : 'bad');
+  el.textContent = text;
+}
+
+function append(text) {
+  const el = $('log');
+  el.textContent += (el.textContent ? '\n' : '') + text;
+  el.scrollTop = el.scrollHeight;
+}
+
+async function cleanup() {
+  $('btnClean').disabled = true; chip('r_clean', false, 'чищу…');
+  const r = await (await fetch('/api/cleanup', {method: 'POST', body: body()})).json();
+  $('btnClean').disabled = false;
+  $('o_clean').textContent = r.text || '';
+  chip('r_clean', r.ok, r.ok ? 'применено' : 'ошибка');
+  state();
+}
+
+async function hotspot() {
+  $('btnAp').disabled = true; chip('r_ap', false, 'поднимаю…');
+  const r = await (await fetch('/api/hotspot', {method: 'POST', body: body()})).json();
+  $('btnAp').disabled = false;
+  chip('r_ap', r.ok, r.ok ? 'точка поднята' : 'ошибка');
+  $('ap_hint').textContent = r.text || '';
+  state();
+}
+
+async function backup() {
+  $('btnBackup').disabled = true; chip('r_backup', false, 'снимаю…');
+  const r = await (await fetch('/api/backup', {method: 'POST', body: body()})).json();
+  $('btnBackup').disabled = false;
+  $('o_backup').textContent = r.text || '';
+  chip('r_backup', r.ok, r.ok ? 'бэкап готов' : 'ошибка');
+}
+
+function renderItems() {
+  const half = Math.ceil(ITEMS.length / 2);
+  const mk = (it) => `
+    <div class="check">
+      <input type="checkbox" id="on_${it.id}" checked>
+      <span>${it.title}</span>
+    </div>`;
+  $('listA').innerHTML = ITEMS.slice(0, half).map(mk).join('');
+  $('listB').innerHTML = ITEMS.slice(half).map(mk).join('');
+
+  $('answers').innerHTML = ITEMS.map(it => `
+    <div class="nm">${it.title}</div>
+    <div><select id="act_${it.id}">${ACTIONS.map(([v, t]) =>
+        `<option value="${v}" ${v === it.default ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+    <div style="grid-column:1/-1;display:none" id="box_${it.id}">
+      <textarea id="body_${it.id}" placeholder='{"status":"ok"}'></textarea>
+    </div>`).join('');
+
+  ITEMS.forEach(it => {
+    $('act_' + it.id).onchange = e => {
+      $('box_' + it.id).style.display = e.target.value === 'custom' ? 'block' : 'none';
+    };
+  });
+}
+
+function selectAll(on) {
+  ITEMS.forEach(it => $('on_' + it.id).checked = on);
+}
+
+async function startStack() {
+  const f = body({version: $('version').value, firmware_path: $('firmware').value});
+  if (!$('ex_update').checked) f.set('version', ''), f.set('firmware_path', '');
+  ITEMS.forEach(it => {
+    f.set('on_' + it.id, $('on_' + it.id).checked ? '1' : '0');
+    f.set('act_' + it.id, $('act_' + it.id).value);
+    f.set('body_' + it.id, ($('body_' + it.id) || {}).value || '');
+  });
+  $('btnStack').disabled = true; chip('r_stack', false, 'запускаю…');
+  const r = await (await fetch('/api/stack/start', {method: 'POST', body: f})).json();
+  $('btnStack').disabled = false;
+  chip('r_stack', r.ok, r.ok ? `стек запущен · ${r.routes} маршрутов` : 'ошибка');
+  $('stack_hint').textContent = r.text || '';
+  if (r.ok) {
+    document.querySelector('nav button[data-tab="s3"]').click();
+    append('стек запущен: ' + r.routes + ' маршрутов, pid ' + r.pid);
+  }
+}
+
+async function stopStack() {
+  const r = await (await fetch('/api/stack/stop', {method: 'POST'})).json();
+  chip('r_stack', r.ok, r.text);
+}
+
+async function pair() {
+  $('btnPair').disabled = true; chip('r_pair', false, 'играю…');
+  const r = await (await fetch('/api/pair', {method: 'POST', body: new URLSearchParams({
+    ssid: $('pssid').value, password: $('ppass').value,
+    gain: $('gain').value, repeat: $('repeat').value
+  })})).json();
+  $('btnPair').disabled = false;
+  chip('r_pair', r.ok, r.text);
+}
+
+async function poll() {
+  const r = await (await fetch('/api/log?after=' + cursor)).json();
+  cursor = r.next;
+  if (r.lines.length) append(r.lines.join('\n'));
+}
+
+async function stackState() {
+  const j = await (await fetch('/api/stack')).json();
+  const bar = $('bar'), prog = $('prog');
+  if (j.running) {
+    bar.style.width = '100%';
+    prog.innerHTML = `стек работает · pid ${j.pid} · маршрутов ${j.routes}` +
+      (j.log ? `<pre style="height:150px;margin-top:8px">${j.log}</pre>` : '');
+  } else {
+    bar.style.width = '0';
+    prog.textContent = 'стек не запущен';
+  }
+}
+
+async function state() {
+  const j = await (await fetch('/api/state')).json();
+  const set = (id, ok, text, cls) => {
+    const el = $(id);
+    el.className = 'badge ' + (cls || (ok ? 'ok' : 'bad'));
+    el.textContent = text;
+  };
+  set('b_admin', j.admin, 'права: ' + (j.admin ? 'администратор' : 'обычные'));
+  const hosts = j.checks.find(c => c.text.includes('hosts'));
+  set('b_hosts', hosts && hosts.ok, 'hosts: ' + (hosts && hosts.ok ? 'чисто' : 'есть записи'));
+  set('b_station', !!j.station, 'станция: ' + (j.station || 'не найдена'), j.station ? 'ok' : 'wait');
+}
+
+async function init() {
+  ITEMS = (await (await fetch('/api/items')).json()).items;
+  renderItems();
+  state(); stackState();
+  setInterval(state, 5000);
+  setInterval(poll, 1200);
+  setInterval(stackState, 3000);
+  poll();
+}
+init();
+</script>
+</html>

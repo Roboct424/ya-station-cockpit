@@ -1,8 +1,9 @@
-//! Мастер настройки: локальная панель в браузере.
+//! Мастер получения ADB: три шага, локальная панель в отдельном окне.
 //!
-//! Три шага, как в задумке: окружение → модули → сопряжение с терминалом.
-//! Панель не хранит состояние в браузере: всё, что она показывает, она
-//! спрашивает у программы, а действия запускает как модули.
+//! Шаг 1 — окружение: чистка (обязательна), точка доступа, бэкап после
+//! разблокировки. Шаг 2 — перехват: галочки «что ловим», ответы на каждый
+//! пакет и экстра-действия (обновление до нужной прошивки). Шаг 3 — звук
+//! сопряжения, терминал и прогресс запущенного стека.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -11,188 +12,73 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::modules::{ModuleCtx, MODULES};
 
-const PAGE: &str = r#"<!doctype html><html lang="ru"><meta charset="utf-8">
-<title>cockpit — мастер настройки</title>
-<style>
-:root{color-scheme:dark}
-*{box-sizing:border-box}
-body{margin:0;background:#0f1216;color:#e8ecf1;font:14px/1.45 system-ui,Segoe UI,sans-serif}
-header{display:flex;align-items:center;gap:14px;padding:14px 20px;background:#151a21;border-bottom:1px solid #232a34}
-header h1{font-size:15px;margin:0;font-weight:600}
-.badge{padding:3px 9px;border-radius:999px;font-size:11px;background:#23303f;color:#9fb4cc}
-.badge.ok{background:#173a28;color:#7ee2a8}.badge.bad{background:#3a1b1b;color:#ff9a9a}
-nav{display:flex;gap:4px;margin-left:auto}
-nav button{background:transparent;border:0;color:#8b97a8;padding:8px 14px;border-radius:9px;cursor:pointer;font-size:13px}
-nav button.on{background:#22303f;color:#e8ecf1}
-main{padding:18px 20px;max-width:1180px;margin:0 auto}
-section{display:none}section.on{display:block}
-.row{display:flex;gap:14px;flex-wrap:wrap}
-.col{flex:1 1 320px;min-width:300px}
-.card{background:#161b22;border:1px solid #232a34;border-radius:12px;padding:14px;margin-bottom:12px}
-.card h2{font-size:13px;margin:0 0 8px;color:#b9c6d6;font-weight:600}
-label{display:block;color:#8b97a8;font-size:12px;margin:9px 0 4px}
-input{width:100%;padding:9px 10px;background:#0f1319;color:#e8ecf1;border:1px solid #2a3341;border-radius:8px}
-button.act{padding:9px 13px;border:0;border-radius:9px;background:#3d7eff;color:#fff;font-weight:600;cursor:pointer;margin:8px 6px 0 0}
-button.ghost{background:#232b36;color:#cfd8e4}
-button:disabled{opacity:.5;cursor:default}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(255px,1fr));gap:12px}
-.tile{background:#161b22;border:1px solid #232a34;border-radius:12px;padding:13px;display:flex;flex-direction:column;gap:8px}
-.tile h3{font-size:13px;margin:0}
-.tile p{font-size:12px;color:#8b97a8;margin:0;flex:1}
-.tile .tag{font-size:10px;color:#7f8ea3;text-transform:uppercase;letter-spacing:.06em}
-pre{background:#0b0e12;border:1px solid #1e242c;border-radius:10px;padding:12px;margin:0;
- white-space:pre-wrap;font:12px/1.5 ui-monospace,Consolas,monospace;height:520px;overflow:auto;color:#cbd5e1}
-.hint{font-size:12px;color:#8b97a8}
-.ok{color:#7ee2a8}.err{color:#ff9a9a}
-</style>
-
-<header>
-  <h1>cockpit</h1>
-  <span id="admin" class="badge">права: ?</span>
-  <span id="station" class="badge">станция: ?</span>
-  <nav>
-    <button class="on" data-tab="env">1 · Окружение</button>
-    <button data-tab="mods">2 · Модули</button>
-    <button data-tab="pair">3 · Сопряжение</button>
-  </nav>
-</header>
-
-<main>
-<section id="env" class="on">
-  <div class="row">
-    <div class="col">
-      <div class="card">
-        <h2>Шаг 1. Подготовить окружение</h2>
-        <p class="hint">Убираем всё, что мешает: чужие записи в hosts, старые прокси,
-        занятые порты. Затем поднимаем точку доступа с нашими именем и паролем.</p>
-        <label>SSID точки доступа</label><input id="ssid" value="YaRig">
-        <label>Пароль</label><input id="pass" value="11111111">
-        <button class="act" onclick="run('env.cleanup')">Очистить окружение</button>
-        <button class="act" onclick="run('net.hotspot')">Поднять точку доступа</button>
-      </div>
-      <div class="card">
-        <h2>ADB-адрес станции</h2>
-        <label>addr</label><input id="addr" value="192.168.137.217:5555">
-        <button class="act ghost" onclick="run('clock.sync')">Подключиться и сверить часы</button>
-      </div>
-    </div>
-    <div class="col">
-      <div class="card">
-        <h2>Что проверяем</h2>
-        <div id="checks" class="hint">проверяю…</div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<section id="mods">
-  <div class="card">
-    <h2>Таблица маршрутов (data/routes.toml)</h2>
-    <p class="hint">Что отдаём локально, а что уходит в облако. Меняется без пересборки,
-    применяется при следующем запуске модуля OTA.</p>
-    <pre id="routes" style="height:190px">…</pre>
-  </div>
-  <div class="card">
-    <h2>Шаг 2. Модули для станции</h2>
-    <p class="hint">Каждая плитка — одна операция. Можно нажимать в любом порядке:
-    повторный запуск безопасен, лишнего не сделает.</p>
-  </div>
-  <div id="tiles" class="grid"></div>
-</section>
-
-<section id="pair">
-  <div class="row">
-    <div class="col" style="flex:0 0 360px">
-      <div class="card">
-        <h2>Шаг 3. Звук сопряжения</h2>
-        <label>SSID (тот же, что у точки доступа)</label><input id="pssid" value="YaRig">
-        <label>Пароль</label><input id="ppass" value="11111111">
-        <label>Громкость (рабочая 0.5)</label><input id="gain" value="0.5">
-        <label>Повторов</label><input id="repeat" value="2">
-        <button class="act" onclick="pair()">Сгенерировать и проиграть</button>
-        <button class="act ghost" onclick="run('verify.configured')">Проверить результат</button>
-        <p class="hint" id="pairhint">Станция должна быть в режиме настройки.</p>
-      </div>
-    </div>
-    <div class="col">
-      <div class="card">
-        <h2>Терминал</h2>
-        <pre id="log">готов</pre>
-      </div>
-    </div>
-  </div>
-</section>
-</main>
-
-<script>
-const $ = id => document.getElementById(id);
-const st = {cursor: 0};
-
-document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
-  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
-  document.querySelectorAll('section').forEach(s => s.classList.toggle('on', s.id === b.dataset.tab));
-});
-
-function body(extra) {
-  return new URLSearchParams(Object.assign({
-    addr: $('addr').value, ssid: $('ssid').value, password: $('pass').value
-  }, extra || {}));
+/// Что можно перехватывать и чем отвечать.
+struct InterceptItem {
+    id: &'static str,
+    title: &'static str,
+    pattern: &'static str,
+    /// Ответ по умолчанию, если перехват включён.
+    default: &'static str,
 }
 
-async function run(id) {
-  const r = await fetch('/api/run', {method: 'POST', body: body({id})});
-  const t = await r.text();
-  if (t.trim()) append(t.trim() + '\n');
-  poll();
-}
+const ITEMS: &[InterceptItem] = &[
+    InterceptItem {
+        id: "probe",
+        title: "Проверка связи — generate_204",
+        pattern: "generate_204",
+        default: "204",
+    },
+    InterceptItem {
+        id: "token",
+        title: "Авторизация — /token",
+        pattern: "/token",
+        default: "token",
+    },
+    InterceptItem {
+        id: "register",
+        title: "Регистрация — /register",
+        pattern: "/register",
+        default: "register",
+    },
+    InterceptItem {
+        id: "updates",
+        title: "Обновления — /check_updates",
+        pattern: "/check_updates",
+        default: "check_updates",
+    },
+    InterceptItem {
+        id: "sync",
+        title: "Конфиг — /get_sync_info",
+        pattern: "/get_sync_info",
+        default: "sync_info",
+    },
+    InterceptItem {
+        id: "firmware",
+        title: "Файл прошивки — /firmware/",
+        pattern: "/firmware/",
+        default: "firmware",
+    },
+    InterceptItem {
+        id: "voice",
+        title: "Голос — uni.ws",
+        pattern: "/uni.ws",
+        default: "-",
+    },
+    InterceptItem {
+        id: "metrics",
+        title: "Телеметрия — метрики и отчёты",
+        pattern: "/quasar_metrics",
+        default: "-",
+    },
+    InterceptItem {
+        id: "rest",
+        title: "Всё остальное",
+        pattern: "*",
+        default: "proxy",
+    },
+];
 
-async function pair() {
-  const b = body({ssid: $('pssid').value, password: $('ppass').value,
-                  gain: $('gain').value, repeat: $('repeat').value});
-  $('pairhint').textContent = 'играю код…';
-  await fetch('/api/pair', {method: 'POST', body: b});
-  poll();
-}
-
-async function routes() {
-  const r = await fetch('/api/routes');
-  $('routes').textContent = await r.text();
-}
-
-function append(text) {
-  const el = $('log');
-  el.textContent += text;
-  el.scrollTop = el.scrollHeight;
-}
-
-async function poll() {
-  const r = await fetch('/api/log?after=' + st.cursor);
-  const j = await r.json();
-  st.cursor = j.next;
-  if (j.lines.length) append(j.lines.join('\n') + '\n');
-}
-
-async function state() {
-  const j = await (await fetch('/api/state')).json();
-  $('admin').textContent = 'права: ' + (j.admin ? 'администратор' : 'обычные');
-  $('admin').className = 'badge ' + (j.admin ? 'ok' : 'bad');
-  $('station').textContent = 'станция: ' + (j.adb ? 'на связи' : 'нет связи');
-  $('station').className = 'badge ' + (j.adb ? 'ok' : 'bad');
-  $('checks').innerHTML = j.checks.map(c =>
-    `<div>${c.ok ? '<span class="ok">✓</span>' : '<span class="err">✗</span>'} ${c.text}</div>`).join('');
-  if (j.modules.length && !$('tiles').childElementCount) {
-    $('tiles').innerHTML = j.modules.map(m => `
-      <div class="tile">
-        <span class="tag">${m.group}</span>
-        <h3>${m.title}</h3>
-        <p>${m.summary}${m.needs_adb ? ' · нужен ADB' : ''}</p>
-        <button class="act" onclick="run('${m.id}')">Выполнить</button>
-      </div>`).join('');
-  }
-}
-
-state(); routes(); setInterval(state, 4000); setInterval(poll, 1200); poll();
-</script></html>"#;
+const PAGE: &str = include_str!("page.html");
 
 /// Буфер терминала мастера.
 static LOG: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
@@ -218,8 +104,6 @@ fn push_log(line: impl Into<String>) {
 }
 
 /// Поднимает права: если мы не администратор — перезапускает себя через UAC.
-///
-/// Возвращает `true`, если работаем дальше на месте.
 pub fn ensure_admin() -> bool {
     if is_admin() {
         return true;
@@ -253,7 +137,7 @@ pub fn ensure_admin() -> bool {
             println!("мастер запущен с правами администратора в новом окне");
             return false;
         }
-        println!("права администратора не выданы — часть модулей будет недоступна");
+        println!("права администратора не выданы — часть действий будет недоступна");
     }
     true
 }
@@ -261,6 +145,7 @@ pub fn ensure_admin() -> bool {
 pub fn serve(port: u16) -> std::io::Result<()> {
     let listener = TcpListener::bind(("127.0.0.1", port))?;
     println!("мастер: http://127.0.0.1:{port}");
+    open_window(port);
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
         std::thread::spawn(move || {
@@ -268,6 +153,37 @@ pub fn serve(port: u16) -> std::io::Result<()> {
         });
     }
     Ok(())
+}
+
+/// Открывает мастер отдельным окном (Edge в режиме приложения).
+///
+/// GOTCHA: G-037 — «веб» здесь только транспорт: окно без адресной строки и
+/// вкладок, закрывается вместе с программой. Свой UI-фреймворк не тянем.
+fn open_window(port: u16) {
+    let url = format!("http://127.0.0.1:{port}/");
+    let candidates = [
+        "msedge.exe",
+        "chrome.exe",
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    ];
+    for exe in candidates {
+        let ok = std::process::Command::new(exe)
+            .args([
+                &format!("--app={url}"),
+                "--window-size=1180,860",
+                "--no-first-run",
+            ])
+            .spawn()
+            .is_ok();
+        if ok {
+            return;
+        }
+    }
+    // Запасной путь: системный браузер.
+    let _ = std::process::Command::new("cmd")
+        .args(["/C", "start", "", &url])
+        .spawn();
 }
 
 fn handle(mut stream: TcpStream) -> std::io::Result<()> {
@@ -327,11 +243,7 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
     match (method, path.split('?').next().unwrap_or(path)) {
         ("GET", "/") => (200, "text/html; charset=utf-8", PAGE.to_string()),
         ("GET", "/api/state") => (200, "application/json", state_json()),
-        ("GET", "/api/routes") => {
-            let text = std::fs::read_to_string("data/routes.toml")
-                .unwrap_or_else(|e| format!("data/routes.toml: {e}"));
-            (200, "text/plain; charset=utf-8", text)
-        }
+        ("GET", "/api/items") => (200, "application/json", items_json()),
         ("GET", "/api/log") => {
             let after = query(path, "after")
                 .and_then(|v| v.parse::<usize>().ok())
@@ -344,20 +256,29 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
             let json = serde_json::json!({ "next": next, "lines": lines });
             (200, "application/json", json.to_string())
         }
-        ("POST", "/api/run") => {
-            let id = field(body, "id");
+        ("GET", "/api/stack") => (200, "application/json", stack_json()),
+        ("POST", "/api/cleanup") => {
             let ctx = ctx_from(body);
-            push_log(format!("▶ модуль {id}"));
-            std::thread::spawn(move || match crate::modules::run(&id, &ctx) {
-                Ok(out) => {
-                    for line in out.lines() {
-                        push_log(format!("  {line}"));
-                    }
-                    push_log(format!("■ {id}: готово"));
-                }
-                Err(e) => push_log(format!("✗ {id}: {e}")),
-            });
-            (200, "text/plain; charset=utf-8", String::new())
+            let result = run_module("env.cleanup", ctx);
+            (200, "application/json", result)
+        }
+        ("POST", "/api/hotspot") => {
+            let ctx = ctx_from(body);
+            let result = run_module("net.hotspot", ctx);
+            (200, "application/json", result)
+        }
+        ("POST", "/api/backup") => {
+            let ctx = ctx_from(body);
+            let result = run_module("backup.pull", ctx);
+            (200, "application/json", result)
+        }
+        ("POST", "/api/stack/start") => {
+            let result = start_stack(body);
+            (200, "application/json", result)
+        }
+        ("POST", "/api/stack/stop") => {
+            let result = stop_stack();
+            (200, "application/json", result)
         }
         ("POST", "/api/pair") => {
             let ssid = field(body, "ssid");
@@ -366,9 +287,305 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
             let repeat = field(body, "repeat").parse::<u32>().unwrap_or(2);
             push_log(format!("▶ звук: SSID={ssid} громкость={gain}"));
             std::thread::spawn(move || play_pairing(&ssid, &password, gain, repeat));
-            (200, "text/plain; charset=utf-8", String::new())
+            (
+                200,
+                "application/json",
+                serde_json::json!({ "ok": true, "text": "проигрываю код" }).to_string(),
+            )
         }
         _ => (404, "text/plain; charset=utf-8", "not found".to_string()),
+    }
+}
+
+fn items_json() -> String {
+    let items: Vec<_> = ITEMS
+        .iter()
+        .map(|i| {
+            serde_json::json!({
+                "id": i.id, "title": i.title, "pattern": i.pattern, "default": i.default
+            })
+        })
+        .collect();
+    serde_json::json!({ "items": items }).to_string()
+}
+
+fn state_json() -> String {
+    let admin = is_admin();
+    let station = crate::modules::find_station();
+    let checks = vec![
+        serde_json::json!({ "ok": admin, "text": if admin { "права администратора" } else { "нужны права администратора" } }),
+        serde_json::json!({ "ok": hosts_clean(), "text": if hosts_clean() { "hosts ноутбука чистый" } else { "в hosts остались записи старых прокси" } }),
+        serde_json::json!({ "ok": station.is_some(), "text": match &station { Some(ip) => format!("станция в сети: {ip}"), None => "станция пока не найдена (это нормально до сопряжения)".to_string() } }),
+    ];
+    let modules: Vec<_> = MODULES
+        .iter()
+        .map(|m| {
+            serde_json::json!({
+                "id": m.id, "group": m.group, "title": m.title,
+                "summary": m.summary, "needs_adb": m.needs_adb
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "admin": admin,
+        "station": station,
+        "checks": checks,
+        "modules": modules
+    })
+    .to_string()
+}
+
+fn process_alive(pid: u32) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    let out = std::process::Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+        .output();
+    match out {
+        Ok(out) => String::from_utf8_lossy(&out.stdout).contains(&pid.to_string()),
+        Err(_) => false,
+    }
+}
+
+fn stack_json() -> String {
+    let mut state = stack_state().lock().map(|s| s.clone()).unwrap_or_default();
+    if state.running && !process_alive(state.pid) {
+        state.running = false;
+        state.text = "стек завершился".to_string();
+        if let Ok(mut s) = stack_state().lock() {
+            *s = state.clone();
+        }
+    }
+    let tail = std::fs::read_to_string("data/ota.log")
+        .map(|t| {
+            t.lines()
+                .rev()
+                .take(12)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default();
+    serde_json::json!({
+        "running": state.running,
+        "pid": state.pid,
+        "routes": state.routes,
+        "text": state.text,
+        "log": tail
+    })
+    .to_string()
+}
+
+#[derive(Clone, Default)]
+struct StackState {
+    running: bool,
+    pid: u32,
+    routes: usize,
+    text: String,
+}
+
+static STACK: OnceLock<Mutex<StackState>> = OnceLock::new();
+
+fn stack_state() -> &'static Mutex<StackState> {
+    STACK.get_or_init(|| Mutex::new(StackState::default()))
+}
+
+/// Собирает маршруты из выбора и запускает стек в фоне.
+fn start_stack(body: &str) -> String {
+    let selections: Vec<(String, String, String)> = ITEMS
+        .iter()
+        .map(|item| {
+            let intercept = field(body, &format!("on_{}", item.id)) == "1";
+            let action = {
+                let chosen = field(body, &format!("act_{}", item.id));
+                if chosen.is_empty() {
+                    item.default.to_string()
+                } else {
+                    chosen
+                }
+            };
+            let custom = field(body, &format!("body_{}", item.id));
+            (intercept, action, custom)
+        })
+        .map(|(on, act, custom)| {
+            // «Не отвечать» — явный отказ, а не уход в облако.
+            let act = if act == "-" { "block".to_string() } else { act };
+            if on {
+                (act, "on".to_string(), custom)
+            } else {
+                ("proxy".to_string(), "off".to_string(), custom)
+            }
+        })
+        .collect();
+
+    let firmware = field(body, "firmware_path");
+    let firmware = if firmware.is_empty() {
+        "firmware/0.369.1.46.4778262943.20261013.299.zip.off".to_string()
+    } else {
+        firmware
+    };
+    let version = {
+        let v = field(body, "version");
+        if v.is_empty() {
+            "0.369.1.46.4778262943.20261013.299".to_string()
+        } else {
+            v
+        }
+    };
+
+    if !std::path::Path::new(&firmware).exists() {
+        return serde_json::json!({
+            "ok": false,
+            "text": format!("нет файла прошивки: {firmware} — укажите путь в блоке «Экстра»")
+        })
+        .to_string();
+    }
+    if !std::path::Path::new("data/manifests.json").exists() {
+        return serde_json::json!({
+            "ok": false,
+            "text": "нет data/manifests.json — положите снимок манифеста рядом с программой"
+        })
+        .to_string();
+    }
+
+    let routes = build_routes(&selections);
+    if let Some(dir) = std::path::Path::new("data/routes.toml").parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Err(e) = std::fs::write("data/routes.toml", &routes) {
+        return serde_json::json!({ "ok": false, "text": format!("маршруты не записались: {e}") })
+            .to_string();
+    }
+
+    let count = routes.matches("[[route]]").count();
+    push_log(format!("▶ стек: маршрутов {count}, прошивка {version}"));
+
+    let exe = std::env::current_exe().unwrap_or_else(|_| "cockpit".into());
+    let log = std::fs::File::create("data/ota.log").ok();
+    let err = log.as_ref().and_then(|f| f.try_clone().ok());
+
+    let mut cmd = std::process::Command::new(exe);
+    cmd.args([
+        "local-ota",
+        "--bind",
+        "0.0.0.0:443",
+        "--ca-out",
+        "data/ca.pem",
+        "--manifest",
+        "data/manifests.json",
+        "--platform",
+        "yandexmini_2",
+        "--version",
+        &version,
+        "--firmware",
+        &firmware,
+        "--http-bind",
+        "0.0.0.0:80",
+    ]);
+    if let Some(out) = log {
+        cmd.stdout(out);
+    }
+    if let Some(err) = err {
+        cmd.stderr(err);
+    }
+    match cmd.spawn() {
+        Ok(child) => {
+            let pid = child.id();
+            if let Ok(mut s) = stack_state().lock() {
+                *s = StackState {
+                    running: true,
+                    pid,
+                    routes: count,
+                    text: format!("стек запущен, pid {pid}"),
+                };
+            }
+            push_log(format!("  стек запущен, pid {pid}"));
+            serde_json::json!({
+                "ok": true,
+                "pid": pid,
+                "routes": count,
+                "text": format!("стек запущен: {count} маршрутов, pid {pid}")
+            })
+            .to_string()
+        }
+        Err(e) => {
+            push_log(format!("✗ стек не запустился: {e}"));
+            serde_json::json!({ "ok": false, "text": format!("стек не запустился: {e}") })
+                .to_string()
+        }
+    }
+}
+
+fn stop_stack() -> String {
+    let pid = stack_state().lock().map(|s| s.pid).unwrap_or(0);
+    if pid > 0 {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string(), "/F"])
+            .output();
+        push_log(format!("■ стек остановлен (pid {pid})"));
+    }
+    if let Ok(mut s) = stack_state().lock() {
+        s.running = false;
+    }
+    serde_json::json!({ "ok": true, "text": "стек остановлен" }).to_string()
+}
+
+/// Превращает выбор в таблицу маршрутов.
+fn build_routes(selections: &[(String, String, String)]) -> String {
+    let mut out = String::from(
+        "# Сгенерировано мастером: что перехватываем и чем отвечаем.\n\
+         # Первое совпадение выигрывает, `*` — запасное правило.\n\n",
+    );
+    let mut fallback = String::from("proxy");
+    for (index, item) in ITEMS.iter().enumerate() {
+        let (action, state, custom) = &selections[index];
+        if item.pattern == "*" {
+            fallback = if state == "on" {
+                action.clone()
+            } else {
+                "proxy".to_string()
+            };
+            continue;
+        }
+        let action = if state == "on" {
+            action.as_str()
+        } else {
+            "proxy"
+        };
+        out.push_str(&format!(
+            "[[route]]\nmatch = \"{}\"\naction = \"{}\"\n",
+            item.pattern, action
+        ));
+        if action == "custom" && !custom.is_empty() {
+            out.push_str("body = \"\"\"");
+            out.push_str(custom);
+            out.push_str("\"\"\"\n");
+        }
+        out.push('\n');
+    }
+    out.push_str(&format!(
+        "[[route]]\nmatch = \"*\"\naction = \"{fallback}\"\n"
+    ));
+    out
+}
+
+fn run_module(id: &str, ctx: ModuleCtx) -> String {
+    push_log(format!("▶ {id}"));
+    match crate::modules::run(id, &ctx) {
+        Ok(out) => {
+            for line in out.lines() {
+                push_log(format!("  {line}"));
+            }
+            push_log(format!("■ {id}: готово"));
+            serde_json::json!({ "ok": true, "text": out }).to_string()
+        }
+        Err(e) => {
+            push_log(format!("✗ {id}: {e}"));
+            serde_json::json!({ "ok": false, "text": e }).to_string()
+        }
     }
 }
 
@@ -404,29 +621,6 @@ fn play_pairing(ssid: &str, password: &str, gain: f32, repeat: u32) {
     push_log("■ звук: отыгран");
 }
 
-fn state_json() -> String {
-    let admin = is_admin();
-    let adb_ok = adb_alive();
-    let checks = vec![
-        serde_json::json!({ "ok": admin, "text": if admin { "права администратора" } else { "нужны права администратора (порт 80, hosts)" } }),
-        serde_json::json!({ "ok": port_free(80) || true, "text": "порт 80: проверяется модулем OTA" }),
-        serde_json::json!({ "ok": hosts_clean(), "text": if hosts_clean() { "hosts ноутбука чистый" } else { "в hosts остались записи от старых прокси" } }),
-        serde_json::json!({ "ok": adb_ok, "text": if adb_ok { "станция отвечает на ADB" } else { "станция не отвечает на ADB" } }),
-    ];
-    let modules: Vec<_> = MODULES
-        .iter()
-        .map(|m| {
-            serde_json::json!({
-                "id": m.id, "group": m.group, "title": m.title,
-                "summary": m.summary, "needs_adb": m.needs_adb
-            })
-        })
-        .collect();
-
-    serde_json::json!({ "admin": admin, "adb": adb_ok, "checks": checks, "modules": modules })
-        .to_string()
-}
-
 fn is_admin() -> bool {
     #[cfg(windows)]
     {
@@ -438,27 +632,8 @@ fn is_admin() -> bool {
     }
     #[cfg(not(windows))]
     {
-        // На Linux достаточно проверки на root.
         std::env::var("USER").map(|u| u == "root").unwrap_or(false)
     }
-}
-
-fn adb_alive() -> bool {
-    use std::net::TcpStream;
-    use std::time::Duration;
-    let Ok(addr) = std::env::var("COCKPIT_STATION") else {
-        return TcpStream::connect_timeout(
-            &"192.168.137.217:5555".parse().expect("addr"),
-            Duration::from_millis(400),
-        )
-        .is_ok();
-    };
-    let Ok(addr) = addr.parse() else { return false };
-    TcpStream::connect_timeout(&addr, Duration::from_millis(400)).is_ok()
-}
-
-fn port_free(port: u16) -> bool {
-    TcpListener::bind(("0.0.0.0", port)).is_ok()
 }
 
 fn hosts_clean() -> bool {
@@ -475,19 +650,16 @@ fn hosts_clean() -> bool {
 
 fn ctx_from(body: &str) -> ModuleCtx {
     let mut ctx = ModuleCtx::default();
-    let addr = field(body, "addr");
-    if !addr.is_empty() {
-        ctx.addr = addr;
-    }
     let ssid = field(body, "ssid");
     if !ssid.is_empty() {
         ctx.ssid = ssid;
     }
     let password = field(body, "password");
-    if password.is_empty() {
-        ctx.password = "11111111".to_string();
-    } else {
+    if !password.is_empty() {
         ctx.password = password;
+    }
+    if let Some(ip) = crate::modules::find_station() {
+        ctx.addr = format!("{ip}:5555");
     }
     ctx
 }

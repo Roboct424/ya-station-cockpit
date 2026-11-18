@@ -269,6 +269,9 @@ struct RouteEntry {
     #[serde(rename = "match")]
     pattern: String,
     action: String,
+    /// Свой ответ для `action = "custom"`.
+    #[serde(default)]
+    body: Option<String>,
 }
 
 /// Читает таблицу маршрутов из TOML.
@@ -309,7 +312,9 @@ pub fn load_rules(
                 },
                 None => continue,
             },
+            "custom" => RouteAction::Json(entry.body.clone().unwrap_or_default().into_bytes()),
             "block" => RouteAction::Block,
+            "-" | "silence" => RouteAction::Block,
             "proxy" => RouteAction::Proxy,
             other => return Err(format!("неизвестное действие: {other}")),
         };

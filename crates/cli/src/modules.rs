@@ -124,6 +124,58 @@ fn adb_ensure() -> Result<String, String> {
     ))
 }
 
+/// Ищет станцию в ARP-таблице по её MAC (b8:87:6e).
+pub fn find_station() -> Option<String> {
+    let out = if cfg!(windows) {
+        Command::new("arp").args(["-a"]).output().ok()?
+    } else {
+        Command::new("ip").args(["neigh"]).output().ok()?
+    };
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    for line in text.lines() {
+        let lower = line.to_lowercase();
+        if !lower.contains("b8-87-6e") && !lower.contains("b8:87:6e") {
+            continue;
+        }
+        // Первый столбец — адрес.
+        if let Some(ip) = line.split_whitespace().next() {
+            if ip.matches('.').count() == 3 {
+                return Some(ip.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn backup_pull(ctx: &ModuleCtx) -> Result<String, String> {
+    adb_connect(ctx)?;
+    let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
+    let dir = PathBuf::from("data").join("backups").join(&stamp);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("каталог бэкапа: {e}"))?;
+
+    let mut log = String::new();
+    let paths = [
+        "/data/quasar/account_storage.dat",
+        "/data/quasar/registered",
+        "/etc/hosts",
+        "/etc/dhcpcd.conf",
+        "/etc/init.d/S99adbguard",
+        "/etc/init.d/S98netillusion",
+    ];
+    for remote in paths {
+        let name = remote.trim_start_matches('/').replace('/', "_");
+        let out = Command::new(&ctx.adb)
+            .args(["-s", &ctx.addr, "pull", remote])
+            .arg(dir.join(&name))
+            .output()
+            .map_err(|e| format!("adb pull: {e}"))?;
+        let ok = out.status.success();
+        log.push_str(&format!("{} {remote}\n", if ok { "✓" } else { "·" }));
+    }
+    log.push_str(&format!("каталог: {}", dir.display()));
+    Ok(log)
+}
+
 /// Ищет adb: переменная окружения, PATH, Android SDK, типовые папки.
 pub fn find_adb() -> Option<PathBuf> {
     let own = adb_home().join("adb.exe");
@@ -268,6 +320,13 @@ pub const MODULES: &[Module] = &[
         needs_adb: false,
     },
     Module {
+        id: "backup.pull",
+        group: "ADB",
+        title: "Бэкап станции",
+        summary: "Снимает конфиги и скрипты станции в data/backups (только после разблокировки)",
+        needs_adb: true,
+    },
+    Module {
         id: "verify.configured",
         group: "Проверка",
         title: "Проверить настройку",
@@ -305,6 +364,7 @@ pub fn run(id: &str, ctx: &ModuleCtx) -> Result<String, String> {
         "ota.serve" => ota_serve(ctx),
         "adb.guard" => adb_guard(ctx),
         "adb.ensure" => adb_ensure(),
+        "backup.pull" => backup_pull(ctx),
         "verify.configured" => verify_configured(ctx),
         _ => Err(format!("модуль {id} не реализован")),
     }
