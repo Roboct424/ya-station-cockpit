@@ -87,6 +87,12 @@ pre{background:#0b0e12;border:1px solid #1e242c;border-radius:10px;padding:12px;
 
 <section id="mods">
   <div class="card">
+    <h2>Таблица маршрутов (data/routes.toml)</h2>
+    <p class="hint">Что отдаём локально, а что уходит в облако. Меняется без пересборки,
+    применяется при следующем запуске модуля OTA.</p>
+    <pre id="routes" style="height:190px">…</pre>
+  </div>
+  <div class="card">
     <h2>Шаг 2. Модули для станции</h2>
     <p class="hint">Каждая плитка — одна операция. Можно нажимать в любом порядке:
     повторный запуск безопасен, лишнего не сделает.</p>
@@ -148,6 +154,11 @@ async function pair() {
   poll();
 }
 
+async function routes() {
+  const r = await fetch('/api/routes');
+  $('routes').textContent = await r.text();
+}
+
 function append(text) {
   const el = $('log');
   el.textContent += text;
@@ -180,7 +191,7 @@ async function state() {
   }
 }
 
-state(); setInterval(state, 4000); setInterval(poll, 1200); poll();
+state(); routes(); setInterval(state, 4000); setInterval(poll, 1200); poll();
 </script></html>"#;
 
 /// Буфер терминала мастера.
@@ -316,6 +327,11 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
     match (method, path.split('?').next().unwrap_or(path)) {
         ("GET", "/") => (200, "text/html; charset=utf-8", PAGE.to_string()),
         ("GET", "/api/state") => (200, "application/json", state_json()),
+        ("GET", "/api/routes") => {
+            let text = std::fs::read_to_string("data/routes.toml")
+                .unwrap_or_else(|e| format!("data/routes.toml: {e}"));
+            (200, "text/plain; charset=utf-8", text)
+        }
         ("GET", "/api/log") => {
             let after = query(path, "after")
                 .and_then(|v| v.parse::<usize>().ok())

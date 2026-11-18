@@ -265,7 +265,9 @@ dependencies = [
  "rcgen",
  "rustls",
  "rustls-native-certs",
+ "serde",
  "thiserror",
+ "toml",
  "webpki-roots",
 ]
 

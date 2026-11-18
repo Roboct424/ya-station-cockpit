@@ -257,6 +257,73 @@ pub struct RouteRule {
     pub action: RouteAction,
 }
 
+/// Файл маршрутов: `[[route]] match = "..." action = "..."`.
+#[derive(serde::Deserialize)]
+struct RouteFile {
+    #[serde(default)]
+    route: Vec<RouteEntry>,
+}
+
+#[derive(serde::Deserialize)]
+struct RouteEntry {
+    #[serde(rename = "match")]
+    pattern: String,
+    action: String,
+}
+
+/// Читает таблицу маршрутов из TOML.
+///
+/// GOTCHA: G-036 — действия с данными (`check_updates`, `sync_info`,
+/// `firmware`) берут тело из уже собранных ответов, поэтому файл описывает
+/// только порядок и способ доставки, а не сами данные.
+pub fn load_rules(
+    path: &std::path::Path,
+    check_updates: Option<Vec<u8>>,
+    sync_info: Option<Vec<u8>>,
+    firmware: Option<(PathBuf, String)>,
+) -> Result<Vec<RouteRule>, String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let file: RouteFile = toml::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    let mut rules = Vec::new();
+    for entry in file.route {
+        let action = match entry.action.as_str() {
+            "204" => RouteAction::NoContent,
+            "token" => RouteAction::Json(
+                br#"{"access_token":"y0__localCockpit","expires_in":31536000,"token_type":"bearer","uid":1000000001,"refresh_token":"local:refresh:0"}"#.to_vec(),
+            ),
+            "register" => RouteAction::Json(
+                br#"{"status":"ok","remoteActivation":true,"hasCriticalUpdate":false}"#.to_vec(),
+            ),
+            "check_updates" => match &check_updates {
+                Some(body) => RouteAction::Json(body.clone()),
+                None => continue,
+            },
+            "sync_info" => match &sync_info {
+                Some(body) => RouteAction::Json(body.clone()),
+                None => continue,
+            },
+            "firmware" => match &firmware {
+                Some((file, name)) => RouteAction::Firmware {
+                    file: file.clone(),
+                    name: name.clone(),
+                },
+                None => continue,
+            },
+            "block" => RouteAction::Block,
+            "proxy" => RouteAction::Proxy,
+            other => return Err(format!("неизвестное действие: {other}")),
+        };
+        rules.push(RouteRule {
+            pattern: entry.pattern,
+            action,
+        });
+    }
+    if rules.is_empty() {
+        return Err("в файле нет ни одного правила".to_string());
+    }
+    Ok(rules)
+}
+
 /// Стандартная таблица: связь, токен, регистрация, OTA, sync, прошивка,
 /// всё остальное — в облако.
 pub fn standard_rules(

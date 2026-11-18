@@ -151,6 +151,9 @@ enum Cmd {
         /// Где отвечать 204 на проверку связи (порт 80).
         #[arg(long, default_value = "0.0.0.0:80")]
         http_bind: String,
+        /// Таблица маршрутов: что отдаём локально, что проксируем.
+        #[arg(long, default_value = "data/routes.toml")]
+        routes_file: PathBuf,
     },
     /// Сценарий активации: проверка прошивки → ожидание ADB → root → версия
     Activate {
@@ -542,6 +545,7 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
             seconds,
             forward,
             http_bind,
+            routes_file,
         } => run_local_ota(
             &bind,
             ca_out.as_ref(),
@@ -552,6 +556,7 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
             seconds,
             forward,
             &http_bind,
+            &routes_file,
         ),
         Cmd::Activate {
             addr,
@@ -813,6 +818,7 @@ fn run_local_ota(
     seconds: u64,
     forward: bool,
     http_bind: &str,
+    routes_file: &std::path::Path,
 ) -> cockpit_core::Result<ExitCode> {
     use cockpit_intercept::tls::{CertAuthority, LocalRoutes, TlsInterceptor};
 
@@ -859,13 +865,29 @@ fn run_local_ota(
     }
 
     let download_url = format!("https://quasar.yandex.net/firmware/{name}");
-    let routes = LocalRoutes {
-        rules: cockpit_intercept::tls::standard_rules(
+    let rules = match cockpit_intercept::tls::load_rules(
+        routes_file,
+        Some(cockpit_ota::check_updates_json(&entry, &download_url)),
+        Some(cockpit_ota::sync_info_json()),
+        Some((firmware.to_path_buf(), name.clone())),
+    ) {
+        Ok(rules) => {
+            println!(
+                "маршруты: {} ({} правил)",
+                routes_file.display(),
+                rules.len()
+            );
+            rules
+        }
+        Err(_) => cockpit_intercept::tls::standard_rules(
             true,
             Some(cockpit_ota::check_updates_json(&entry, &download_url)),
             Some(cockpit_ota::sync_info_json()),
             Some((firmware.to_path_buf(), name.clone())),
         ),
+    };
+    let routes = LocalRoutes {
+        rules,
         check_updates: None,
         sync_info: None,
         firmware: None,
