@@ -99,6 +99,16 @@ enum Cmd {
         #[arg(long, default_value_t = 0)]
         seconds: u64,
     },
+    /// OTA: проверка версий, загрузка, хранилище
+    Ota {
+        #[command(subcommand)]
+        cmd: OtaCmd,
+    },
+    /// Сбор статистики (только метаданные)
+    Capture {
+        #[command(subcommand)]
+        cmd: CaptureCmd,
+    },
     /// Версия
     Version,
 }
@@ -130,6 +140,44 @@ enum JournalCmd {
 enum ScenarioCmd {
     /// Разобрать и проверить YAML-сценарий
     Check { path: PathBuf },
+}
+
+#[derive(Subcommand)]
+enum OtaCmd {
+    /// Сравнить текущую версию с манифестом
+    Check {
+        #[arg(long)]
+        manifest: PathBuf,
+        #[arg(long)]
+        platform: String,
+        #[arg(long)]
+        current: String,
+    },
+    /// Скачать и проверить CRC
+    Fetch {
+        #[arg(long)]
+        manifest: PathBuf,
+        #[arg(long)]
+        platform: String,
+        #[arg(long)]
+        version: String,
+        #[arg(long, default_value = "data/ota")]
+        store: PathBuf,
+    },
+    /// Что уже скачано и откуда
+    List {
+        #[arg(long, default_value = "data/ota")]
+        store: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum CaptureCmd {
+    /// Сводка по журналу метаданных
+    Stats {
+        #[arg(long, default_value = "data/capture.jsonl")]
+        log: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -234,6 +282,8 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
             seconds,
         } => run_dns(&bind, &answer, seconds),
 
+        Cmd::Ota { cmd } => run_ota(cmd),
+        Cmd::Capture { cmd } => run_capture(cmd),
         Cmd::Version => {
             println!("cockpit {}", env!("CARGO_PKG_VERSION"));
             println!("  сценариев: selfcheck, YAML");
@@ -410,6 +460,95 @@ fn watch_config(path: &Path) -> cockpit_core::Result<ExitCode> {
         }
     }
     Ok(ExitCode::SUCCESS)
+}
+
+fn run_ota(cmd: OtaCmd) -> cockpit_core::Result<ExitCode> {
+    use cockpit_ota::{check, fetch, list_store, CurlFetcher, Manifest};
+
+    match cmd {
+        OtaCmd::Check {
+            manifest,
+            platform,
+            current,
+        } => {
+            let m = Manifest::load(&manifest)
+                .map_err(|e| CockpitError::Config(format!("{}: {e}", manifest.display())))?;
+            match check(&m, &platform, &current).map_err(|e| CockpitError::Config(e.to_string()))? {
+                cockpit_ota::Verdict::UpToDate { current } => {
+                    println!("актуально: {current}");
+                }
+                cockpit_ota::Verdict::Update {
+                    current,
+                    entry,
+                    newer,
+                } => {
+                    println!("текущая: {current}");
+                    println!(
+                        "в манифесте: {} (critical={}, updateId={:?})",
+                        entry.version, entry.critical, entry.update_id
+                    );
+                    if !newer {
+                        println!("внимание: манифест не новее текущей версии");
+                    }
+                }
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        OtaCmd::Fetch {
+            manifest,
+            platform,
+            version,
+            store,
+        } => {
+            let m = Manifest::load(&manifest)
+                .map_err(|e| CockpitError::Config(format!("{}: {e}", manifest.display())))?;
+            let entries = m
+                .entries(&platform)
+                .map_err(|e| CockpitError::Config(e.to_string()))?;
+            let entry = entries
+                .get(&version)
+                .ok_or_else(|| CockpitError::Config(format!("нет версии {version} в манифесте")))?;
+
+            let prov = fetch(entry, &platform, &store, &CurlFetcher)
+                .map_err(|e| CockpitError::Config(e.to_string()))?;
+            println!("скачано: {}", prov.file);
+            println!(
+                "  размер {}, crc32 {:08x}, sha256 {}",
+                prov.size, prov.crc32, prov.sha256
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        OtaCmd::List { store } => {
+            let items = list_store(&store).map_err(|e| CockpitError::Config(e.to_string()))?;
+            if items.is_empty() {
+                println!("хранилище пусто: {}", store.display());
+            }
+            for p in items {
+                println!(
+                    "{} {} · {} байт · crc32 {:08x} · {}",
+                    p.platform, p.version, p.size, p.crc32, p.fetched_at
+                );
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+    }
+}
+
+fn run_capture(cmd: CaptureCmd) -> cockpit_core::Result<ExitCode> {
+    match cmd {
+        CaptureCmd::Stats { log } => {
+            let cap = cockpit_capture::Capture::open(&log)
+                .map_err(|e| CockpitError::Internal(e.to_string()))?;
+            let samples = cap
+                .read_all()
+                .map_err(|e| CockpitError::Internal(e.to_string()))?;
+            println!("записей: {}", samples.len());
+            for (host, count) in cockpit_capture::summary_by_host(&samples) {
+                println!("  {host}: {count}");
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+    }
 }
 
 fn run_tls(

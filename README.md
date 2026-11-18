@@ -9,7 +9,7 @@
 проверку результата (`check`), условие пропуска (`skip_if`) и компенсацию
 (`rollback`). При ошибке выполненные шаги откатываются, всё пишется в журнал.
 
-**Статус: фаза 4.** Ядро с таймаутами, конфиг с горячей перезагрузкой,
+**Статус: фаза 5.** Ядро с таймаутами, конфиг с горячей перезагрузкой,
 YAML-сценарии, слой системных команд, DNS- и TLS-перехват (свой CA, SNI),
 планы хотспота для Windows и Linux, TLS-прокси с туннелем к реальному серверу, CLI.
 
@@ -35,6 +35,8 @@ cargo run -- journal tail           # что произошло
 | `cockpit net info` | выбранный сетевой адаптер |
 | `cockpit dns --bind ADDR --answer IP` | DNS-перехватчик (A → свой адрес) |
 | `cockpit tls --bind ADDR --ca-out FILE [--forward]` | TLS-перехват: свой CA, подмена по SNI, туннель к апстриму |
+| `cockpit ota check\|fetch\|list` | проверка версий, загрузка с CRC, хранилище |
+| `cockpit capture stats` | сводка метаданных обмена |
 | `cockpit version` | версия |
 
 ### Сценарий — это данные
@@ -63,12 +65,16 @@ crates/core       события, журнал (JSONL), шаги, исполни
 crates/config     TOML-конфиг, валидация, горячая перезагрузка (arc-swap + notify)
 crates/doctor     пробы окружения с подсказками
 crates/net        NetAdapter, слой системных команд (real/dry-run), Windows/Linux
-crates/intercept  DNS-перехватчик и TLS: свой CA, разбор SNI, подмена сертификата
+crates/intercept  DNS и TLS: свой CA, SNI, подмена, туннель к апстриму
+crates/ota        манифесты прошивок, проверка версий, загрузка с CRC
+crates/capture    журнал метаданных обмена (без тел)
 crates/scenarios  YAML-сценарии: модель, загрузка, проверка, исполнение
 crates/cli        команды cockpit
 examples/demo.yaml
 docs/DEVLOG.md    дневник: решения, ошибки, проверки
-docs/GOTCHAS.md   журнал болячек библиотек: симптом → причина → решение
+docs/GOTCHAS.md   журнал болячек библиотек
+docs/OTA.md       прошивки: манифест, проверка, загрузка
+docs/CAPTURE.md   сбор статистики: что пишем и что нет
 ```
 
 ### Журнал
