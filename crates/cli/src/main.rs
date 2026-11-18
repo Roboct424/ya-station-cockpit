@@ -145,6 +145,16 @@ enum Cmd {
         firmware: Option<PathBuf>,
         #[arg(long)]
         dry_run: bool,
+        /// Установить сторож ADB: путь к локальному скрипту
+        #[arg(long)]
+        guard: Option<PathBuf>,
+        /// Поднять локальный OTA/sync перед активацией
+        #[arg(long)]
+        serve_ota: bool,
+        #[arg(long, default_value = "127.0.0.1:18443")]
+        ota_bind: String,
+        #[arg(long)]
+        ca_out: Option<PathBuf>,
     },
     /// Устройство: ADB-подключение и сведения
     Device {
@@ -435,7 +445,14 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
             version,
             firmware,
             dry_run,
-        } => run_activate(&cfg, &addr, manifest, platform, version, firmware, dry_run),
+            guard,
+            serve_ota,
+            ota_bind,
+            ca_out,
+        } => run_activate(
+            &cfg, &addr, manifest, platform, version, firmware, dry_run, guard, serve_ota,
+            &ota_bind, ca_out,
+        ),
         Cmd::Device { cmd } => run_device(cmd),
         Cmd::Ota { cmd } => run_ota(cmd),
         Cmd::Telemetry { cmd } => run_telemetry(&cfg, cmd),
@@ -742,6 +759,7 @@ fn run_local_ota(
     Ok(ExitCode::SUCCESS)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_activate(
     cfg: &Config,
     addr: &str,
@@ -750,6 +768,10 @@ fn run_activate(
     version: Option<String>,
     firmware: Option<PathBuf>,
     dry_run: bool,
+    guard: Option<PathBuf>,
+    serve_ota: bool,
+    ota_bind: &str,
+    ca_out: Option<PathBuf>,
 ) -> cockpit_core::Result<ExitCode> {
     use std::sync::Arc;
 
@@ -775,7 +797,54 @@ fn run_activate(
 
     let journal = JsonlJournal::open(cfg.journal_path())?;
     let ctx = Context::new(cfg.data_dir(), dry_run);
-    let steps = cockpit_device::steps::plan(runner, addr, known);
+
+    // Локальный OTA/sync поднимается на время сценария.
+    let mut _ota = None;
+    if serve_ota {
+        let Some((file, entry)) = known.clone() else {
+            return Err(CockpitError::Config(
+                "--serve-ota требует --manifest/--platform/--version/--firmware".into(),
+            ));
+        };
+        let bind: std::net::SocketAddr = ota_bind
+            .parse()
+            .map_err(|e| CockpitError::Config(format!("--ota-bind: {e}")))?;
+        let ca = std::sync::Arc::new(
+            cockpit_intercept::tls::CertAuthority::generate()
+                .map_err(|e| CockpitError::Internal(format!("CA: {e}")))?,
+        );
+        if let Some(path) = &ca_out {
+            std::fs::write(path, ca.ca_pem())
+                .map_err(|e| CockpitError::Internal(format!("{}: {e}", path.display())))?;
+        }
+        let name = file
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("firmware.zip")
+            .to_string();
+        let url = format!("https://quasar.yandex.net/firmware/{name}");
+        let routes = cockpit_intercept::tls::LocalRoutes {
+            check_updates: Some(cockpit_ota::check_updates_json(&entry, &url)),
+            sync_info: Some(cockpit_ota::sync_info_json()),
+            firmware: Some((file, name)),
+        };
+        let server = cockpit_intercept::tls::TlsInterceptor::start_local(bind, ca, routes)
+            .map_err(|e| CockpitError::Internal(format!("local-ota: {e}")))?;
+        println!("OTA/sync: {}", server.addr());
+        _ota = Some(server);
+    }
+
+    let mut steps = cockpit_device::steps::plan(runner.clone(), addr, known);
+    if let Some(script) = guard {
+        let content = std::fs::read_to_string(&script)
+            .map_err(|e| CockpitError::Config(format!("{}: {e}", script.display())))?;
+        steps.push(Box::new(cockpit_device::steps::InstallGuard {
+            runner,
+            addr: addr.to_string(),
+            path: "/etc/init.d/S99adbguard".into(),
+            content,
+        }));
+    }
     let report = Runner::new(&journal, "activate")
         .with_steps(steps)
         .run(&ctx);

@@ -84,6 +84,18 @@ impl Adb {
         Ok(v.trim().to_string())
     }
 
+    /// `adb -s <serial> push <local> <remote>`
+    pub fn push(&self, local: &std::path::Path, remote: &str) -> Result<(), DeviceError> {
+        self.run(vec![
+            "-s".into(),
+            self.serial.clone(),
+            "push".into(),
+            local.display().to_string(),
+            remote.into(),
+        ])?;
+        Ok(())
+    }
+
     /// Проверка, что устройство видно в `adb devices`.
     pub fn devices(&self) -> Result<Vec<String>, DeviceError> {
         let out = self.run(vec!["devices".into()])?;

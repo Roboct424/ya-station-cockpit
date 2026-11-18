@@ -218,3 +218,68 @@ pub fn plan(
 pub fn display(path: &Path) -> String {
     path.display().to_string()
 }
+
+/// Ставит сторож ADB на устройство. Меняет систему — поэтому с откатом.
+pub struct InstallGuard {
+    pub runner: Arc<dyn CommandRunner>,
+    pub addr: String,
+    pub path: String,
+    pub content: String,
+}
+
+impl Step for InstallGuard {
+    fn id(&self) -> &str {
+        "install-guard"
+    }
+
+    fn title(&self) -> &str {
+        "Установить сторож ADB"
+    }
+
+    fn is_done(&self, _ctx: &Context) -> Result<bool> {
+        let adb = Adb::new(self.runner.clone(), self.addr.clone());
+        let out = adb
+            .shell(&format!("test -x {} && echo yes || echo no", self.path))
+            .map_err(|e| CockpitError::Internal(e.to_string()))?;
+        Ok(out.trim() == "yes")
+    }
+
+    fn run(&self, _ctx: &Context) -> Result<String> {
+        let adb = Adb::new(self.runner.clone(), self.addr.clone());
+        let tmp = std::env::temp_dir().join("cockpit-guard.sh");
+        std::fs::write(&tmp, &self.content)
+            .map_err(|e| CockpitError::Internal(format!("временный файл: {e}")))?;
+
+        adb.push(&tmp, &self.path)
+            .map_err(|e| CockpitError::StepFailed {
+                step: "install-guard".into(),
+                reason: format!("push: {e}"),
+            })?;
+        adb.shell(&format!("chmod 755 {}", self.path))
+            .map_err(|e| CockpitError::StepFailed {
+                step: "install-guard".into(),
+                reason: format!("chmod: {e}"),
+            })?;
+        let check = adb
+            .shell(&format!("test -x {} && echo yes || echo no", self.path))
+            .map_err(|e| CockpitError::Internal(e.to_string()))?;
+        if check.trim() != "yes" {
+            return Err(CockpitError::CheckFailed {
+                name: "guard".into(),
+                details: format!("{} не исполняется", self.path),
+            });
+        }
+        Ok(format!("{} установлен", self.path))
+    }
+
+    fn verify(&self, _ctx: &Context) -> Result<String> {
+        Ok("файл исполняется".into())
+    }
+
+    fn rollback(&self, _ctx: &Context) -> Result<()> {
+        let adb = Adb::new(self.runner.clone(), self.addr.clone());
+        adb.shell(&format!("rm -f {}", self.path))
+            .map_err(|e| CockpitError::Internal(e.to_string()))?;
+        Ok(())
+    }
+}

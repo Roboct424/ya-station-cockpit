@@ -1,0 +1,26 @@
+#!/bin/sh
+# Boot guard: keep network ADB alive and local-only networking enforced.
+
+case "$1" in
+  start)
+    mkdir -p /data/quasar 2>/dev/null
+    touch /data/quasar/activate_network_adb /data/quasar/activate_adb_quasmodrom 2>/dev/null
+    /system/vendor/quasar/offline_mode.sh 2>/dev/null
+    (
+      while true; do
+        # ADB must stay up even after a data reset or a cloud directive
+        if ! ps | grep -q "[a]dbd"; then
+          start-stop-daemon -S -b -x adbd 2>/dev/null
+        fi
+        mkdir -p /data/quasar 2>/dev/null
+        [ -f /data/quasar/activate_network_adb ] || touch /data/quasar/activate_network_adb
+        [ -f /data/quasar/activate_adb_quasmodrom ] || touch /data/quasar/activate_adb_quasmodrom
+        # re-apply offline rules if something flushed them
+        iptables -C OUTPUT -j local_only 2>/dev/null || /system/vendor/quasar/offline_mode.sh 2>/dev/null
+        sleep 15
+      done
+    ) &
+    ;;
+  *)
+    ;;
+esac
