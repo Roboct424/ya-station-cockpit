@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, KeyPair};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
-use rustls::{ServerConfig, ServerConnection, StreamOwned};
+use rustls::{ClientConfig, ClientConnection, ServerConfig, ServerConnection, StreamOwned};
 
 #[derive(Debug, thiserror::Error)]
 pub enum TlsError {
@@ -183,6 +183,31 @@ fn peek_sni(stream: &TcpStream) -> io::Result<Option<String>> {
     Ok(None)
 }
 
+/// Настройки форвардинга: куда ходить за настоящим ответом.
+pub struct ForwardOptions {
+    pub upstream_port: u16,
+    pub roots: rustls::RootCertStore,
+    /// Подмена DNS для тестов: (имя, адрес).
+    pub resolve_override: Option<(String, SocketAddr)>,
+}
+
+impl Default for ForwardOptions {
+    fn default() -> Self {
+        let mut roots = rustls::RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        Self {
+            upstream_port: 443,
+            roots,
+            resolve_override: None,
+        }
+    }
+}
+
+enum Mode {
+    Serve,
+    Forward(Arc<ForwardOptions>),
+}
+
 pub struct TlsInterceptor {
     stop: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
@@ -192,6 +217,19 @@ pub struct TlsInterceptor {
 
 impl TlsInterceptor {
     pub fn start(bind: SocketAddr, ca: Arc<CertAuthority>) -> io::Result<Self> {
+        Self::start_with(bind, ca, Mode::Serve)
+    }
+
+    /// Перехват с туннелем к реальному серверу (host:443 по SNI).
+    pub fn start_forwarding(
+        bind: SocketAddr,
+        ca: Arc<CertAuthority>,
+        options: ForwardOptions,
+    ) -> io::Result<Self> {
+        Self::start_with(bind, ca, Mode::Forward(Arc::new(options)))
+    }
+
+    fn start_with(bind: SocketAddr, ca: Arc<CertAuthority>, mode: Mode) -> io::Result<Self> {
         let listener = TcpListener::bind(bind)?;
         listener.set_nonblocking(true)?;
         let addr = listener.local_addr()?;
@@ -200,6 +238,7 @@ impl TlsInterceptor {
         let stop_flag = stop.clone();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let seen_flag = seen.clone();
+        let mode = Arc::new(mode);
 
         let handle = std::thread::spawn(move || {
             while !stop_flag.load(Ordering::Relaxed) {
@@ -207,8 +246,12 @@ impl TlsInterceptor {
                     Ok((stream, _)) => {
                         let ca = ca.clone();
                         let seen = seen_flag.clone();
-                        // По одному соединению: фаза 3, честная простота.
-                        let _ = serve(stream, ca, seen);
+                        let mode = mode.clone();
+                        // По одному соединению: фаза 4, честная простота.
+                        let _ = match mode.as_ref() {
+                            Mode::Serve => serve(stream, ca, seen),
+                            Mode::Forward(opts) => serve_forward(stream, ca, opts.clone(), seen),
+                        };
                     }
                     Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                         std::thread::sleep(Duration::from_millis(50));
@@ -294,4 +337,196 @@ pub fn server_name(host: &str) -> Result<ServerName<'static>, TlsError> {
             format!("недопустимое имя: {host}"),
         ))
     })
+}
+
+// ------------------------------------------------------------ форвардинг ----
+
+fn serve_forward(
+    stream: TcpStream,
+    ca: Arc<CertAuthority>,
+    options: Arc<ForwardOptions>,
+    seen: Arc<Mutex<Vec<String>>>,
+) -> Result<(), TlsError> {
+    stream.set_nonblocking(false)?;
+    stream.set_read_timeout(Some(Duration::from_secs(10)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(10)))?;
+
+    let host = match peek_sni(&stream)? {
+        Some(name) => name,
+        None => stream.local_addr()?.ip().to_string(),
+    };
+    if let Ok(mut log) = seen.lock() {
+        log.push(host.clone());
+    }
+
+    let mut client_tls = ServerConnection::new(ca.config_for(&host)?)?;
+    let mut client_sock = stream;
+    tls_accept(&mut client_tls, &mut client_sock)?;
+
+    let addr = resolve_upstream(&host, &options)?;
+    let mut up_sock = TcpStream::connect_timeout(&addr, Duration::from_secs(10))?;
+    up_sock.set_read_timeout(Some(Duration::from_secs(10)))?;
+    up_sock.set_write_timeout(Some(Duration::from_secs(10)))?;
+
+    let mut up_tls = ClientConnection::new(
+        Arc::new(client_config(&options.roots)?),
+        ServerName::try_from(host.clone()).map_err(|_| {
+            TlsError::Io(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("недопустимое имя: {host}"),
+            ))
+        })?,
+    )?;
+    tls_connect(&mut up_tls, &mut up_sock)?;
+
+    pump(&mut client_tls, &mut client_sock, &mut up_tls, &mut up_sock)
+}
+
+fn resolve_upstream(host: &str, options: &ForwardOptions) -> Result<SocketAddr, TlsError> {
+    if let Some((name, addr)) = &options.resolve_override {
+        if name == host {
+            return Ok(*addr);
+        }
+    }
+    use std::net::ToSocketAddrs;
+    (host, options.upstream_port)
+        .to_socket_addrs()?
+        .next()
+        .ok_or_else(|| {
+            TlsError::Io(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("не удалось разрешить {host}"),
+            ))
+        })
+}
+
+fn client_config(roots: &rustls::RootCertStore) -> Result<ClientConfig, TlsError> {
+    let config =
+        ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+            .with_safe_default_protocol_versions()?
+            .with_root_certificates(roots.clone())
+            .with_no_client_auth();
+    Ok(config)
+}
+
+fn tls_accept(conn: &mut ServerConnection, sock: &mut TcpStream) -> Result<(), TlsError> {
+    while conn.is_handshaking() {
+        if conn.read_tls(sock)? == 0 {
+            return Err(TlsError::Io(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "клиент закрыл соединение на рукопожатии",
+            )));
+        }
+        conn.process_new_packets()?;
+        if conn.wants_write() {
+            conn.write_tls(sock)?;
+        }
+    }
+    Ok(())
+}
+
+fn tls_connect(conn: &mut ClientConnection, sock: &mut TcpStream) -> Result<(), TlsError> {
+    while conn.is_handshaking() {
+        conn.write_tls(sock)?;
+        if conn.read_tls(sock)? == 0 {
+            return Err(TlsError::Io(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "апстрим закрыл соединение на рукопожатии",
+            )));
+        }
+        conn.process_new_packets()?;
+    }
+    Ok(())
+}
+
+/// Перекачка байтов между двумя TLS-сессиями.
+///
+/// GOTCHA: G-020 — нельзя делать блокирующее чтение с двух сторон в одном
+/// потоке: получим взаимную блокировку. Поэтому сокеты переводятся в
+/// non-blocking, а цикл опрашивает оба направления.
+fn pump(
+    client: &mut ServerConnection,
+    client_sock: &mut TcpStream,
+    upstream: &mut ClientConnection,
+    upstream_sock: &mut TcpStream,
+) -> Result<(), TlsError> {
+    client_sock.set_nonblocking(true)?;
+    upstream_sock.set_nonblocking(true)?;
+
+    let mut to_upstream: Vec<u8> = Vec::new();
+    let mut to_client: Vec<u8> = Vec::new();
+    let mut client_eof = false;
+    let mut upstream_eof = false;
+
+    loop {
+        if !client_eof {
+            match client.read_tls(client_sock) {
+                Ok(0) => client_eof = true,
+                Ok(_) => {
+                    client.process_new_packets()?;
+                }
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {}
+                Err(e) => return Err(e.into()),
+            }
+            let mut buf = [0u8; 8192];
+            loop {
+                match client.reader().read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => to_upstream.extend_from_slice(&buf[..n]),
+                    Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                    Err(e) => return Err(e.into()),
+                }
+            }
+        }
+
+        if !to_upstream.is_empty() {
+            upstream.writer().write_all(&to_upstream)?;
+            to_upstream.clear();
+        }
+        while upstream.wants_write() {
+            match upstream.write_tls(upstream_sock) {
+                Ok(_) => {}
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                Err(e) => return Err(e.into()),
+            }
+        }
+
+        if !upstream_eof {
+            match upstream.read_tls(upstream_sock) {
+                Ok(0) => upstream_eof = true,
+                Ok(_) => {
+                    upstream.process_new_packets()?;
+                }
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {}
+                Err(e) => return Err(e.into()),
+            }
+            let mut buf = [0u8; 8192];
+            loop {
+                match upstream.reader().read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => to_client.extend_from_slice(&buf[..n]),
+                    Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                    Err(e) => return Err(e.into()),
+                }
+            }
+        }
+
+        if !to_client.is_empty() {
+            client.writer().write_all(&to_client)?;
+            to_client.clear();
+        }
+        while client.wants_write() {
+            match client.write_tls(client_sock) {
+                Ok(_) => {}
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                Err(e) => return Err(e.into()),
+            }
+        }
+
+        if client_eof && upstream_eof && to_upstream.is_empty() && to_client.is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    Ok(())
 }

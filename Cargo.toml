@@ -30,6 +30,7 @@ serde_yaml = "0.9"
 notify = "8"
 rcgen = "0.13"
 rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
+webpki-roots = "1"
 arc-swap = "1"
 
 cockpit-core = { path = "crates/core" }

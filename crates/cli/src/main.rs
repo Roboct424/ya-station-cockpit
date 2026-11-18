@@ -83,6 +83,9 @@ enum Cmd {
         /// Остановиться через N секунд (0 = до Ctrl+C)
         #[arg(long, default_value_t = 0)]
         seconds: u64,
+        /// Форвардить запросы на реальный сервер (по SNI), а не отдавать заглушку
+        #[arg(long)]
+        forward: bool,
     },
     /// DNS-перехватчик: отвечает своим адресом на A, пусто на AAAA
     Dns {
@@ -222,7 +225,8 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
             bind,
             ca_out,
             seconds,
-        } => run_tls(&bind, &ca_out, seconds),
+            forward,
+        } => run_tls(&bind, &ca_out, seconds, forward),
 
         Cmd::Dns {
             bind,
@@ -408,7 +412,12 @@ fn watch_config(path: &Path) -> cockpit_core::Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn run_tls(bind: &str, ca_out: &Option<PathBuf>, seconds: u64) -> cockpit_core::Result<ExitCode> {
+fn run_tls(
+    bind: &str,
+    ca_out: &Option<PathBuf>,
+    seconds: u64,
+    forward: bool,
+) -> cockpit_core::Result<ExitCode> {
     use cockpit_intercept::tls::{CertAuthority, TlsInterceptor};
 
     let addr: std::net::SocketAddr = bind
@@ -432,11 +441,21 @@ fn run_tls(bind: &str, ca_out: &Option<PathBuf>, seconds: u64) -> cockpit_core::
         println!("корневой CA: {}", path.display());
     }
 
-    let server = TlsInterceptor::start(addr, ca)
-        .map_err(|e| CockpitError::Internal(format!("TLS {addr}: {e}")))?;
+    let server = if forward {
+        let options = cockpit_intercept::tls::ForwardOptions::default();
+        TlsInterceptor::start_forwarding(addr, ca, options)
+    } else {
+        TlsInterceptor::start(addr, ca)
+    }
+    .map_err(|e| CockpitError::Internal(format!("TLS {addr}: {e}")))?;
     println!(
-        "TLS слушает {} (сертификат подбирается по SNI)",
-        server.addr()
+        "TLS слушает {} ({})",
+        server.addr(),
+        if forward {
+            "сертификат по SNI, туннель к реальному серверу"
+        } else {
+            "сертификат по SNI, заглушка"
+        }
     );
     println!(
         "проверка: curl --cacert <CA.pem> https://example.com:{}/",

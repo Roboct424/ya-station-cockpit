@@ -9,9 +9,9 @@
 проверку результата (`check`), условие пропуска (`skip_if`) и компенсацию
 (`rollback`). При ошибке выполненные шаги откатываются, всё пишется в журнал.
 
-**Статус: фаза 3.** Ядро с таймаутами, конфиг с горячей перезагрузкой,
+**Статус: фаза 4.** Ядро с таймаутами, конфиг с горячей перезагрузкой,
 YAML-сценарии, слой системных команд, DNS- и TLS-перехват (свой CA, SNI),
-планы хотспота для Windows и Linux, CLI.
+планы хотспота для Windows и Linux, TLS-прокси с туннелем к реальному серверу, CLI.
 
 ### Быстрый старт
 
@@ -34,7 +34,7 @@ cargo run -- journal tail           # что произошло
 | `cockpit scenario check <file.yaml>` | проверка сценария без запуска |
 | `cockpit net info` | выбранный сетевой адаптер |
 | `cockpit dns --bind ADDR --answer IP` | DNS-перехватчик (A → свой адрес) |
-| `cockpit tls --bind ADDR --ca-out FILE` | TLS-перехват: свой CA, подмена по SNI |
+| `cockpit tls --bind ADDR --ca-out FILE [--forward]` | TLS-перехват: свой CA, подмена по SNI, туннель к апстриму |
 | `cockpit version` | версия |
 
 ### Сценарий — это данные
@@ -88,9 +88,9 @@ a result check (`check`), a skip condition (`skip_if`) and a compensation
 (`rollback`). On failure the completed steps are rolled back and everything goes
 to the journal.
 
-**Status: phase 3.** Core with timeouts, config with hot reload, YAML scenarios,
+**Status: phase 4.** Core with timeouts, config with hot reload, YAML scenarios,
 system-command layer, DNS and TLS interception (own CA, SNI), hotspot plans for
-Windows and Linux, CLI.
+Windows and Linux, TLS proxy with upstream tunneling, CLI.
 
 ### Quick start
 
