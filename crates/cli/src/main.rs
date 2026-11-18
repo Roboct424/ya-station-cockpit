@@ -195,6 +195,26 @@ enum OtaCmd {
         #[arg(long)]
         db: Option<PathBuf>,
     },
+    /// Записать наблюдение версии (без архива): платформа, версия, crc32, размер
+    Observe {
+        #[arg(long)]
+        platform: String,
+        #[arg(long)]
+        version: String,
+        #[arg(long)]
+        crc32: u32,
+        #[arg(long)]
+        size: u64,
+        #[arg(long, default_value = "data/ota/observed.jsonl")]
+        registry: PathBuf,
+        #[arg(long)]
+        adb: bool,
+    },
+    /// Показать реестр наблюдений
+    Observed {
+        #[arg(long, default_value = "data/ota/observed.jsonl")]
+        registry: PathBuf,
+    },
     /// Сверить файл прошивки с базой
     Verify {
         #[arg(long, default_value = "firmware/db.json")]
@@ -709,6 +729,48 @@ fn run_ota(cmd: OtaCmd) -> cockpit_core::Result<ExitCode> {
                     Ok(ExitCode::FAILURE)
                 }
             }
+        }
+        OtaCmd::Observe {
+            platform,
+            version,
+            crc32,
+            size,
+            registry,
+            adb,
+        } => {
+            let reg = cockpit_ota::Registry::open(&registry)
+                .map_err(|e| CockpitError::Config(e.to_string()))?;
+            let obs = cockpit_ota::Observation {
+                platform: platform.clone(),
+                version: version.clone(),
+                crc32,
+                size,
+                sha256: None,
+                seen_at: now_stamp(),
+                source: Some("manual".into()),
+                adb,
+            };
+            reg.add(&obs)
+                .map_err(|e| CockpitError::Config(e.to_string()))?;
+            println!("наблюдение записано: {platform} {version} (crc32 {crc32:08x})");
+            Ok(ExitCode::SUCCESS)
+        }
+        OtaCmd::Observed { registry } => {
+            let reg = cockpit_ota::Registry::open(&registry)
+                .map_err(|e| CockpitError::Config(e.to_string()))?;
+            let all = reg
+                .read_all()
+                .map_err(|e| CockpitError::Config(e.to_string()))?;
+            if all.is_empty() {
+                println!("наблюдений нет: {}", registry.display());
+            }
+            for o in all {
+                println!(
+                    "{} {} · {} байт · crc32 {:08x} · adb={} · {}",
+                    o.platform, o.version, o.size, o.crc32, o.adb, o.seen_at
+                );
+            }
+            Ok(ExitCode::SUCCESS)
         }
         OtaCmd::Db { db, platform } => {
             let base = cockpit_ota::FirmwareDb::load(&db)

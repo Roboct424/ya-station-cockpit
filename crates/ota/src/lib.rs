@@ -429,3 +429,79 @@ pub fn import_file(
     )?;
     Ok(provenance)
 }
+
+/// Наблюдение версии прошивки: «такая версия существует».
+///
+/// Это то, чем можно делиться законно: платформа, версия, CRC32, размер,
+/// необязательный SHA-256. Без самого архива.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Observation {
+    pub platform: String,
+    pub version: String,
+    pub crc32: u32,
+    pub size: u64,
+    #[serde(default)]
+    pub sha256: Option<String>,
+    pub seen_at: String,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub adb: bool,
+}
+
+/// Реестр наблюдений (JSON Lines): общий список версий, которые кто-то видел.
+pub struct Registry {
+    path: PathBuf,
+    file: std::sync::Mutex<std::fs::File>,
+}
+
+impl Registry {
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, OtaError> {
+        let path = path.as_ref().to_path_buf();
+        if let Some(dir) = path.parent() {
+            if !dir.as_os_str().is_empty() {
+                fs::create_dir_all(dir)?;
+            }
+        }
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)?;
+        Ok(Self {
+            path,
+            file: std::sync::Mutex::new(file),
+        })
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn add(&self, obs: &Observation) -> Result<(), OtaError> {
+        use std::io::Write;
+        let line = serde_json::to_string(obs).map_err(|e| OtaError::Manifest(e.to_string()))?;
+        let mut file = self
+            .file
+            .lock()
+            .map_err(|_| OtaError::Manifest("реестр заблокирован".into()))?;
+        writeln!(file, "{line}")?;
+        file.flush()?;
+        Ok(())
+    }
+
+    pub fn read_all(&self) -> Result<Vec<Observation>, OtaError> {
+        use std::io::BufRead;
+        let file = fs::File::open(&self.path)?;
+        let mut out = Vec::new();
+        for line in std::io::BufReader::new(file).lines() {
+            let line = line?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            if let Ok(obs) = serde_json::from_str::<Observation>(&line) {
+                out.push(obs);
+            }
+        }
+        Ok(out)
+    }
+}
