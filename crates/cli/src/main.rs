@@ -114,6 +114,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: CaptureCmd,
     },
+    /// Устройство: ADB-подключение и сведения
+    Device {
+        #[command(subcommand)]
+        cmd: DeviceCmd,
+    },
     /// Версия
     Version,
 }
@@ -145,6 +150,19 @@ enum JournalCmd {
 enum ScenarioCmd {
     /// Разобрать и проверить YAML-сценарий
     Check { path: PathBuf },
+}
+
+#[derive(Subcommand)]
+enum DeviceCmd {
+    /// Подключиться по сети и показать версию/root
+    Info {
+        #[arg(long)]
+        addr: String,
+        #[arg(long, default_value = "adb")]
+        adb: String,
+    },
+    /// Список устройств, видимых adb
+    List,
 }
 
 #[derive(Subcommand)]
@@ -361,6 +379,7 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
             seconds,
         } => run_dns(&bind, &answer, seconds),
 
+        Cmd::Device { cmd } => run_device(cmd),
         Cmd::Ota { cmd } => run_ota(cmd),
         Cmd::Telemetry { cmd } => run_telemetry(&cfg, cmd),
         Cmd::Capture { cmd } => run_capture(&cfg, cmd),
@@ -583,6 +602,53 @@ fn maybe_prompt_consent(cfg: &Config) {
     }
     let _ = consent.save(cfg.data_dir());
     println!();
+}
+
+fn run_device(cmd: DeviceCmd) -> cockpit_core::Result<ExitCode> {
+    use cockpit_device::Adb;
+    use cockpit_net::{CommandRunner, SystemRunner};
+
+    let runner: std::sync::Arc<dyn CommandRunner> = std::sync::Arc::new(SystemRunner);
+    match cmd {
+        DeviceCmd::Info { addr, adb } => {
+            let client = Adb::new(runner, addr.clone());
+            println!("adb: {adb}");
+            match client.connect(&addr) {
+                Ok(()) => println!("подключение: ok"),
+                Err(e) => println!("подключение: ошибка ({e})"),
+            }
+            match client.devices() {
+                Ok(list) if list.is_empty() => println!("устройств не видно"),
+                Ok(list) => println!("устройства: {}", list.join(", ")),
+                Err(e) => println!("adb devices: {e}"),
+            }
+            match client.kernel() {
+                Ok(k) => println!("ядро: {k}"),
+                Err(e) => println!("ядро: {e}"),
+            }
+            match client.is_root() {
+                Ok(true) => println!("доступ: root"),
+                Ok(false) => println!("доступ: без root"),
+                Err(e) => println!("доступ: {e}"),
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        DeviceCmd::List => {
+            let client = Adb::new(runner, "any");
+            match client.devices() {
+                Ok(list) => {
+                    if list.is_empty() {
+                        println!("устройств не видно");
+                    }
+                    for d in list {
+                        println!("{d}");
+                    }
+                }
+                Err(e) => println!("adb devices: {e}"),
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+    }
 }
 
 fn run_telemetry(cfg: &Config, cmd: TelemetryCmd) -> cockpit_core::Result<ExitCode> {

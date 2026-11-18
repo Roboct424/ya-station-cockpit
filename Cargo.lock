@@ -202,6 +202,7 @@ dependencies = [
  "cockpit-capture",
  "cockpit-config",
  "cockpit-core",
+ "cockpit-device",
  "cockpit-doctor",
  "cockpit-intercept",
  "cockpit-net",
@@ -231,6 +232,14 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "cockpit-device"
+version = "0.1.0"
+dependencies = [
+ "cockpit-net",
  "thiserror",
 ]
 
