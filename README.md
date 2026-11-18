@@ -9,9 +9,9 @@
 проверку результата (`check`), условие пропуска (`skip_if`) и компенсацию
 (`rollback`). При ошибке выполненные шаги откатываются, всё пишется в журнал.
 
-**Статус: фаза 2.** Ядро с таймаутами, конфиг с горячей перезагрузкой,
-YAML-сценарии, слой системных команд с dry-run, DNS-перехватчик, CLI.
-Хотспот и TLS-подмена — в следующих фазах.
+**Статус: фаза 3.** Ядро с таймаутами, конфиг с горячей перезагрузкой,
+YAML-сценарии, слой системных команд, DNS- и TLS-перехват (свой CA, SNI),
+планы хотспота для Windows и Linux, CLI.
 
 ### Быстрый старт
 
@@ -34,6 +34,7 @@ cargo run -- journal tail           # что произошло
 | `cockpit scenario check <file.yaml>` | проверка сценария без запуска |
 | `cockpit net info` | выбранный сетевой адаптер |
 | `cockpit dns --bind ADDR --answer IP` | DNS-перехватчик (A → свой адрес) |
+| `cockpit tls --bind ADDR --ca-out FILE` | TLS-перехват: свой CA, подмена по SNI |
 | `cockpit version` | версия |
 
 ### Сценарий — это данные
@@ -62,7 +63,7 @@ crates/core       события, журнал (JSONL), шаги, исполни
 crates/config     TOML-конфиг, валидация, горячая перезагрузка (arc-swap + notify)
 crates/doctor     пробы окружения с подсказками
 crates/net        NetAdapter, слой системных команд (real/dry-run), Windows/Linux
-crates/intercept  DNS-перехватчик: свой парсер, A/AAAA
+crates/intercept  DNS-перехватчик и TLS: свой CA, разбор SNI, подмена сертификата
 crates/scenarios  YAML-сценарии: модель, загрузка, проверка, исполнение
 crates/cli        команды cockpit
 examples/demo.yaml
@@ -87,9 +88,9 @@ a result check (`check`), a skip condition (`skip_if`) and a compensation
 (`rollback`). On failure the completed steps are rolled back and everything goes
 to the journal.
 
-**Status: phase 2.** Core with timeouts, config with hot reload, YAML scenarios,
-system-command layer with dry-run, DNS interceptor, CLI. Hotspot and TLS
-interception come next.
+**Status: phase 3.** Core with timeouts, config with hot reload, YAML scenarios,
+system-command layer, DNS and TLS interception (own CA, SNI), hotspot plans for
+Windows and Linux, CLI.
 
 ### Quick start
 
@@ -112,6 +113,7 @@ cargo run -- journal tail
 | `cockpit scenario check <file.yaml>` | validate a scenario |
 | `cockpit net info` | selected network adapter |
 | `cockpit dns --bind ADDR --answer IP` | DNS interceptor (A → our address) |
+| `cockpit tls --bind ADDR --ca-out FILE` | TLS interception: own CA, SNI-based certs |
 | `cockpit version` | version |
 
 ### Layout
@@ -121,7 +123,7 @@ crates/core       events, JSONL journal, steps, runner, errors
 crates/config     TOML config, validation, hot reload (arc-swap + notify)
 crates/doctor     environment probes with hints
 crates/net        NetAdapter, system command layer (real/dry-run), Windows/Linux
-crates/intercept  DNS interceptor: own parser, A/AAAA
+crates/intercept  DNS and TLS: own CA, SNI parsing, certificate substitution
 crates/scenarios  YAML scenarios: model, loading, validation, execution
 crates/cli        cockpit commands
 examples/demo.yaml

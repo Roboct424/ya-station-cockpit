@@ -1,25 +1,80 @@
+use std::fs;
 use std::sync::Arc;
 
-use cockpit_net::{platform_adapter, ApConfig, CommandRunner, DryRunRunner, NetAdapter, NetError};
+use cockpit_net::{
+    platform_adapter, ApConfig, CommandRunner, CommandSpec, DryRunRunner, LinuxAdapter, NetAdapter,
+    NetError, WindowsAdapter,
+};
 
-fn adapter() -> (Box<dyn NetAdapter>, Arc<DryRunRunner>) {
-    let dry = Arc::new(DryRunRunner::default());
-    (platform_adapter(dry.clone()), dry)
+fn temp_dir(tag: &str) -> std::path::PathBuf {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("cockpit-net-{tag}-{nanos}"));
+    fs::create_dir_all(&dir).unwrap();
+    dir
 }
 
 #[test]
-fn hotspot_is_honestly_not_implemented() {
-    let (net, _) = adapter();
+fn windows_hotspot_builds_commands() {
+    let dry = Arc::new(DryRunRunner::default());
+    let net = WindowsAdapter::new(dry.clone());
+
+    let handle = net
+        .start_hotspot(&ApConfig::new("Test", "password"))
+        .unwrap();
+    assert_eq!(handle.iface, "hostednetwork");
+
+    let commands = dry.commands();
+    assert_eq!(commands.len(), 2, "{commands:?}");
+    assert!(commands[0].contains("set hostednetwork"));
+    assert!(commands[1].contains("start hostednetwork"));
+
+    net.stop_hotspot(&handle).unwrap();
+    assert_eq!(dry.commands().len(), 3);
+    assert!(dry.commands()[2].contains("stop hostednetwork"));
+}
+
+#[test]
+fn linux_hotspot_writes_configs_and_runs_tools() {
+    let dir = temp_dir("ap");
+    let dry = Arc::new(DryRunRunner::default());
+    let net = LinuxAdapter::new(dry.clone()).with_workdir(&dir);
+
+    let handle = net
+        .start_hotspot(&ApConfig::new("TestAP", "secret123"))
+        .unwrap();
+    assert_eq!(handle.iface, "wlan0");
+
+    let hostapd = fs::read_to_string(dir.join("hostapd.conf")).unwrap();
+    assert!(hostapd.contains("ssid=TestAP"), "{hostapd}");
+    assert!(hostapd.contains("wpa_passphrase=secret123"));
+
+    let dnsmasq = fs::read_to_string(dir.join("dnsmasq.conf")).unwrap();
+    assert!(dnsmasq.contains("dhcp-range="), "{dnsmasq}");
+
+    let commands = dry.commands();
+    assert_eq!(commands.len(), 2, "{commands:?}");
+    assert!(commands[0].starts_with("hostapd -B"));
+    assert!(commands[1].starts_with("dnsmasq --conf-file="));
+
+    fs::remove_dir_all(dir).ok();
+}
+
+#[test]
+fn linux_hotspot_requires_workdir() {
+    let net = LinuxAdapter::new(Arc::new(DryRunRunner::default()));
     let err = net
         .start_hotspot(&ApConfig::new("Test", "password"))
         .unwrap_err();
     assert!(matches!(err, NetError::NotImplemented(_)), "{err}");
-    assert_eq!(err.code(), "net.not_implemented");
 }
 
 #[test]
 fn set_dns_builds_platform_command() {
-    let (net, dry) = adapter();
+    let dry = Arc::new(DryRunRunner::default());
+    let net = platform_adapter(dry.clone());
     net.set_dns("test0", "192.168.137.1".parse().unwrap())
         .unwrap();
 
@@ -33,7 +88,8 @@ fn set_dns_builds_platform_command() {
 
 #[test]
 fn tcp_redirect_is_reversible() {
-    let (net, dry) = adapter();
+    let dry = Arc::new(DryRunRunner::default());
+    let net = platform_adapter(dry.clone());
     let id = net.redirect_tcp(80, 8080).unwrap();
     assert_eq!(dry.commands().len(), 1);
 
@@ -48,7 +104,7 @@ fn tcp_redirect_is_reversible() {
 
 #[test]
 fn udp_redirect_depends_on_platform() {
-    let (net, _) = adapter();
+    let net = platform_adapter(Arc::new(DryRunRunner::default()));
     let result = net.redirect_udp(53, 5353);
     #[cfg(windows)]
     {
@@ -56,19 +112,14 @@ fn udp_redirect_depends_on_platform() {
         assert!(matches!(err, NetError::Unsupported(_)), "{err}");
     }
     #[cfg(not(windows))]
-    {
-        assert!(result.is_ok());
-    }
+    assert!(result.is_ok());
 }
 
 #[test]
 fn runner_errors_are_typed() {
     struct Failing;
     impl CommandRunner for Failing {
-        fn run(
-            &self,
-            _spec: &cockpit_net::CommandSpec,
-        ) -> Result<cockpit_net::CommandOutput, NetError> {
+        fn run(&self, _spec: &CommandSpec) -> Result<cockpit_net::CommandOutput, NetError> {
             Err(NetError::Permission("тест"))
         }
     }

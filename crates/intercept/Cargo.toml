@@ -6,3 +6,5 @@ license.workspace = true
 
 [dependencies]
 thiserror.workspace = true
+rcgen.workspace = true
+rustls.workspace = true

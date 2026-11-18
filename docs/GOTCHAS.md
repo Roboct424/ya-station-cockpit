@@ -215,6 +215,45 @@
 * **Где:** `crates/intercept/src/lib.rs` (`handle_query`)
 * **Статус:** под наблюдением
 
+## G-017 · Принятый сокет наследует non-blocking
+
+* **Инструмент:** `std::net::TcpListener`
+* **Симптом:** сервер принимал соединение и сразу закрывал его; клиент получал
+  `ConnectionAborted` (WSAECONNABORTED / 10053).
+* **Причина:** listener переведён в `set_nonblocking(true)`, и принятые сокеты
+  унаследовали режим: `peek` немедленно возвращал `WouldBlock`, `serve`
+  завершался ошибкой, соединение рвалось.
+* **Решение:** в начале обработки соединения — `set_nonblocking(false)`,
+  затем `set_read_timeout`.
+* **Где:** `crates/intercept/src/tls.rs` (`serve`)
+* **Тест:** `handshake_uses_generated_certificate_for_sni`
+* **Статус:** исправлено
+
+## G-018 · Windows curl (schannel) требует проверку отзыва
+
+* **Инструмент:** `curl.exe` + schannel
+* **Симптом:** с нашим CA `curl --cacert ca.pem` падает с
+  `CERT_TRUST_REVOCATION_STATUS_UNKNOWN` (код 60), хотя цепочка валидна.
+* **Причина:** schannel проверяет CRL/OCSP для локально добавленного CA,
+  а у нас их нет.
+* **Решение:** для проверки вручную — `--ssl-no-revoke` (или `-k`).
+  Клиенты на rustls (наши тесты) этим не страдают.
+* **Где:** документация/проверки, не код
+* **Статус:** принято
+
+## G-019 · netsh hostednetwork устарел
+
+* **Инструмент:** Windows `netsh wlan set/start hostednetwork`
+* **Симптом:** на современных драйверах команда возвращает
+  «hosted network не поддерживается», хотя синтаксис верный.
+* **Причина:** Microsoft объявила hostednetwork устаревшим в пользу
+  WinRT `NetworkOperatorTetheringManager` / Mobile Hotspot.
+* **Решение:** текущий путь оставлен как быстрый и проверяемый план;
+  WinRT-реализация — следующий шаг. Ошибка пробрасывается как `net.os`
+  с текстом драйвера, а не «неизвестная ошибка».
+* **Где:** `crates/net/src/lib.rs` (`WindowsAdapter::start_hotspot`)
+* **Статус:** под наблюдением
+
 ## Шаблон новой записи
 
 ```markdown

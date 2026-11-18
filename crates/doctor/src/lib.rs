@@ -126,6 +126,7 @@ pub fn run_all(cfg: &Config) -> Report {
         probe_dns_port(cfg),
         probe_http_ports(cfg),
         probe_capture_support(),
+        probe_tls_ca(cfg),
     ];
     Report { probes }
 }
@@ -316,4 +317,14 @@ fn probe_resolver() -> Probe {
 #[cfg(not(target_os = "linux"))]
 fn probe_resolver() -> Probe {
     Probe::new("резолвер", Status::Skip, "не применимо на этой платформе")
+}
+
+fn probe_tls_ca(cfg: &Config) -> Probe {
+    let path = cfg.data_dir().join("ca.pem");
+    if path.is_file() {
+        Probe::new("CA для TLS", Status::Ok, path.display().to_string())
+    } else {
+        Probe::new("CA для TLS", Status::Skip, "корневой CA ещё не создан")
+            .with_hint("cockpit tls --ca-out data/ca.pem")
+    }
 }

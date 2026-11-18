@@ -10,7 +10,9 @@
 pub mod sys;
 
 use std::collections::HashMap;
+use std::fs;
 use std::net::IpAddr;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -27,6 +29,7 @@ pub struct ApConfig {
     pub ssid: String,
     pub password: String,
     pub band: Band,
+    pub iface: String,
 }
 
 impl ApConfig {
@@ -35,6 +38,7 @@ impl ApConfig {
             ssid: ssid.into(),
             password: password.into(),
             band: Band::Ghz24,
+            iface: "wlan0".to_string(),
         }
     }
 }
@@ -150,13 +154,31 @@ impl NetAdapter for WindowsAdapter {
         "windows"
     }
 
-    fn start_hotspot(&self, _cfg: &ApConfig) -> Result<ApHandle, NetError> {
-        // WinRT: Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager
-        Err(NetError::NotImplemented("hotspot: WinRT-хотспот"))
+    fn start_hotspot(&self, cfg: &ApConfig) -> Result<ApHandle, NetError> {
+        // Легаси hostednetwork: работает не на всех драйверах. WinRT-путь
+        // (NetworkOperatorTetheringManager) — следующий шаг, см. DEVLOG.
+        let set = CommandSpec::new("netsh").args([
+            "wlan",
+            "set",
+            "hostednetwork",
+            "mode=allow",
+            &format!("ssid={}", cfg.ssid),
+            &format!("key={}", cfg.password),
+        ]);
+        self.runner.run(&set)?;
+
+        let start = CommandSpec::new("netsh").args(["wlan", "start", "hostednetwork"]);
+        self.runner.run(&start)?;
+
+        Ok(ApHandle {
+            iface: "hostednetwork".to_string(),
+        })
     }
 
     fn stop_hotspot(&self, _handle: &ApHandle) -> Result<(), NetError> {
-        Err(NetError::NotImplemented("hotspot: WinRT-хотспот"))
+        let stop = CommandSpec::new("netsh").args(["wlan", "stop", "hostednetwork"]);
+        self.runner.run(&stop)?;
+        Ok(())
     }
 
     fn set_dns(&self, iface: &str, dns: IpAddr) -> Result<(), NetError> {
@@ -215,6 +237,7 @@ impl NetAdapter for WindowsAdapter {
 pub struct LinuxAdapter {
     runner: Arc<dyn CommandRunner>,
     cleanups: Cleanups,
+    workdir: Option<PathBuf>,
 }
 
 impl LinuxAdapter {
@@ -222,11 +245,17 @@ impl LinuxAdapter {
         Self {
             runner,
             cleanups: Cleanups::new(),
+            workdir: None,
         }
     }
 
+    pub fn with_workdir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.workdir = Some(dir.into());
+        self
+    }
+
     pub fn system() -> Self {
-        Self::new(Arc::new(SystemRunner))
+        Self::new(Arc::new(SystemRunner)).with_workdir("data/hotspot")
     }
 
     fn redirect(&self, proto: &str, from: u16, to: u16) -> Result<RuleId, NetError> {
@@ -269,12 +298,56 @@ impl NetAdapter for LinuxAdapter {
         "linux"
     }
 
-    fn start_hotspot(&self, _cfg: &ApConfig) -> Result<ApHandle, NetError> {
-        Err(NetError::NotImplemented("hotspot: hostapd"))
+    fn start_hotspot(&self, cfg: &ApConfig) -> Result<ApHandle, NetError> {
+        let Some(dir) = &self.workdir else {
+            return Err(NetError::NotImplemented(
+                "hotspot: не задан рабочий каталог",
+            ));
+        };
+
+        fs::create_dir_all(dir)
+            .map_err(|e| NetError::Os(format!("каталог {}: {e}", dir.display())))?;
+
+        let hostapd = dir.join("hostapd.conf");
+        let dnsmasq = dir.join("dnsmasq.conf");
+
+        let hostapd_conf = format!(
+            "interface={iface}\ndriver=nl80211\nssid={ssid}\nhw_mode=g\nchannel=6\n\
+             wpa=2\nwpa_passphrase={pwd}\nwpa_key_mgmt=WPA-PSK\nrsn_pairwise=CCMP\n",
+            iface = cfg.iface,
+            ssid = cfg.ssid,
+            pwd = cfg.password
+        );
+        let dnsmasq_conf = format!(
+            "interface={iface}\nbind-interfaces\ndhcp-range=192.168.50.10,192.168.50.100,12h\n\
+             dhcp-option=3,192.168.50.1\ndhcp-option=6,192.168.50.1\n",
+            iface = cfg.iface
+        );
+
+        fs::write(&hostapd, hostapd_conf)
+            .map_err(|e| NetError::Os(format!("{}: {e}", hostapd.display())))?;
+        fs::write(&dnsmasq, dnsmasq_conf)
+            .map_err(|e| NetError::Os(format!("{}: {e}", dnsmasq.display())))?;
+
+        self.runner.run(
+            &CommandSpec::new("hostapd")
+                .arg("-B")
+                .arg(hostapd.display().to_string()),
+        )?;
+        self.runner
+            .run(&CommandSpec::new("dnsmasq").arg(format!("--conf-file={}", dnsmasq.display())))?;
+
+        Ok(ApHandle {
+            iface: cfg.iface.clone(),
+        })
     }
 
     fn stop_hotspot(&self, _handle: &ApHandle) -> Result<(), NetError> {
-        Err(NetError::NotImplemented("hotspot: hostapd"))
+        self.runner
+            .run(&CommandSpec::new("killall").arg("hostapd"))?;
+        self.runner
+            .run(&CommandSpec::new("killall").arg("dnsmasq"))?;
+        Ok(())
     }
 
     fn set_dns(&self, iface: &str, dns: IpAddr) -> Result<(), NetError> {

@@ -72,6 +72,18 @@ enum Cmd {
         #[command(subcommand)]
         cmd: NetCmd,
     },
+    /// TLS-перехватчик: свой CA и подмена сертификата по SNI
+    Tls {
+        /// Адрес прослушивания
+        #[arg(long, default_value = "127.0.0.1:18443")]
+        bind: String,
+        /// Куда сохранить корневой сертификат (PEM)
+        #[arg(long)]
+        ca_out: Option<PathBuf>,
+        /// Остановиться через N секунд (0 = до Ctrl+C)
+        #[arg(long, default_value_t = 0)]
+        seconds: u64,
+    },
     /// DNS-перехватчик: отвечает своим адресом на A, пусто на AAAA
     Dns {
         /// Адрес прослушивания
@@ -205,6 +217,12 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
                 Ok(ExitCode::SUCCESS)
             }
         },
+
+        Cmd::Tls {
+            bind,
+            ca_out,
+            seconds,
+        } => run_tls(&bind, &ca_out, seconds),
 
         Cmd::Dns {
             bind,
@@ -387,6 +405,52 @@ fn watch_config(path: &Path) -> cockpit_core::Result<ExitCode> {
             Err(e) => eprintln!("ошибка конфига: {e}; старый остаётся в силе"),
         }
     }
+    Ok(ExitCode::SUCCESS)
+}
+
+fn run_tls(bind: &str, ca_out: &Option<PathBuf>, seconds: u64) -> cockpit_core::Result<ExitCode> {
+    use cockpit_intercept::tls::{CertAuthority, TlsInterceptor};
+
+    let addr: std::net::SocketAddr = bind
+        .parse()
+        .map_err(|e| CockpitError::Config(format!("--bind {bind}: {e}")))?;
+
+    let ca = std::sync::Arc::new(
+        CertAuthority::generate().map_err(|e| CockpitError::Internal(format!("CA: {e}")))?,
+    );
+
+    if let Some(path) = ca_out {
+        if let Some(dir) = path.parent() {
+            if !dir.as_os_str().is_empty() {
+                std::fs::create_dir_all(dir).map_err(|e| {
+                    CockpitError::Internal(format!("каталог {}: {e}", dir.display()))
+                })?;
+            }
+        }
+        std::fs::write(path, ca.ca_pem())
+            .map_err(|e| CockpitError::Internal(format!("{}: {e}", path.display())))?;
+        println!("корневой CA: {}", path.display());
+    }
+
+    let server = TlsInterceptor::start(addr, ca)
+        .map_err(|e| CockpitError::Internal(format!("TLS {addr}: {e}")))?;
+    println!(
+        "TLS слушает {} (сертификат подбирается по SNI)",
+        server.addr()
+    );
+    println!(
+        "проверка: curl --cacert <CA.pem> https://example.com:{}/",
+        server.addr().port()
+    );
+
+    if seconds == 0 {
+        loop {
+            std::thread::sleep(Duration::from_secs(3600));
+        }
+    } else {
+        std::thread::sleep(Duration::from_secs(seconds));
+    }
+    server.stop();
     Ok(ExitCode::SUCCESS)
 }
 
