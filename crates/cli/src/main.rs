@@ -195,6 +195,15 @@ enum OtaCmd {
         #[arg(long)]
         db: Option<PathBuf>,
     },
+    /// Скачать все версии из манифеста для платформы
+    FetchAll {
+        #[arg(long)]
+        manifest: PathBuf,
+        #[arg(long)]
+        platform: String,
+        #[arg(long, default_value = "data/ota")]
+        store: PathBuf,
+    },
     /// Записать наблюдение версии (без архива): платформа, версия, crc32, размер
     Observe {
         #[arg(long)]
@@ -729,6 +738,41 @@ fn run_ota(cmd: OtaCmd) -> cockpit_core::Result<ExitCode> {
                     Ok(ExitCode::FAILURE)
                 }
             }
+        }
+        OtaCmd::FetchAll {
+            manifest,
+            platform,
+            store,
+        } => {
+            let m = cockpit_ota::Manifest::load(&manifest)
+                .map_err(|e| CockpitError::Config(format!("{}: {e}", manifest.display())))?;
+            let entries = m
+                .entries(&platform)
+                .map_err(|e| CockpitError::Config(e.to_string()))?;
+
+            let mut ok = 0;
+            let mut failed = 0;
+            for entry in entries.values() {
+                match cockpit_ota::fetch(entry, &platform, &store, &cockpit_ota::CurlFetcher) {
+                    Ok(p) => {
+                        ok += 1;
+                        println!(
+                            "ok   {} · {} байт · crc32 {:08x}",
+                            p.version, p.size, p.crc32
+                        );
+                    }
+                    Err(e) => {
+                        failed += 1;
+                        println!("FAIL {} · {e}", entry.version);
+                    }
+                }
+            }
+            println!("итого: скачано {ok}, ошибок {failed}");
+            Ok(if failed == 0 {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            })
         }
         OtaCmd::Observe {
             platform,
