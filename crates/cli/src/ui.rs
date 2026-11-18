@@ -1,65 +1,214 @@
-//! Локальная веб-панель: форма активации, кнопки диагностики и журнала.
+//! Мастер настройки: локальная панель в браузере.
 //!
-//! Зависимостей нет: минимальный HTTP/1.1 на std. Слушаем только localhost.
-//! Кнопки вызывают сам `cockpit` как подпроцесс — панель не дублирует логику.
+//! Три шага, как в задумке: окружение → модули → сопряжение с терминалом.
+//! Панель не хранит состояние в браузере: всё, что она показывает, она
+//! спрашивает у программы, а действия запускает как модули.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
+
+use crate::modules::{ModuleCtx, MODULES};
 
 const PAGE: &str = r#"<!doctype html><html lang="ru"><meta charset="utf-8">
-<title>cockpit</title>
+<title>cockpit — мастер настройки</title>
 <style>
 :root{color-scheme:dark}
-body{margin:0;padding:24px;background:#12151a;color:#e8ecf1;font:14px system-ui,sans-serif}
-h1{font-size:18px;margin:0 0 16px}
-.card{background:#1b2028;border:1px solid #262d38;border-radius:12px;padding:14px;margin-bottom:12px}
-label{display:block;color:#8b97a8;font-size:12px;margin:8px 0 4px}
-input[type=text]{width:100%;padding:9px 10px;background:#12161d;color:#e8ecf1;
- border:1px solid #2c3542;border-radius:8px;font-size:14px}
-button{padding:10px 14px;border:0;border-radius:9px;background:#3d7eff;color:#fff;font-weight:600;margin:6px 6px 0 0}
-button.sec{background:#232b36;color:#cfd8e4}
-pre{background:#0e1116;border:1px solid #232a34;border-radius:9px;padding:12px;
- white-space:pre-wrap;font-size:12px;max-height:340px;overflow:auto}
-.row{display:flex;gap:10px}.row>*{flex:1}
+*{box-sizing:border-box}
+body{margin:0;background:#0f1216;color:#e8ecf1;font:14px/1.45 system-ui,Segoe UI,sans-serif}
+header{display:flex;align-items:center;gap:14px;padding:14px 20px;background:#151a21;border-bottom:1px solid #232a34}
+header h1{font-size:15px;margin:0;font-weight:600}
+.badge{padding:3px 9px;border-radius:999px;font-size:11px;background:#23303f;color:#9fb4cc}
+.badge.ok{background:#173a28;color:#7ee2a8}.badge.bad{background:#3a1b1b;color:#ff9a9a}
+nav{display:flex;gap:4px;margin-left:auto}
+nav button{background:transparent;border:0;color:#8b97a8;padding:8px 14px;border-radius:9px;cursor:pointer;font-size:13px}
+nav button.on{background:#22303f;color:#e8ecf1}
+main{padding:18px 20px;max-width:1180px;margin:0 auto}
+section{display:none}section.on{display:block}
+.row{display:flex;gap:14px;flex-wrap:wrap}
+.col{flex:1 1 320px;min-width:300px}
+.card{background:#161b22;border:1px solid #232a34;border-radius:12px;padding:14px;margin-bottom:12px}
+.card h2{font-size:13px;margin:0 0 8px;color:#b9c6d6;font-weight:600}
+label{display:block;color:#8b97a8;font-size:12px;margin:9px 0 4px}
+input{width:100%;padding:9px 10px;background:#0f1319;color:#e8ecf1;border:1px solid #2a3341;border-radius:8px}
+button.act{padding:9px 13px;border:0;border-radius:9px;background:#3d7eff;color:#fff;font-weight:600;cursor:pointer;margin:8px 6px 0 0}
+button.ghost{background:#232b36;color:#cfd8e4}
+button:disabled{opacity:.5;cursor:default}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(255px,1fr));gap:12px}
+.tile{background:#161b22;border:1px solid #232a34;border-radius:12px;padding:13px;display:flex;flex-direction:column;gap:8px}
+.tile h3{font-size:13px;margin:0}
+.tile p{font-size:12px;color:#8b97a8;margin:0;flex:1}
+.tile .tag{font-size:10px;color:#7f8ea3;text-transform:uppercase;letter-spacing:.06em}
+pre{background:#0b0e12;border:1px solid #1e242c;border-radius:10px;padding:12px;margin:0;
+ white-space:pre-wrap;font:12px/1.5 ui-monospace,Consolas,monospace;height:520px;overflow:auto;color:#cbd5e1}
+.hint{font-size:12px;color:#8b97a8}
+.ok{color:#7ee2a8}.err{color:#ff9a9a}
 </style>
-<h1>cockpit · активация Станции</h1>
-<div class="card">
-<label>Адрес ADB</label><input id="addr" type="text" value="192.168.137.113:5555">
-<div class="row">
-<div><label>Манифест</label><input id="manifest" type="text" value="data/manifests.json"></div>
-<div><label>Платформа</label><input id="platform" type="text" value="yandexmini_2"></div>
-</div>
-<div class="row">
-<div><label>Версия</label><input id="version" type="text" value="0.369.1.46.4778262943.20261013.299"></div>
-<div><label>Прошивка</label><input id="firmware" type="text" value=""></div>
-</div>
-<div class="row">
-<div><label>Сторож</label><input id="guard" type="text" value="firmware/S99adbguard"></div>
-<div><label>CA (PEM)</label><input id="ca" type="text" value="data/ca.pem"></div>
-</div>
-<label><input id="serve" type="checkbox" checked> поднять локальный OTA/sync</label>
-<button onclick="act()">Активировать</button>
-<button class="sec" onclick="show('/api/doctor')">Диагностика</button>
-<button class="sec" onclick="show('/api/journal')">Журнал</button>
-</div>
-<div class="card"><pre id="out">готов</pre></div>
+
+<header>
+  <h1>cockpit</h1>
+  <span id="admin" class="badge">права: ?</span>
+  <span id="station" class="badge">станция: ?</span>
+  <nav>
+    <button class="on" data-tab="env">1 · Окружение</button>
+    <button data-tab="mods">2 · Модули</button>
+    <button data-tab="pair">3 · Сопряжение</button>
+  </nav>
+</header>
+
+<main>
+<section id="env" class="on">
+  <div class="row">
+    <div class="col">
+      <div class="card">
+        <h2>Шаг 1. Подготовить окружение</h2>
+        <p class="hint">Убираем всё, что мешает: чужие записи в hosts, старые прокси,
+        занятые порты. Затем поднимаем точку доступа с нашими именем и паролем.</p>
+        <label>SSID точки доступа</label><input id="ssid" value="YaRig">
+        <label>Пароль</label><input id="pass" value="11111111">
+        <button class="act" onclick="run('env.cleanup')">Очистить окружение</button>
+        <button class="act" onclick="run('net.hotspot')">Поднять точку доступа</button>
+      </div>
+      <div class="card">
+        <h2>ADB-адрес станции</h2>
+        <label>addr</label><input id="addr" value="192.168.137.217:5555">
+        <button class="act ghost" onclick="run('clock.sync')">Подключиться и сверить часы</button>
+      </div>
+    </div>
+    <div class="col">
+      <div class="card">
+        <h2>Что проверяем</h2>
+        <div id="checks" class="hint">проверяю…</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="mods">
+  <div class="card">
+    <h2>Шаг 2. Модули для станции</h2>
+    <p class="hint">Каждая плитка — одна операция. Можно нажимать в любом порядке:
+    повторный запуск безопасен, лишнего не сделает.</p>
+  </div>
+  <div id="tiles" class="grid"></div>
+</section>
+
+<section id="pair">
+  <div class="row">
+    <div class="col" style="flex:0 0 360px">
+      <div class="card">
+        <h2>Шаг 3. Звук сопряжения</h2>
+        <label>SSID (тот же, что у точки доступа)</label><input id="pssid" value="YaRig">
+        <label>Пароль</label><input id="ppass" value="11111111">
+        <label>Громкость (рабочая 0.5)</label><input id="gain" value="0.5">
+        <label>Повторов</label><input id="repeat" value="2">
+        <button class="act" onclick="pair()">Сгенерировать и проиграть</button>
+        <button class="act ghost" onclick="run('verify.configured')">Проверить результат</button>
+        <p class="hint" id="pairhint">Станция должна быть в режиме настройки.</p>
+      </div>
+    </div>
+    <div class="col">
+      <div class="card">
+        <h2>Терминал</h2>
+        <pre id="log">готов</pre>
+      </div>
+    </div>
+  </div>
+</section>
+</main>
+
 <script>
-const v=id=>document.getElementById(id).value;
-async function show(url){const r=await fetch(url);document.getElementById('out').textContent=await r.text();}
-async function act(){
-  const body=new URLSearchParams({addr:v('addr'),manifest:v('manifest'),platform:v('platform'),
-    version:v('version'),firmware:v('firmware'),guard:v('guard'),ca:v('ca'),
-    serve:document.getElementById('serve').checked?'1':'0'});
-  document.getElementById('out').textContent='выполняется…';
-  const r=await fetch('/api/activate',{method:'POST',body});
-  document.getElementById('out').textContent=await r.text();
+const $ = id => document.getElementById(id);
+const st = {cursor: 0};
+
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
+  document.querySelectorAll('section').forEach(s => s.classList.toggle('on', s.id === b.dataset.tab));
+});
+
+function body(extra) {
+  return new URLSearchParams(Object.assign({
+    addr: $('addr').value, ssid: $('ssid').value, password: $('pass').value
+  }, extra || {}));
 }
+
+async function run(id) {
+  const r = await fetch('/api/run', {method: 'POST', body: body({id})});
+  const t = await r.text();
+  if (t.trim()) append(t.trim() + '\n');
+  poll();
+}
+
+async function pair() {
+  const b = body({ssid: $('pssid').value, password: $('ppass').value,
+                  gain: $('gain').value, repeat: $('repeat').value});
+  $('pairhint').textContent = 'играю код…';
+  await fetch('/api/pair', {method: 'POST', body: b});
+  poll();
+}
+
+function append(text) {
+  const el = $('log');
+  el.textContent += text;
+  el.scrollTop = el.scrollHeight;
+}
+
+async function poll() {
+  const r = await fetch('/api/log?after=' + st.cursor);
+  const j = await r.json();
+  st.cursor = j.next;
+  if (j.lines.length) append(j.lines.join('\n') + '\n');
+}
+
+async function state() {
+  const j = await (await fetch('/api/state')).json();
+  $('admin').textContent = 'права: ' + (j.admin ? 'администратор' : 'обычные');
+  $('admin').className = 'badge ' + (j.admin ? 'ok' : 'bad');
+  $('station').textContent = 'станция: ' + (j.adb ? 'на связи' : 'нет связи');
+  $('station').className = 'badge ' + (j.adb ? 'ok' : 'bad');
+  $('checks').innerHTML = j.checks.map(c =>
+    `<div>${c.ok ? '<span class="ok">✓</span>' : '<span class="err">✗</span>'} ${c.text}</div>`).join('');
+  if (j.modules.length && !$('tiles').childElementCount) {
+    $('tiles').innerHTML = j.modules.map(m => `
+      <div class="tile">
+        <span class="tag">${m.group}</span>
+        <h3>${m.title}</h3>
+        <p>${m.summary}${m.needs_adb ? ' · нужен ADB' : ''}</p>
+        <button class="act" onclick="run('${m.id}')">Выполнить</button>
+      </div>`).join('');
+  }
+}
+
+state(); setInterval(state, 4000); setInterval(poll, 1200); poll();
 </script></html>"#;
+
+/// Буфер терминала мастера.
+static LOG: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+static CURSOR: AtomicU64 = AtomicU64::new(0);
+
+fn log_buffer() -> &'static Mutex<Vec<String>> {
+    LOG.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn push_log(line: impl Into<String>) {
+    let stamp = chrono::Local::now().format("%H:%M:%S");
+    let text = format!("[{stamp}] {}", line.into());
+    if let Ok(mut log) = log_buffer().lock() {
+        log.push(text);
+        if log.len() > 4000 {
+            log.drain(..1000);
+        }
+    }
+    CURSOR.store(
+        log_buffer().lock().map(|l| l.len() as u64).unwrap_or(0),
+        Ordering::Relaxed,
+    );
+}
 
 pub fn serve(port: u16) -> std::io::Result<()> {
     let listener = TcpListener::bind(("127.0.0.1", port))?;
-    println!("панель: http://127.0.0.1:{port}");
+    println!("мастер: http://127.0.0.1:{port}");
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
         std::thread::spawn(move || {
@@ -100,7 +249,6 @@ fn handle(mut stream: TcpStream) -> std::io::Result<()> {
             }
         }
     }
-
     let mut body = buf[header_end..].to_vec();
     while body.len() < content_length {
         let n = stream.read(&mut chunk)?;
@@ -111,17 +259,10 @@ fn handle(mut stream: TcpStream) -> std::io::Result<()> {
     }
     let body = String::from_utf8_lossy(&body).to_string();
 
-    let (status, text) = match (method.as_str(), path.as_str()) {
-        ("GET", "/") => (200, PAGE.to_string()),
-        ("GET", "/api/doctor") => (200, run(&["doctor"])),
-        ("GET", "/api/journal") => (200, run(&["journal", "tail", "-n", "60"])),
-        ("POST", "/api/activate") => (200, activate(&body)),
-        _ => (404, "not found".to_string()),
-    };
+    let (status, content_type, text) = route(&method, &path, &body);
 
     let response = format!(
-        "HTTP/1.1 {status} OK\r\nContent-Type: text/{}; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        if status == 200 { "html" } else { "plain" },
+        "HTTP/1.1 {status} OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         text.len(),
         text
     );
@@ -130,37 +271,190 @@ fn handle(mut stream: TcpStream) -> std::io::Result<()> {
     Ok(())
 }
 
-fn run(args: &[&str]) -> String {
-    match Command::new(std::env::current_exe().unwrap_or_else(|_| "cockpit".into()))
-        .args(args)
-        .output()
-    {
-        Ok(out) => {
-            let mut text = String::from_utf8_lossy(&out.stdout).to_string();
-            text.push_str(&String::from_utf8_lossy(&out.stderr));
-            text
+fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
+    match (method, path.split('?').next().unwrap_or(path)) {
+        ("GET", "/") => (200, "text/html; charset=utf-8", PAGE.to_string()),
+        ("GET", "/api/state") => (200, "application/json", state_json()),
+        ("GET", "/api/log") => {
+            let after = query(path, "after")
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(0);
+            let lines: Vec<String> = log_buffer()
+                .lock()
+                .map(|l| l.iter().skip(after).cloned().collect())
+                .unwrap_or_default();
+            let next = after + lines.len();
+            let json = serde_json::json!({ "next": next, "lines": lines });
+            (200, "application/json", json.to_string())
         }
-        Err(e) => format!("не запустить cockpit: {e}"),
+        ("POST", "/api/run") => {
+            let id = field(body, "id");
+            let ctx = ctx_from(body);
+            push_log(format!("▶ модуль {id}"));
+            std::thread::spawn(move || match crate::modules::run(&id, &ctx) {
+                Ok(out) => {
+                    for line in out.lines() {
+                        push_log(format!("  {line}"));
+                    }
+                    push_log(format!("■ {id}: готово"));
+                }
+                Err(e) => push_log(format!("✗ {id}: {e}")),
+            });
+            (200, "text/plain; charset=utf-8", String::new())
+        }
+        ("POST", "/api/pair") => {
+            let ssid = field(body, "ssid");
+            let password = field(body, "password");
+            let gain = field(body, "gain").parse::<f32>().unwrap_or(0.5);
+            let repeat = field(body, "repeat").parse::<u32>().unwrap_or(2);
+            push_log(format!("▶ звук: SSID={ssid} громкость={gain}"));
+            std::thread::spawn(move || play_pairing(&ssid, &password, gain, repeat));
+            (200, "text/plain; charset=utf-8", String::new())
+        }
+        _ => (404, "text/plain; charset=utf-8", "not found".to_string()),
     }
+}
+
+fn play_pairing(ssid: &str, password: &str, gain: f32, repeat: u32) {
+    use cockpit_pairing::{Credentials, PairingError};
+
+    let creds = Credentials::new(ssid, password);
+    let path = std::path::PathBuf::from("data").join("pair_sound.wav");
+    match cockpit_pairing::save_wav(&path, &creds, gain, 0, 0) {
+        Ok(()) => push_log(format!("  файл: {}", path.display())),
+        Err(e) => {
+            push_log(format!("✗ звук: {e}"));
+            return;
+        }
+    }
+    for i in 1..=repeat.max(1) {
+        push_log(format!("  проигрывание {i}/{repeat}"));
+        match cockpit_pairing::play(&path) {
+            Ok(()) => {}
+            Err(PairingError::NoPlayer(e)) => {
+                push_log(format!("✗ проигрыватель: {e}"));
+                return;
+            }
+            Err(e) => {
+                push_log(format!("✗ звук: {e}"));
+                return;
+            }
+        }
+        if i < repeat {
+            std::thread::sleep(std::time::Duration::from_secs(10));
+        }
+    }
+    push_log("■ звук: отыгран");
+}
+
+fn state_json() -> String {
+    let admin = is_admin();
+    let adb_ok = adb_alive();
+    let checks = vec![
+        serde_json::json!({ "ok": admin, "text": if admin { "права администратора" } else { "нужны права администратора (порт 80, hosts)" } }),
+        serde_json::json!({ "ok": port_free(80) || true, "text": "порт 80: проверяется модулем OTA" }),
+        serde_json::json!({ "ok": hosts_clean(), "text": if hosts_clean() { "hosts ноутбука чистый" } else { "в hosts остались записи от старых прокси" } }),
+        serde_json::json!({ "ok": adb_ok, "text": if adb_ok { "станция отвечает на ADB" } else { "станция не отвечает на ADB" } }),
+    ];
+    let modules: Vec<_> = MODULES
+        .iter()
+        .map(|m| {
+            serde_json::json!({
+                "id": m.id, "group": m.group, "title": m.title,
+                "summary": m.summary, "needs_adb": m.needs_adb
+            })
+        })
+        .collect();
+
+    serde_json::json!({ "admin": admin, "adb": adb_ok, "checks": checks, "modules": modules })
+        .to_string()
+}
+
+fn is_admin() -> bool {
+    #[cfg(windows)]
+    {
+        std::process::Command::new("net")
+            .arg("session")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+    #[cfg(not(windows))]
+    {
+        // На Linux достаточно проверки на root.
+        std::env::var("USER").map(|u| u == "root").unwrap_or(false)
+    }
+}
+
+fn adb_alive() -> bool {
+    use std::net::TcpStream;
+    use std::time::Duration;
+    let Ok(addr) = std::env::var("COCKPIT_STATION") else {
+        return TcpStream::connect_timeout(
+            &"192.168.137.217:5555".parse().expect("addr"),
+            Duration::from_millis(400),
+        )
+        .is_ok();
+    };
+    let Ok(addr) = addr.parse() else { return false };
+    TcpStream::connect_timeout(&addr, Duration::from_millis(400)).is_ok()
+}
+
+fn port_free(port: u16) -> bool {
+    TcpListener::bind(("0.0.0.0", port)).is_ok()
+}
+
+fn hosts_clean() -> bool {
+    let path =
+        std::path::PathBuf::from(std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".into()))
+            .join("System32\\drivers\\etc\\hosts");
+    match std::fs::read_to_string(path) {
+        Ok(text) => !text
+            .lines()
+            .any(|l| l.contains("192.168.137.1") && l.contains("yandex")),
+        Err(_) => true,
+    }
+}
+
+fn ctx_from(body: &str) -> ModuleCtx {
+    let mut ctx = ModuleCtx::default();
+    let addr = field(body, "addr");
+    if !addr.is_empty() {
+        ctx.addr = addr;
+    }
+    let ssid = field(body, "ssid");
+    if !ssid.is_empty() {
+        ctx.ssid = ssid;
+    }
+    let password = field(body, "password");
+    if password.is_empty() {
+        ctx.password = "11111111".to_string();
+    } else {
+        ctx.password = password;
+    }
+    ctx
 }
 
 fn field(body: &str, key: &str) -> String {
     body.split('&')
-        .filter_map(|pair| {
-            let (k, v) = pair.split_once('=')?;
-            if k == key {
-                Some(urldecode(v))
-            } else {
-                None
-            }
-        })
-        .next()
+        .filter_map(|pair| pair.split_once('='))
+        .find(|(k, _)| *k == key)
+        .map(|(_, v)| percent_decode(v))
         .unwrap_or_default()
 }
 
-fn urldecode(s: &str) -> String {
+fn query(path: &str, key: &str) -> Option<String> {
+    let query = path.split_once('?')?.1;
+    query
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .find(|(k, _)| *k == key)
+        .map(|(_, v)| v.to_string())
+}
+
+fn percent_decode(s: &str) -> String {
     let bytes = s.as_bytes();
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
         match bytes[i] {
@@ -180,52 +474,4 @@ fn urldecode(s: &str) -> String {
         }
     }
     String::from_utf8_lossy(&out).to_string()
-}
-
-fn activate(body: &str) -> String {
-    let addr = field(body, "addr");
-    let manifest = field(body, "manifest");
-    let platform = field(body, "platform");
-    let version = field(body, "version");
-    let firmware = field(body, "firmware");
-    let guard = field(body, "guard");
-    let ca = field(body, "ca");
-    let serve = field(body, "serve") == "1";
-
-    let mut args: Vec<String> = vec![
-        "activate".into(),
-        "--addr".into(),
-        addr,
-        "--manifest".into(),
-        manifest,
-        "--platform".into(),
-        platform,
-        "--version".into(),
-        version,
-        "--firmware".into(),
-        firmware,
-    ];
-    if !guard.trim().is_empty() {
-        args.push("--guard".into());
-        args.push(guard);
-    }
-    if serve {
-        args.push("--serve-ota".into());
-        if !ca.trim().is_empty() {
-            args.push("--ca-out".into());
-            args.push(ca);
-        }
-    }
-
-    match Command::new(std::env::current_exe().unwrap_or_else(|_| "cockpit".into()))
-        .args(&args)
-        .output()
-    {
-        Ok(out) => {
-            let mut text = String::from_utf8_lossy(&out.stdout).to_string();
-            text.push_str(&String::from_utf8_lossy(&out.stderr));
-            text
-        }
-        Err(e) => format!("не запустить cockpit: {e}"),
-    }
 }

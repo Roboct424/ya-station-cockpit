@@ -10,6 +10,7 @@ members = [
     "crates/ota",
     "crates/capture",
     "crates/device",
+    "crates/pairing",
     "crates/cli",
 ]
 
@@ -46,6 +47,7 @@ cockpit-intercept = { path = "crates/intercept" }
 cockpit-ota = { path = "crates/ota" }
 cockpit-capture = { path = "crates/capture" }
 cockpit-device = { path = "crates/device" }
+cockpit-pairing = { path = "crates/pairing" }
 
 [profile.release]
 lto = "thin"

@@ -207,9 +207,11 @@ dependencies = [
  "cockpit-intercept",
  "cockpit-net",
  "cockpit-ota",
+ "cockpit-pairing",
  "cockpit-scenarios",
  "notify",
  "serde_json",
+ "sha2",
  "tracing",
  "tracing-subscriber",
 ]
@@ -282,6 +284,13 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "thiserror",
+]
+
+[[package]]
+name = "cockpit-pairing"
+version = "0.1.0"
+dependencies = [
  "thiserror",
 ]
 

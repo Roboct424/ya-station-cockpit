@@ -10,6 +10,7 @@ use cockpit_config::{Config, LiveConfig};
 use cockpit_core::{CockpitError, Context, Journal, JsonlJournal, Record, Runner, Step};
 use cockpit_scenarios::Scenario;
 
+mod modules;
 mod selfcheck;
 mod ui;
 
@@ -114,6 +115,11 @@ enum Cmd {
     Capture {
         #[command(subcommand)]
         cmd: CaptureCmd,
+    },
+    /// Звуковое сопряжение: сгенерировать и проиграть код
+    Pair {
+        #[command(subcommand)]
+        cmd: PairCmd,
     },
     /// Локальный сервер OTA/sync: отдаёт прошивку и конфиг с adbd
     LocalOta {
@@ -332,6 +338,43 @@ enum CaptureCmd {
 }
 
 #[derive(Subcommand)]
+enum PairCmd {
+    /// Собрать и (по желанию) проиграть код сопряжения
+    Sound {
+        #[arg(long)]
+        ssid: String,
+        #[arg(long, default_value = "")]
+        password: String,
+        /// Токен в кадре (станция его не проверяет)
+        #[arg(long, default_value = "localpair0000000")]
+        token: String,
+        /// Громкость: 0.5 — рабочая, выше 0.6 микрофон перегружается
+        #[arg(long, default_value_t = 0.5)]
+        gain: f32,
+        /// Сколько раз повторить
+        #[arg(long, default_value_t = 2)]
+        repeat: u32,
+        /// Пауза между повторами, секунды
+        #[arg(long, default_value_t = 10.0)]
+        gap: f64,
+        #[arg(long, default_value = "data/pair_sound.wav")]
+        out: PathBuf,
+        /// Только собрать файл, не играть
+        #[arg(long)]
+        no_play: bool,
+    },
+    /// Показать кадр в hex (диагностика кодировщика)
+    Frame {
+        #[arg(long)]
+        ssid: String,
+        #[arg(long, default_value = "")]
+        password: String,
+        #[arg(long, default_value = "localpair0000000")]
+        token: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum NetCmd {
     /// Какой адаптер выбран для этой платформы
     Info,
@@ -506,6 +549,7 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
         ),
         Cmd::Device { cmd } => run_device(cmd),
         Cmd::Ota { cmd } => run_ota(cmd),
+        Cmd::Pair { cmd } => run_pair(cmd),
         Cmd::Telemetry { cmd } => run_telemetry(&cfg, cmd),
         Cmd::Capture { cmd } => run_capture(&cfg, cmd),
         Cmd::Ui { port } => {
@@ -1076,6 +1120,66 @@ fn run_capture(cfg: &Config, cmd: CaptureCmd) -> cockpit_core::Result<ExitCode> 
 
 fn now_stamp() -> String {
     chrono::Utc::now().to_rfc3339()
+}
+
+/// Звуковое сопряжение: кодек, файл, воспроизведение.
+fn run_pair(cmd: PairCmd) -> cockpit_core::Result<ExitCode> {
+    use cockpit_pairing::{Credentials, PairingError};
+
+    let fail = |e: PairingError| CockpitError::Internal(e.to_string());
+
+    match cmd {
+        PairCmd::Frame {
+            ssid,
+            password,
+            token,
+        } => {
+            let creds = Credentials {
+                token,
+                ..Credentials::new(ssid, password)
+            };
+            let frame = cockpit_pairing::build_frame(&creds).map_err(fail)?;
+            println!(
+                "кадр ({} Б): {}",
+                frame.len(),
+                frame.iter().map(|b| format!("{b:02x}")).collect::<String>()
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        PairCmd::Sound {
+            ssid,
+            password,
+            token,
+            gain,
+            repeat,
+            gap,
+            out,
+            no_play,
+        } => {
+            let creds = Credentials {
+                token,
+                ..Credentials::new(ssid, password)
+            };
+            cockpit_pairing::save_wav(&out, &creds, gain, 0, 0).map_err(fail)?;
+            let size = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
+            println!("файл: {} ({size} Б)", out.display());
+            println!("громкость: {gain}");
+
+            if no_play {
+                return Ok(ExitCode::SUCCESS);
+            }
+
+            for i in 1..=repeat.max(1) {
+                println!("проигрывание {i}/{repeat}");
+                cockpit_pairing::play(&out).map_err(fail)?;
+                if i < repeat {
+                    std::thread::sleep(Duration::from_secs_f64(gap.max(0.0)));
+                }
+            }
+            println!("готово");
+            Ok(ExitCode::SUCCESS)
+        }
+    }
 }
 
 /// Где лежит постоянный ключ локального CA.

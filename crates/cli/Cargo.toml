@@ -24,3 +24,5 @@ cockpit-intercept.workspace = true
 cockpit-ota.workspace = true
 cockpit-capture.workspace = true
 cockpit-device.workspace = true
+cockpit-pairing.workspace = true
+sha2.workspace = true
