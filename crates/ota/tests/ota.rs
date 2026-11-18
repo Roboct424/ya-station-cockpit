@@ -103,3 +103,29 @@ fn fetch_rejects_bad_crc() {
     assert!(matches!(err, cockpit_ota::OtaError::Crc { .. }), "{err}");
     fs::remove_dir_all(dir).ok();
 }
+
+#[test]
+fn firmware_db_verifies_hash() {
+    let dir = temp_dir("db");
+    let payload = b"firmware-bytes".to_vec();
+    let file = dir.join("fw.zip");
+    fs::write(&file, &payload).unwrap();
+
+    let db_text = format!(
+        r#"{{"schema":1,"firmwares":[{{"platform":"p","version":"1.0","size":{},"crc32":{},"sha256":"{}","adb":true}}]}}"#,
+        payload.len(),
+        crc32(&payload),
+        cockpit_ota::sha256_hex(&payload)
+    );
+    fs::write(dir.join("db.json"), db_text).unwrap();
+
+    let db = cockpit_ota::FirmwareDb::load(dir.join("db.json")).unwrap();
+    let entry = db.find("p", "1.0").unwrap();
+    assert!(cockpit_ota::verify_file(&file, entry).is_ok());
+
+    let bad = dir.join("bad.zip");
+    fs::write(&bad, b"other").unwrap();
+    assert!(cockpit_ota::verify_file(&bad, entry).is_err());
+
+    fs::remove_dir_all(dir).ok();
+}

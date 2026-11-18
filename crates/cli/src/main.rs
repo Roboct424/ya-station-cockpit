@@ -174,6 +174,24 @@ enum OtaCmd {
         #[arg(long, default_value = "data/ota")]
         store: PathBuf,
     },
+    /// База проверенных прошивок (по хешам)
+    Db {
+        #[arg(long, default_value = "firmware/db.json")]
+        db: PathBuf,
+        #[arg(long)]
+        platform: Option<String>,
+    },
+    /// Сверить файл прошивки с базой
+    Verify {
+        #[arg(long, default_value = "firmware/db.json")]
+        db: PathBuf,
+        #[arg(long)]
+        platform: String,
+        #[arg(long)]
+        version: String,
+        #[arg(long)]
+        file: PathBuf,
+    },
 }
 
 #[derive(Subcommand)]
@@ -647,6 +665,50 @@ fn run_ota(cmd: OtaCmd) -> cockpit_core::Result<ExitCode> {
                 prov.size, prov.crc32, prov.sha256
             );
             Ok(ExitCode::SUCCESS)
+        }
+        OtaCmd::Db { db, platform } => {
+            let base = cockpit_ota::FirmwareDb::load(&db)
+                .map_err(|e| CockpitError::Config(format!("{}: {e}", db.display())))?;
+            let items: Vec<_> = match &platform {
+                Some(p) => base.for_platform(p),
+                None => base.firmwares.iter().collect(),
+            };
+            if items.is_empty() {
+                println!("в базе нет записей");
+            }
+            for f in items {
+                println!(
+                    "{} {} · {} МБ · adb={} · {}",
+                    f.platform,
+                    f.version,
+                    f.size / 1_048_576,
+                    f.adb,
+                    f.sha256.get(..12).unwrap_or("")
+                );
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        OtaCmd::Verify {
+            db,
+            platform,
+            version,
+            file,
+        } => {
+            let base = cockpit_ota::FirmwareDb::load(&db)
+                .map_err(|e| CockpitError::Config(format!("{}: {e}", db.display())))?;
+            let entry = base
+                .find(&platform, &version)
+                .ok_or_else(|| CockpitError::Config(format!("в базе нет {platform} {version}")))?;
+            match cockpit_ota::verify_file(&file, entry) {
+                Ok(()) => {
+                    println!("файл совпадает с базой: {}", file.display());
+                    Ok(ExitCode::SUCCESS)
+                }
+                Err(e) => {
+                    println!("файл НЕ совпадает: {e}");
+                    Ok(ExitCode::FAILURE)
+                }
+            }
         }
         OtaCmd::List { store } => {
             let items = list_store(&store).map_err(|e| CockpitError::Config(e.to_string()))?;

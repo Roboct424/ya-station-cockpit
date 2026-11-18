@@ -299,3 +299,76 @@ pub fn list_store(store: impl AsRef<Path>) -> Result<Vec<Provenance>, OtaError> 
 pub fn stored_file(store: impl AsRef<Path>, platform: &str, version: &str) -> PathBuf {
     store.as_ref().join(platform).join(format!("{version}.zip"))
 }
+
+/// База проверенных прошивок: хеши и совместимость.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct FirmwareDb {
+    pub schema: u32,
+    #[serde(default)]
+    pub firmwares: Vec<FirmwareEntry>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct FirmwareEntry {
+    pub platform: String,
+    pub version: String,
+    pub size: u64,
+    pub crc32: u32,
+    pub sha256: String,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub mirrors: Vec<String>,
+    #[serde(default)]
+    pub adb: bool,
+    #[serde(default)]
+    pub notes: Option<String>,
+}
+
+impl FirmwareDb {
+    pub fn load(path: impl AsRef<Path>) -> Result<Self, OtaError> {
+        let text = fs::read_to_string(path.as_ref())?;
+        let text = text.trim_start_matches('\u{feff}');
+        serde_json::from_str(text).map_err(|e| OtaError::Manifest(e.to_string()))
+    }
+
+    pub fn find(&self, platform: &str, version: &str) -> Option<&FirmwareEntry> {
+        self.firmwares
+            .iter()
+            .find(|f| f.platform == platform && f.version == version)
+    }
+
+    pub fn for_platform(&self, platform: &str) -> Vec<&FirmwareEntry> {
+        self.firmwares
+            .iter()
+            .filter(|f| f.platform == platform)
+            .collect()
+    }
+}
+
+/// Проверяет файл по записи базы: размер, CRC32 и SHA-256.
+pub fn verify_file(path: impl AsRef<Path>, entry: &FirmwareEntry) -> Result<(), OtaError> {
+    let data = fs::read(path.as_ref())?;
+    if data.len() as u64 != entry.size {
+        return Err(OtaError::Manifest(format!(
+            "размер {} != {}",
+            data.len(),
+            entry.size
+        )));
+    }
+    let crc = crc32(&data);
+    if crc != entry.crc32 {
+        return Err(OtaError::Crc {
+            expected: entry.crc32,
+            actual: crc,
+        });
+    }
+    let sha = sha256_hex(&data);
+    if sha != entry.sha256 {
+        return Err(OtaError::Manifest(format!(
+            "SHA-256 не совпал: ожидали {}, получили {sha}",
+            entry.sha256
+        )));
+    }
+    Ok(())
+}
