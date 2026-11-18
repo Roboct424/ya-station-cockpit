@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Что модулю нужно знать про окружение.
+#[derive(Clone)]
 pub struct ModuleCtx {
     pub adb: String,
     pub addr: String,
@@ -30,8 +31,105 @@ impl Default for ModuleCtx {
     }
 }
 
+/// Каталог, куда программа кладёт свои platform-tools.
+fn adb_home() -> PathBuf {
+    PathBuf::from("data").join("adb")
+}
+
+/// Гарантирует, что adb есть: ищет локально, иначе скачивает platform-tools.
+pub fn ensure_adb() -> Result<PathBuf, String> {
+    let local = adb_home().join("adb.exe");
+    if local.exists() {
+        return Ok(local);
+    }
+    // Чужой adb тоже годится, но копируем его к себе: программа должна
+    // работать, даже если исходную папку удалят.
+    if let Some(found) = find_adb() {
+        let dir = adb_home();
+        std::fs::create_dir_all(&dir).map_err(|e| format!("каталог adb: {e}"))?;
+        if let Some(parent) = found.parent() {
+            for name in ["adb.exe", "AdbWinApi.dll", "AdbWinUsbApi.dll"] {
+                let from = parent.join(name);
+                if from.exists() {
+                    let _ = std::fs::copy(&from, dir.join(name));
+                }
+            }
+        }
+        if dir.join("adb.exe").exists() {
+            return Ok(dir.join("adb.exe"));
+        }
+        return Ok(found);
+    }
+    download_adb().map(|dir| dir.join("adb.exe"))
+}
+
+fn download_adb() -> Result<PathBuf, String> {
+    let dir = adb_home();
+    std::fs::create_dir_all(&dir).map_err(|e| format!("каталог adb: {e}"))?;
+    let zip = dir.join("platform-tools.zip");
+    let url = "https://dl.google.com/android/repository/platform-tools-latest-windows.zip";
+
+    let status = Command::new("curl")
+        .args(["-L", "--fail", "-o"])
+        .arg(&zip)
+        .arg(url)
+        .status()
+        .map_err(|e| format!("curl: {e}"))?;
+    if !status.success() {
+        return Err("не удалось скачать platform-tools".to_string());
+    }
+
+    let unpack = dir.join("unpacked");
+    let _ = std::fs::remove_dir_all(&unpack);
+    let script = format!(
+        "Expand-Archive -Path '{}' -DestinationPath '{}' -Force",
+        zip.display(),
+        unpack.display()
+    );
+    let status = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .status()
+        .map_err(|e| format!("распаковка: {e}"))?;
+    if !status.success() {
+        return Err("не удалось распаковать platform-tools".to_string());
+    }
+
+    // Переносим только то, что нужно adb.
+    let inner = unpack.join("platform-tools");
+    for name in ["adb.exe", "AdbWinApi.dll", "AdbWinUsbApi.dll"] {
+        let from = inner.join(name);
+        if from.exists() {
+            std::fs::copy(&from, dir.join(name)).map_err(|e| format!("копирование {name}: {e}"))?;
+        }
+    }
+    let _ = std::fs::remove_file(&zip);
+    let _ = std::fs::remove_dir_all(&unpack);
+
+    if !dir.join("adb.exe").exists() {
+        return Err("в архиве не нашёлся adb.exe".to_string());
+    }
+    Ok(dir)
+}
+
+fn adb_ensure() -> Result<String, String> {
+    let path = ensure_adb()?;
+    let out = Command::new(&path)
+        .arg("version")
+        .output()
+        .map_err(|e| format!("adb не запускается: {e}"))?;
+    Ok(format!(
+        "adb: {}\n{}",
+        path.display(),
+        String::from_utf8_lossy(&out.stdout)
+    ))
+}
+
 /// Ищет adb: переменная окружения, PATH, Android SDK, типовые папки.
 pub fn find_adb() -> Option<PathBuf> {
+    let own = adb_home().join("adb.exe");
+    if own.exists() {
+        return Some(own);
+    }
     if let Ok(path) = std::env::var("COCKPIT_ADB") {
         let p = PathBuf::from(path);
         if p.exists() {
@@ -163,6 +261,13 @@ pub const MODULES: &[Module] = &[
         needs_adb: true,
     },
     Module {
+        id: "adb.ensure",
+        group: "ADB",
+        title: "ADB внутри программы",
+        summary: "Скачивает platform-tools в data/adb при первом запуске и проверяет",
+        needs_adb: false,
+    },
+    Module {
         id: "verify.configured",
         group: "Проверка",
         title: "Проверить настройку",
@@ -179,6 +284,11 @@ pub fn run(id: &str, ctx: &ModuleCtx) -> Result<String, String> {
     let Some(module) = find(id) else {
         return Err(format!("неизвестный модуль: {id}"));
     };
+    let mut ctx = ctx.clone();
+    if module.needs_adb {
+        ctx.adb = ensure_adb()?.to_string_lossy().to_string();
+    }
+    let ctx = &ctx;
     if module.needs_adb && !adb_reachable(ctx) {
         return Err(format!(
             "станция не отвечает на {} — включите ADB",
@@ -194,6 +304,7 @@ pub fn run(id: &str, ctx: &ModuleCtx) -> Result<String, String> {
         "clock.sync" => clock_sync(ctx),
         "ota.serve" => ota_serve(ctx),
         "adb.guard" => adb_guard(ctx),
+        "adb.ensure" => adb_ensure(),
         "verify.configured" => verify_configured(ctx),
         _ => Err(format!("модуль {id} не реализован")),
     }

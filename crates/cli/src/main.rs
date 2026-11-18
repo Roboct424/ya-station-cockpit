@@ -116,6 +116,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: CaptureCmd,
     },
+    /// Модули мастера: список и запуск
+    Module {
+        #[command(subcommand)]
+        cmd: ModuleCmd,
+    },
     /// Звуковое сопряжение: сгенерировать и проиграть код
     Pair {
         #[command(subcommand)]
@@ -338,6 +343,22 @@ enum CaptureCmd {
 }
 
 #[derive(Subcommand)]
+enum ModuleCmd {
+    /// Показать плитки модулей
+    List,
+    /// Выполнить модуль по идентификатору
+    Run {
+        id: String,
+        #[arg(long)]
+        addr: Option<String>,
+        #[arg(long)]
+        ssid: Option<String>,
+        #[arg(long)]
+        password: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum PairCmd {
     /// Собрать и (по желанию) проиграть код сопряжения
     Sound {
@@ -550,6 +571,7 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
         Cmd::Device { cmd } => run_device(cmd),
         Cmd::Ota { cmd } => run_ota(cmd),
         Cmd::Pair { cmd } => run_pair(cmd),
+        Cmd::Module { cmd } => run_module_cmd(cmd),
         Cmd::Telemetry { cmd } => run_telemetry(&cfg, cmd),
         Cmd::Capture { cmd } => run_capture(&cfg, cmd),
         Cmd::Ui { port } => {
@@ -835,9 +857,15 @@ fn run_local_ota(
 
     let download_url = format!("https://quasar.yandex.net/firmware/{name}");
     let routes = LocalRoutes {
-        check_updates: Some(cockpit_ota::check_updates_json(&entry, &download_url)),
-        sync_info: Some(cockpit_ota::sync_info_json()),
-        firmware: Some((firmware.to_path_buf(), name.clone())),
+        rules: cockpit_intercept::tls::standard_rules(
+            true,
+            Some(cockpit_ota::check_updates_json(&entry, &download_url)),
+            Some(cockpit_ota::sync_info_json()),
+            Some((firmware.to_path_buf(), name.clone())),
+        ),
+        check_updates: None,
+        sync_info: None,
+        firmware: None,
         forward: if forward {
             Some(cockpit_intercept::tls::ForwardOptions::default())
         } else {
@@ -959,9 +987,15 @@ fn run_activate(
             .to_string();
         let url = format!("https://quasar.yandex.net/firmware/{name}");
         let routes = cockpit_intercept::tls::LocalRoutes {
-            check_updates: Some(cockpit_ota::check_updates_json(&entry, &url)),
-            sync_info: Some(cockpit_ota::sync_info_json()),
-            firmware: Some((file, name)),
+            rules: cockpit_intercept::tls::standard_rules(
+                true,
+                Some(cockpit_ota::check_updates_json(&entry, &url)),
+                Some(cockpit_ota::sync_info_json()),
+                Some((file, name)),
+            ),
+            check_updates: None,
+            sync_info: None,
+            firmware: None,
             forward: Some(cockpit_intercept::tls::ForwardOptions::default()),
             local_auth: true,
         };
@@ -1120,6 +1154,46 @@ fn run_capture(cfg: &Config, cmd: CaptureCmd) -> cockpit_core::Result<ExitCode> 
 
 fn now_stamp() -> String {
     chrono::Utc::now().to_rfc3339()
+}
+
+/// Модули мастера из командной строки.
+fn run_module_cmd(cmd: ModuleCmd) -> cockpit_core::Result<ExitCode> {
+    match cmd {
+        ModuleCmd::List => {
+            for m in modules::MODULES {
+                println!("{:<18} {:<14} {}", m.id, m.group, m.title);
+                println!("{:<18} {}", "", m.summary);
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        ModuleCmd::Run {
+            id,
+            addr,
+            ssid,
+            password,
+        } => {
+            let mut ctx = modules::ModuleCtx::default();
+            if let Some(addr) = addr {
+                ctx.addr = addr;
+            }
+            if let Some(ssid) = ssid {
+                ctx.ssid = ssid;
+            }
+            if let Some(password) = password {
+                ctx.password = password;
+            }
+            match modules::run(&id, &ctx) {
+                Ok(out) => {
+                    print!("{out}");
+                    Ok(ExitCode::SUCCESS)
+                }
+                Err(e) => {
+                    println!("ошибка: {e}");
+                    Ok(ExitCode::FAILURE)
+                }
+            }
+        }
+    }
 }
 
 /// Звуковое сопряжение: кодек, файл, воспроизведение.

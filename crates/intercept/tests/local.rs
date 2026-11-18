@@ -69,9 +69,15 @@ fn serves_check_updates_and_sync() {
         "127.0.0.1:0".parse().unwrap(),
         ca.clone(),
         LocalRoutes {
-            check_updates: Some(check),
-            sync_info: Some(sync),
-            firmware: Some((fw, "fw.zip".into())),
+            rules: cockpit_intercept::tls::standard_rules(
+                true,
+                Some(check),
+                Some(sync),
+                Some((fw, "fw.zip".into())),
+            ),
+            check_updates: None,
+            sync_info: None,
+            firmware: None,
             forward: None,
             local_auth: true,
         },

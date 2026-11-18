@@ -237,8 +237,86 @@ impl Default for ForwardOptions {
     }
 }
 
+/// Что делать с запросом, попавшим под правило.
+pub enum RouteAction {
+    /// Ответ 204 (проверка связи).
+    NoContent,
+    /// Готовый JSON.
+    Json(Vec<u8>),
+    /// Файл прошивки с поддержкой Range.
+    Firmware { file: PathBuf, name: String },
+    /// Отдать в настоящее облако.
+    Proxy,
+    /// Ответить 403 и не пускать дальше.
+    Block,
+}
+
+/// Правило маршрутизации: подстрока пути → действие.
+pub struct RouteRule {
+    pub pattern: String,
+    pub action: RouteAction,
+}
+
+/// Стандартная таблица: связь, токен, регистрация, OTA, sync, прошивка,
+/// всё остальное — в облако.
+pub fn standard_rules(
+    local_auth: bool,
+    check_updates: Option<Vec<u8>>,
+    sync_info: Option<Vec<u8>>,
+    firmware: Option<(PathBuf, String)>,
+) -> Vec<RouteRule> {
+    let mut rules = Vec::new();
+    rules.push(RouteRule {
+        pattern: "generate_204".to_string(),
+        action: RouteAction::NoContent,
+    });
+    rules.push(RouteRule {
+        pattern: "/connectivity".to_string(),
+        action: RouteAction::NoContent,
+    });
+    if local_auth {
+        rules.push(RouteRule {
+            pattern: "/token".to_string(),
+            action: RouteAction::Json(
+                br#"{"access_token":"y0__localCockpit","expires_in":31536000,"token_type":"bearer","uid":1000000001,"refresh_token":"local:refresh:0"}"#.to_vec(),
+            ),
+        });
+        rules.push(RouteRule {
+            pattern: "/register".to_string(),
+            action: RouteAction::Json(
+                br#"{"status":"ok","remoteActivation":true,"hasCriticalUpdate":false}"#.to_vec(),
+            ),
+        });
+    }
+    if let Some(body) = check_updates {
+        rules.push(RouteRule {
+            pattern: "/check_updates".to_string(),
+            action: RouteAction::Json(body),
+        });
+    }
+    if let Some(body) = sync_info {
+        rules.push(RouteRule {
+            pattern: "/get_sync_info".to_string(),
+            action: RouteAction::Json(body),
+        });
+    }
+    if let Some((file, name)) = firmware {
+        rules.push(RouteRule {
+            pattern: "/firmware/".to_string(),
+            action: RouteAction::Firmware { file, name },
+        });
+    }
+    rules.push(RouteRule {
+        pattern: "*".to_string(),
+        action: RouteAction::Proxy,
+    });
+    rules
+}
+
 /// Локальные ответы вместо облака: OTA и sync.
 pub struct LocalRoutes {
+    /// Таблица маршрутов: первое совпадение выигрывает, `*` — запасное.
+    pub rules: Vec<RouteRule>,
     pub check_updates: Option<Vec<u8>>,
     pub sync_info: Option<Vec<u8>>,
     /// (путь к файлу, имя для URL)
@@ -638,44 +716,43 @@ fn serve_local(
     let (method, path, headers, raw) = read_request(&mut tls)?;
     eprintln!("[local] {method} {path}");
 
-    // GOTCHA: G-032 — путь приходит с query-строкой
-    // (`/register?name=quasar&device_id=...`), поэтому маршруты сравниваем
-    // по части до `?`. Иначе запрос уходит в настоящее облако и получает 403.
-    let path_only = path.split('?').next().unwrap_or(&path);
+    // GOTCHA: G-032 — путь приходит с query-строкой, поэтому сравнение идёт
+    // по подстроке, а не по равенству.
+    for rule in &routes.rules {
+        let hit = rule.pattern == "*" || path.contains(&rule.pattern);
+        if !hit {
+            continue;
+        }
+        match &rule.action {
+            RouteAction::NoContent => {
+                return write_response(&mut tls, 204, "text/plain", b"", None)
+            }
+            RouteAction::Json(body) => {
+                return write_response(&mut tls, 200, "application/json", body, None)
+            }
+            RouteAction::Firmware { file, name } => {
+                if path.contains(name.as_str()) || path.contains("/firmware/") {
+                    let data = std::fs::read(file)?;
+                    let range = headers.get("range").cloned();
+                    return write_firmware(&mut tls, &data, range.as_deref());
+                }
+            }
+            RouteAction::Block => {
+                return write_response(
+                    &mut tls,
+                    403,
+                    "application/json",
+                    b"{\"status\":\"blocked\"}",
+                    None,
+                )
+            }
+            RouteAction::Proxy => {
+                return forward_request(tls, &raw, &host, &routes_forward(&routes))
+            }
+        }
+    }
 
-    if path.contains("generate_204") || path.contains("/gen_204") || path.contains("/connectivity")
-    {
-        return write_response(&mut tls, 204, "text/plain", b"", None);
-    }
-    if routes.local_auth && path_only.ends_with("/token") {
-        let body = br#"{"access_token":"y0__localCockpit","expires_in":31536000,"token_type":"bearer","uid":1000000001,"refresh_token":"local:refresh:0"}"#;
-        return write_response(&mut tls, 200, "application/json", body, None);
-    }
-    // Регистрация «в себе»: станция считает аккаунт привязанным, облако не нужно.
-    if routes.local_auth && path_only.ends_with("/register") {
-        let body = br#"{"status":"ok","remoteActivation":true,"hasCriticalUpdate":false}"#;
-        return write_response(&mut tls, 200, "application/json", body, None);
-    }
-    if path.contains("/check_updates") {
-        if let Some(body) = &routes.check_updates {
-            return write_response(&mut tls, 200, "application/json", body, None);
-        }
-    }
-    if path.contains("/get_sync_info") {
-        if let Some(body) = &routes.sync_info {
-            return write_response(&mut tls, 200, "application/json", body, None);
-        }
-    }
-    if let Some((file, name)) = &routes.firmware {
-        if path.contains(name) || path.contains("/firmware/") {
-            let data = std::fs::read(file)?;
-            let range = headers.get("range").cloned();
-            return write_firmware(&mut tls, &data, range.as_deref());
-        }
-    }
-
-    // Не наш путь: отдаём в настоящее облако, иначе станция считает,
-    // что интернета нет (G-023).
+    // Правила не совпали: по умолчанию отдаём в облако, если это разрешено.
     if let Some(options) = &routes.forward {
         return forward_request(tls, &raw, &host, options);
     }
@@ -687,6 +764,18 @@ fn serve_local(
         b"{\"status\":\"not_found\"}",
         None,
     )
+}
+
+/// Настройки форвардинга для правила `Proxy`.
+fn routes_forward(routes: &LocalRoutes) -> ForwardOptions {
+    match &routes.forward {
+        Some(opts) => ForwardOptions {
+            upstream_port: opts.upstream_port,
+            roots: opts.roots.clone(),
+            resolve_override: opts.resolve_override.clone(),
+        },
+        None => ForwardOptions::default(),
+    }
 }
 
 /// Проксирует запрос в настоящее облако поверх нового TLS-соединения.

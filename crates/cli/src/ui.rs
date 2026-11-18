@@ -206,6 +206,47 @@ fn push_log(line: impl Into<String>) {
     );
 }
 
+/// Поднимает права: если мы не администратор — перезапускает себя через UAC.
+///
+/// Возвращает `true`, если работаем дальше на месте.
+pub fn ensure_admin() -> bool {
+    if is_admin() {
+        return true;
+    }
+    if std::env::var("COCKPIT_ELEVATED").is_ok() {
+        return true;
+    }
+
+    #[cfg(windows)]
+    {
+        let Ok(exe) = std::env::current_exe() else {
+            return true;
+        };
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        let quoted = args
+            .iter()
+            .map(|a| format!("'{}'", a.replace('\'', "''")))
+            .collect::<Vec<_>>()
+            .join(",");
+        let script = format!(
+            "$env:COCKPIT_ELEVATED='1'; Start-Process -Verb RunAs -FilePath '{}' -ArgumentList {}",
+            exe.display(),
+            quoted
+        );
+        let launched = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if launched {
+            println!("мастер запущен с правами администратора в новом окне");
+            return false;
+        }
+        println!("права администратора не выданы — часть модулей будет недоступна");
+    }
+    true
+}
+
 pub fn serve(port: u16) -> std::io::Result<()> {
     let listener = TcpListener::bind(("127.0.0.1", port))?;
     println!("мастер: http://127.0.0.1:{port}");
