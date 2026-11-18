@@ -326,6 +326,15 @@ enum CaptureCmd {
 enum NetCmd {
     /// Какой адаптер выбран для этой платформы
     Info,
+    /// Поднять точку доступа с нашим SSID и паролем
+    Hotspot {
+        #[arg(long, default_value = "YaRig")]
+        ssid: String,
+        #[arg(long, default_value = "11111111")]
+        password: String,
+    },
+    /// Остановить точку доступа
+    HotspotStop,
 }
 
 fn main() -> ExitCode {
@@ -401,6 +410,29 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
         },
 
         Cmd::Net { cmd } => match cmd {
+            NetCmd::Hotspot { ssid, password } => {
+                let adapter = cockpit_net::default_adapter();
+                match adapter.start_hotspot(&cockpit_net::ApConfig::new(ssid, password)) {
+                    Ok(h) => println!("точка доступа: SSID задан, состояние {}", h.iface),
+                    Err(e) => {
+                        println!("не удалось: {e}");
+                        if let Some(hint) = e.hint() {
+                            println!("  подсказка: {hint}");
+                        }
+                    }
+                }
+                Ok(ExitCode::SUCCESS)
+            }
+            NetCmd::HotspotStop => {
+                let adapter = cockpit_net::default_adapter();
+                match adapter.stop_hotspot(&cockpit_net::ApHandle {
+                    iface: "mobile-hotspot".into(),
+                }) {
+                    Ok(()) => println!("точка доступа остановлена"),
+                    Err(e) => println!("не удалось: {e}"),
+                }
+                Ok(ExitCode::SUCCESS)
+            }
             NetCmd::Info => {
                 let adapter = cockpit_net::default_adapter();
                 println!("адаптер: {}", adapter.name());

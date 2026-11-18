@@ -8,6 +8,8 @@
 //! Возвращаем `NotImplemented` — честнее, чем «сделали вид».
 
 pub mod sys;
+#[cfg(windows)]
+mod winrt_hotspot;
 
 use std::collections::HashMap;
 use std::fs;
@@ -155,30 +157,61 @@ impl NetAdapter for WindowsAdapter {
     }
 
     fn start_hotspot(&self, cfg: &ApConfig) -> Result<ApHandle, NetError> {
-        // Легаси hostednetwork: работает не на всех драйверах. WinRT-путь
-        // (NetworkOperatorTetheringManager) — следующий шаг, см. DEVLOG.
-        let set = CommandSpec::new("netsh").args([
-            "wlan",
-            "set",
-            "hostednetwork",
-            "mode=allow",
-            &format!("ssid={}", cfg.ssid),
-            &format!("key={}", cfg.password),
-        ]);
-        self.runner.run(&set)?;
-
-        let start = CommandSpec::new("netsh").args(["wlan", "start", "hostednetwork"]);
-        self.runner.run(&start)?;
-
-        Ok(ApHandle {
-            iface: "hostednetwork".to_string(),
-        })
+        #[cfg(windows)]
+        {
+            match winrt_hotspot::start(cfg) {
+                Ok(state) => {
+                    return Ok(ApHandle {
+                        iface: format!("mobile-hotspot ({state})"),
+                    })
+                }
+                Err(winrt_err) => {
+                    // Запасной путь: легаси hostednetwork (нужен администратор).
+                    let set = CommandSpec::new("netsh").args([
+                        "wlan",
+                        "set",
+                        "hostednetwork",
+                        "mode=allow",
+                        &format!("ssid={}", cfg.ssid),
+                        &format!("key={}", cfg.password),
+                    ]);
+                    if self.runner.run(&set).is_ok()
+                        && self
+                            .runner
+                            .run(&CommandSpec::new("netsh").args([
+                                "wlan",
+                                "start",
+                                "hostednetwork",
+                            ]))
+                            .is_ok()
+                    {
+                        return Ok(ApHandle {
+                            iface: "hostednetwork".to_string(),
+                        });
+                    }
+                    return Err(NetError::Os(format!(
+                        "WinRT: {winrt_err}; netsh: нет прав или драйвер не поддерживает"
+                    )));
+                }
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = cfg;
+            Err(NetError::NotImplemented("hotspot"))
+        }
     }
 
     fn stop_hotspot(&self, _handle: &ApHandle) -> Result<(), NetError> {
-        let stop = CommandSpec::new("netsh").args(["wlan", "stop", "hostednetwork"]);
-        self.runner.run(&stop)?;
-        Ok(())
+        #[cfg(windows)]
+        {
+            winrt_hotspot::stop()?;
+            return Ok(());
+        }
+        #[cfg(not(windows))]
+        {
+            Err(NetError::NotImplemented("hotspot"))
+        }
     }
 
     fn set_dns(&self, iface: &str, dns: IpAddr) -> Result<(), NetError> {
