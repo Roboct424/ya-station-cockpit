@@ -153,6 +153,7 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
         <label>Адрес для станции</label>
         <input type="text" id="eth_ip" value="192.168.137.1">
         <button class="act" id="btnEth" onclick="setEthernet()">Назначить адрес</button>
+        <button class="act ghost" id="btnShare" onclick="enableShare()">Включить общий доступ (DHCP)</button>
         <span id="r_eth" class="chip wait">не выполнялось</span>
       </div>
       <div class="col"><p class="hint" id="eth_hint"></p></div>
@@ -266,6 +267,8 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
     <span id="r_guard" class="chip wait">не выполнялось</span>
     <button class="act" id="btnC" onclick="caInstall()">Установить наш CA</button>
     <span id="r_ca" class="chip wait">не выполнялось</span>
+    <button class="act" id="btnCleanAll" onclick="cleanupAll()">Убрать всё за собой</button>
+    <span id="r_cleanall" class="chip wait">не выполнялось</span>
     <pre id="o_maint" style="height:210px;margin-top:10px">—</pre>
   </div>
 </section>
@@ -341,6 +344,15 @@ async function loadAdapters() {
   const sel = $('adapter');
   if (!j.items.length) { sel.innerHTML = '<option value="">адаптеры не найдены</option>'; return; }
   sel.innerHTML = j.items.map(a => `<option value="${a.name}">${a.name} — ${a.desc}</option>`).join('');
+}
+
+async function enableShare() {
+  $('btnShare').disabled = true; chip('r_eth', false, 'включаю общий доступ…');
+  const r = await (await fetch('/api/share', {method: 'POST', body: new URLSearchParams({
+    adapter: $('adapter').value || 'Ethernet'})})).json();
+  $('btnShare').disabled = false;
+  chip('r_eth', r.ok, r.ok ? 'общий доступ включён' : 'ошибка');
+  $('eth_hint').textContent = r.text || '';
 }
 
 async function setEthernet() {
@@ -500,6 +512,16 @@ async function restartStack() {
   const r = await (await fetch('/api/restart', {method: 'POST', body: new URLSearchParams({mode: 'offline', update: '0'})})).json();
   $('apply_hint').textContent = r.ok ? `стек работает: ${r.routes} маршрутов` : 'ошибка';
   append('перезапуск стека: ' + (r.text || ''));
+}
+
+async function cleanupAll() {
+  $('btnCleanAll').disabled = true; chip('r_cleanall', false, 'убираю…');
+  const r = await (await fetch('/api/cleanup-all', {method: 'POST', body: new URLSearchParams({
+    adapter: ($('adapter') && $('adapter').value) || 'Ethernet'})})).json();
+  $('btnCleanAll').disabled = false;
+  $('o_maint').textContent = r.text || '';
+  chip('r_cleanall', r.ok, r.ok ? 'готово' : 'ошибка');
+  state(); stackState();
 }
 
 async function guard() {

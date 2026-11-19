@@ -313,6 +313,25 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
         ("GET", "/api/ble") => (200, "application/json", ble_json()),
         ("POST", "/api/device-map") => (200, "application/json", set_device_map(body)),
         ("POST", "/api/ethernet") => (200, "application/json", set_ethernet(body)),
+        ("POST", "/api/share") => {
+            let mut ctx = ctx_from(body);
+            let adapter = field(body, "adapter");
+            if !adapter.is_empty() {
+                ctx.ethernet = adapter;
+            }
+            let result = run_module("net.share", ctx);
+            (200, "application/json", result)
+        }
+        ("POST", "/api/unshare") => {
+            let mut ctx = ctx_from(body);
+            let adapter = field(body, "adapter");
+            if !adapter.is_empty() {
+                ctx.ethernet = adapter;
+            }
+            let result = run_module("net.unshare", ctx);
+            (200, "application/json", result)
+        }
+        ("POST", "/api/cleanup-all") => (200, "application/json", cleanup_all(body)),
         ("POST", "/api/allow") => {
             let value = if field(body, "value") == "1" {
                 "1"
@@ -1857,6 +1876,63 @@ fn hosts_status() -> (bool, String) {
     } else {
         (true, "hosts: чисто".to_string())
     }
+}
+
+/// Полная уборка за собой: стек, общий доступ, статический адрес, наш блок hosts.
+fn cleanup_all(body: &str) -> String {
+    let mut report: Vec<String> = Vec::new();
+
+    stop_stack();
+    report.push("стек остановлен".to_string());
+
+    let adapter = {
+        let value = field(body, "adapter");
+        if value.is_empty() {
+            "Ethernet".to_string()
+        } else {
+            value
+        }
+    };
+    let mut ctx = ctx_from(body);
+    ctx.ethernet = adapter.clone();
+    match crate::modules::run("net.unshare", &ctx) {
+        Ok(text) => report.push(text.trim().to_string()),
+        Err(e) => report.push(format!("общий доступ: {e}")),
+    }
+
+    // Убираем наш блок имён из hosts.
+    let hosts =
+        std::path::PathBuf::from(std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".into()))
+            .join("System32\\drivers\\etc\\hosts");
+    match std::fs::read_to_string(&hosts) {
+        Ok(text) => {
+            let mut out = String::new();
+            let mut skip = false;
+            for line in text.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("# cockpit-names") {
+                    skip = true;
+                    continue;
+                }
+                if skip {
+                    if trimmed.starts_with("192.168.137.1") {
+                        continue;
+                    }
+                    skip = false;
+                }
+                out.push_str(line);
+                out.push('\n');
+            }
+            match std::fs::write(&hosts, out) {
+                Ok(()) => report.push("наш блок имён убран из hosts".to_string()),
+                Err(e) => report.push(format!("hosts: {e}")),
+            }
+        }
+        Err(e) => report.push(format!("hosts: {e}")),
+    }
+
+    push_log(format!("уборка: {}", report.join("; ")));
+    serde_json::json!({ "ok": true, "text": report.join("\n") }).to_string()
 }
 
 fn ctx_from(body: &str) -> ModuleCtx {

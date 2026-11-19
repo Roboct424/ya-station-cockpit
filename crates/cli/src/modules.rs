@@ -15,6 +15,8 @@ pub struct ModuleCtx {
     pub ssid: String,
     pub password: String,
     pub ca_pem: PathBuf,
+    /// Имя проводного адаптера (для общего доступа).
+    pub ethernet: String,
 }
 
 impl Default for ModuleCtx {
@@ -27,6 +29,7 @@ impl Default for ModuleCtx {
             ssid: "YaRig".to_string(),
             password: "11111111".to_string(),
             ca_pem: PathBuf::from("data").join("ca.pem"),
+            ethernet: "Ethernet".to_string(),
         }
     }
 }
@@ -271,6 +274,20 @@ pub const MODULES: &[Module] = &[
         needs_adb: false,
     },
     Module {
+        id: "net.share",
+        group: "Сеть",
+        title: "Общий доступ на Ethernet",
+        summary: "Включает ICS: Windows выдаёт станции адрес по кабелю",
+        needs_adb: false,
+    },
+    Module {
+        id: "net.unshare",
+        group: "Сеть",
+        title: "Убрать общий доступ",
+        summary: "Выключает ICS и возвращает адаптер на DHCP",
+        needs_adb: false,
+    },
+    Module {
         id: "net.names",
         group: "Сеть",
         title: "Имена станции → мы",
@@ -364,6 +381,8 @@ pub fn run(id: &str, ctx: &ModuleCtx) -> Result<String, String> {
     match id {
         "env.cleanup" => env_cleanup(),
         "net.hotspot" => net_hotspot(ctx),
+        "net.share" => net_share(ctx),
+        "net.unshare" => net_unshare(ctx),
         "net.names" => net_names(),
         "net.static-ip" => net_static_ip(ctx),
         "net.hosts" => net_hosts(ctx),
@@ -534,6 +553,101 @@ fn net_hotspot(ctx: &ModuleCtx) -> Result<String, String> {
     );
     if !out.status.success() {
         return Err(text);
+    }
+    Ok(text)
+}
+
+/// Включает общий доступ (ICS) с аплинка на выбранный адаптер.
+///
+/// GOTCHA: G-050 — COM-объект HNetCfg работает только из процесса с правами
+/// администратора, поэтому модуль вызывается мастером, а не отдельным CLI.
+fn net_share(ctx: &ModuleCtx) -> Result<String, String> {
+    let adapter = if ctx.ethernet.is_empty() {
+        "Ethernet".to_string()
+    } else {
+        ctx.ethernet.clone()
+    };
+    let script = format!(
+        r#"
+$ErrorActionPreference='Stop'
+$uplink = (Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric | Select-Object -First 1).InterfaceAlias
+$share = New-Object -ComObject HNetCfg.HNetShare
+$pub = $null; $priv = $null
+foreach ($c in $share.EnumEveryConnection) {{
+    $n = $share.NetConnectionProps($c).Name
+    if ($n -eq $uplink) {{ $pub = $c }}
+    if ($n -eq '{adapter}') {{ $priv = $c }}
+}}
+if (-not $pub) {{ throw "не нашёл аплинк $uplink" }}
+if (-not $priv) {{ throw "не нашёл адаптер {adapter}" }}
+$p1 = $share.INetSharingConfigurationForINetConnection($priv)
+$p2 = $share.INetSharingConfigurationForINetConnection($pub)
+$p1.DisableSharing(); $p2.DisableSharing()
+$p2.EnableSharing(0)
+$p1.EnableSharing(1)
+Start-Sleep -Seconds 4
+"аплинк: $uplink -> {adapter}: общий доступ включён"
+"#
+    );
+    let out = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &script,
+        ])
+        .output()
+        .map_err(|e| format!("powershell: {e}"))?;
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    if !out.status.success() {
+        return Err(text.trim().to_string());
+    }
+    Ok(text)
+}
+
+/// Выключает общий доступ и возвращает адаптер на DHCP.
+fn net_unshare(ctx: &ModuleCtx) -> Result<String, String> {
+    let adapter = if ctx.ethernet.is_empty() {
+        "Ethernet".to_string()
+    } else {
+        ctx.ethernet.clone()
+    };
+    let script = format!(
+        r#"
+$ErrorActionPreference='Stop'
+$share = New-Object -ComObject HNetCfg.HNetShare
+foreach ($c in $share.EnumEveryConnection) {{
+    $n = $share.NetConnectionProps($c).Name
+    if ($n -eq '{adapter}') {{
+        $share.INetSharingConfigurationForINetConnection($c).DisableSharing()
+    }}
+}}
+netsh interface ip set address name="{adapter}" dhcp | Out-Null
+"общий доступ снят, {adapter} снова на DHCP"
+"#
+    );
+    let out = Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            &script,
+        ])
+        .output()
+        .map_err(|e| format!("powershell: {e}"))?;
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    if !out.status.success() {
+        return Err(text.trim().to_string());
     }
     Ok(text)
 }
