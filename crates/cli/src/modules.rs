@@ -135,19 +135,78 @@ pub fn find_station() -> Option<String> {
         Command::new("ip").args(["neigh"]).output().ok()?
     };
     let text = String::from_utf8_lossy(&out.stdout).to_string();
+
+    // Группируем по MAC и берём наименьший адрес: после сброса у станции
+    // может остаться старый выданный адрес в таблице.
+    let mut by_mac: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
     for line in text.lines() {
-        let lower = line.to_lowercase();
-        if !lower.contains("b8-87-6e") && !lower.contains("b8:87:6e") {
+        let mut parts = line.split_whitespace();
+        let Some(ip) = parts.next() else { continue };
+        if ip.matches('.').count() != 3 {
             continue;
         }
-        // Первый столбец — адрес.
-        if let Some(ip) = line.split_whitespace().next() {
-            if ip.matches('.').count() == 3 {
-                return Some(ip.to_string());
+        let Some(mac) = parts.next() else { continue };
+        if !mac.contains('-') && !mac.contains(':') {
+            continue;
+        }
+        let mac = mac.to_lowercase().replace(':', "-");
+        if mac.starts_with("01-00-5e") || mac == "ff-ff-ff-ff-ff-ff" {
+            continue;
+        }
+        by_mac
+            .entry(mac)
+            .and_modify(|current| {
+                let simpler = ip_key(ip) < ip_key(current);
+                if simpler {
+                    *current = ip.to_string();
+                }
+            })
+            .or_insert_with(|| ip.to_string());
+    }
+
+    // 1) Устройство Яндекса по OUI — самый надёжный признак.
+    if let Some((_, ip)) = by_mac
+        .iter()
+        .find(|(mac, ip)| mac.starts_with("b8-87-6e") && ip.starts_with("192.168.137."))
+    {
+        return Some(ip.clone());
+    }
+
+    // 2) Остальные кандидаты: шлюз и широковещательный отбрасываем.
+    // Станция живёт только в нашей сети (точка доступа или проводной порт):
+    // 192.168.137.0/24. Иначе в кандидаты попадут чужие устройства из Wi-Fi.
+    let candidates: Vec<String> = by_mac
+        .values()
+        .filter(|ip| ip.starts_with("192.168.137."))
+        .filter(|ip| !ip.ends_with(".1") && !ip.ends_with(".255"))
+        .cloned()
+        .collect();
+    if candidates.len() == 1 {
+        return candidates.first().cloned();
+    }
+
+    // 3) Если кандидатов несколько — проверяем, кто отвечает по сети.
+    for ip in &candidates {
+        for port in [5555u16, 443, 80] {
+            use std::net::{SocketAddr, TcpStream};
+            use std::time::Duration;
+            if let Ok(addr) = format!("{ip}:{port}").parse::<SocketAddr>() {
+                if TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok() {
+                    return Some(ip.clone());
+                }
             }
         }
     }
     None
+}
+
+/// Числовой ключ адреса — чтобы сравнивать «наименьший».
+fn ip_key(ip: &str) -> u32 {
+    let mut value = 0u32;
+    for octet in ip.split('.') {
+        value = (value << 8) | octet.parse::<u32>().unwrap_or(0);
+    }
+    value
 }
 
 fn backup_pull(ctx: &ModuleCtx) -> Result<String, String> {

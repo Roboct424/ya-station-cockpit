@@ -272,7 +272,7 @@ fn handle(mut stream: TcpStream) -> std::io::Result<()> {
     let (status, content_type, text) = route(&method, &path, &body);
 
     let response = format!(
-        "HTTP/1.1 {status} OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        "HTTP/1.1 {status} OK\r\nContent-Type: {content_type}\r\nCache-Control: no-store, no-cache, must-revalidate\r\nPragma: no-cache\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         text.len(),
         text
     );

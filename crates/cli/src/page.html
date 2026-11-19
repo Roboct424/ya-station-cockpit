@@ -150,8 +150,9 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
       <div class="col">
         <label>Сетевой адаптер</label>
         <select id="adapter"><option value="">загружаю…</option></select>
-        <label>Адрес для станции</label>
+        <label>Адрес порта (шлюз для станции)</label>
         <input type="text" id="eth_ip" value="192.168.137.1">
+        <p class="hint" id="eth_station">станция в сети: —</p>
         <button class="act" id="btnEth" onclick="setEthernet()">Назначить адрес</button>
         <button class="act ghost" id="btnShare" onclick="enableShare()">Включить общий доступ (DHCP)</button>
         <span id="r_eth" class="chip wait">не выполнялось</span>
@@ -522,6 +523,8 @@ async function loadDevice() {
   if (j.warning) html += `<p class="hint" style="margin-top:8px;color:#ff9a9a">⚠ ${j.warning}</p>`;
   if (j.recommend) html += `<p class="hint" style="margin-top:8px">${j.recommend}</p>`;
   $('dev').innerHTML = html;
+  const ethStation = $('eth_station');
+  if (ethStation) ethStation.textContent = 'станция в сети: ' + (j.station || '—');
 }
 
 async function restartStack() {
