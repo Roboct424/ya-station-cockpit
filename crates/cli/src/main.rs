@@ -363,6 +363,36 @@ enum BleCmd {
         #[arg(long, default_value_t = 6)]
         seconds: u64,
     },
+    /// Показать GATT-сервисы и характеристики устройства
+    Info { address: String },
+    /// Прочитать характеристику (hex и текст)
+    Read {
+        address: String,
+        #[arg(long)]
+        service: String,
+        #[arg(long)]
+        char: String,
+    },
+    /// Записать характеристику из hex
+    Write {
+        address: String,
+        #[arg(long)]
+        service: String,
+        #[arg(long)]
+        char: String,
+        #[arg(long)]
+        hex: String,
+    },
+    /// Послушать уведомления характеристики
+    Notify {
+        address: String,
+        #[arg(long)]
+        service: String,
+        #[arg(long)]
+        char: String,
+        #[arg(long, default_value_t = 5)]
+        seconds: u64,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1216,6 +1246,117 @@ fn now_stamp() -> String {
 /// Поиск станций по Bluetooth из командной строки.
 fn run_ble(cmd: BleCmd) -> cockpit_core::Result<ExitCode> {
     match cmd {
+        BleCmd::Info { address } => {
+            #[cfg(windows)]
+            {
+                match cockpit_net::ble_gatt::describe(&address) {
+                    Ok(list) => {
+                        for service in list {
+                            println!("сервис {}", service.uuid);
+                            for c in service.characteristics {
+                                let mut props = Vec::new();
+                                if c.readable {
+                                    props.push("read");
+                                }
+                                if c.writable {
+                                    props.push("write");
+                                }
+                                if c.notifiable {
+                                    props.push("notify");
+                                }
+                                println!("   {} [{}]", c.uuid, props.join(","));
+                            }
+                        }
+                    }
+                    Err(e) => println!("не удалось: {e}"),
+                }
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = address;
+                println!("GATT реализован для Windows");
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        BleCmd::Read {
+            address,
+            service,
+            char,
+        } => {
+            #[cfg(windows)]
+            {
+                match cockpit_net::ble_gatt::read(&address, &service, &char) {
+                    Ok(bytes) => {
+                        println!(
+                            "hex: {}",
+                            bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
+                        );
+                        println!("текст: {}", String::from_utf8_lossy(&bytes));
+                    }
+                    Err(e) => println!("не удалось: {e}"),
+                }
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = (address, service, char);
+                println!("GATT реализован для Windows");
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        BleCmd::Write {
+            address,
+            service,
+            char,
+            hex,
+        } => {
+            #[cfg(windows)]
+            {
+                let data: Vec<u8> = (0..hex.len())
+                    .step_by(2)
+                    .filter_map(|i| u8::from_str_radix(&hex[i..(i + 2).min(hex.len())], 16).ok())
+                    .collect();
+                match cockpit_net::ble_gatt::write(&address, &service, &char, &data) {
+                    Ok(()) => println!("записано {} байт", data.len()),
+                    Err(e) => println!("не удалось: {e}"),
+                }
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = (address, service, char, hex);
+                println!("GATT реализован для Windows");
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+        BleCmd::Notify {
+            address,
+            service,
+            char,
+            seconds,
+        } => {
+            #[cfg(windows)]
+            {
+                match cockpit_net::ble_gatt::notify(&address, &service, &char, seconds) {
+                    Ok(list) => {
+                        if list.is_empty() {
+                            println!("уведомлений не было");
+                        }
+                        for bytes in list {
+                            println!(
+                                "hex: {}",
+                                bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
+                            );
+                        }
+                    }
+                    Err(e) => println!("не удалось: {e}"),
+                }
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = (address, service, char, seconds);
+                println!("GATT реализован для Windows");
+            }
+            Ok(ExitCode::SUCCESS)
+        }
         BleCmd::Scan { seconds } => {
             #[cfg(windows)]
             {

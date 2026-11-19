@@ -11,6 +11,8 @@
 
 #[cfg(windows)]
 pub mod ble;
+#[cfg(windows)]
+pub mod ble_gatt;
 pub mod sys;
 #[cfg(windows)]
 mod winrt_hotspot;

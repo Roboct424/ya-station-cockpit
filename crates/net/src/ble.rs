@@ -173,7 +173,7 @@ pub fn scan(seconds: u64) -> Result<Vec<BleDevice>, NetError> {
 }
 
 /// Читает байты из WinRT-буфера.
-fn buffer_bytes(buffer: &windows::Storage::Streams::IBuffer) -> Vec<u8> {
+pub(crate) fn buffer_bytes(buffer: &windows::Storage::Streams::IBuffer) -> Vec<u8> {
     let len = buffer.Length().unwrap_or(0) as usize;
     let mut out = vec![0u8; len];
     if let Ok(reader) = windows::Storage::Streams::DataReader::FromBuffer(buffer) {
