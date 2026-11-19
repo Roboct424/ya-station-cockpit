@@ -52,6 +52,7 @@ pre.term{height:calc(100vh - 210px);min-height:420px}
     <button class="on" data-tab="s1">1 · Окружение</button>
     <button data-tab="s2">2 · Перехват</button>
     <button data-tab="s3">3 · Сопряжение</button>
+    <button data-tab="s4">4 · Обслуживание</button>
   </nav>
 </header>
 
@@ -85,25 +86,23 @@ pre.term{height:calc(100vh - 210px);min-height:420px}
       </div>
 
       <div class="card">
-        <h2>3. Бэкап — только после разблокировки</h2>
-        <p class="hint">Единственное действие через ADB на этом шаге. Снимает конфиги
-        и скрипты станции в <code>data/backups/</code>, пока доступ ещё есть.</p>
-        <button class="act ghost" id="btnBackup" onclick="backup()">Сделать бэкап</button>
-        <span id="r_backup" class="chip wait">не выполнялось</span>
-        <pre id="o_backup" style="height:110px;margin-top:10px">—</pre>
+        <h2>3. Дальше</h2>
+        <p class="hint">Бэкап, сторож ADB и установка нашего CA — на вкладке
+        «4 · Обслуживание», после разблокировки.</p>
       </div>
     </div>
   </div>
 </section>
 
 <section id="s2">
-  <div class="card">
-    <h2>1. Пресет перехвата — одинаков для всех станций</h2>
+  <details class="card">
+    <summary style="cursor:pointer;color:#b9c6d6;font-size:13px">
+      1. Пресет перехвата (одинаков для всех станций) — раскрыть
+    </summary>
     <p class="hint">Эти ответы не меняются от колонки к колонке. По умолчанию
-    <b>ни один пакет не уходит в облако</b>: всё, что не перечислено, остаётся
-    без ответа.</p>
+    <b>ни один пакет не уходит в облако</b>.</p>
     <div id="preset" class="muted">…</div>
-  </div>
+  </details>
 
   <div class="card">
     <h2>2. Режим</h2>
@@ -157,10 +156,10 @@ pre.term{height:calc(100vh - 210px);min-height:420px}
         <span id="r_pair" class="chip wait">не выполнялось</span>
       </div>
       <div class="card">
-        <h2>Прогресс</h2>
-        <div class="bar"><i id="bar"></i></div>
-        <div id="prog" class="muted">стек не запущен</div>
-        <button class="act ghost" onclick="stopStack()">Остановить стек</button>
+        <h2>Станция</h2>
+        <div id="dev" class="muted">…</div>
+        <button class="act ghost" onclick="restartStack()">Перезапустить стек</button>
+        <button class="act ghost" onclick="stopStack()">Остановить</button>
       </div>
     </div>
     <div class="col">
@@ -169,6 +168,20 @@ pre.term{height:calc(100vh - 210px);min-height:420px}
         <pre id="log" class="term">готов</pre>
       </div>
     </div>
+  </div>
+</section>
+<section id="s4">
+  <div class="card">
+    <h2>Обслуживание — только после разблокировки</h2>
+    <p class="hint">Всё, что делается через ADB, живёт здесь: снять бэкап,
+    закрепить ADB и поставить наш сертификат.</p>
+    <button class="act" id="btnB" onclick="backup()">Снять бэкап</button>
+    <span id="r_backup" class="chip wait">не выполнялось</span>
+    <button class="act" id="btnG" onclick="guard()">Закрепить ADB (сторож)</button>
+    <span id="r_guard" class="chip wait">не выполнялось</span>
+    <button class="act" id="btnC" onclick="caInstall()">Установить наш CA</button>
+    <span id="r_ca" class="chip wait">не выполнялось</span>
+    <pre id="o_maint" style="height:210px;margin-top:10px">—</pre>
   </div>
 </section>
 </main>
@@ -230,11 +243,52 @@ async function hotspot() {
   state();
 }
 
+async function loadDevice() {
+  const j = await (await fetch('/api/device')).json();
+  const row = (k, v) => `<div style="display:flex;gap:8px;padding:3px 0"><span style="color:#8b97a8;min-width:96px">${k}</span><span>${v}</span></div>`;
+  let html = row('станция', j.station || 'не найдена') +
+             row('модель', j.model) +
+             row('прошивка', j.firmware || 'неизвестна') +
+             row('ADB', j.adb ? '<span class="ok">открыт</span>' : '<span class="err">закрыт</span>') +
+             row('разблокировка', j.unlock);
+  if (j.available && j.available.length) {
+    html += '<div style="margin-top:8px;color:#8b97a8">доступные прошивки:</div>';
+    html += j.available.map(f =>
+      `<div style="padding:2px 0">• ${f.version} ${f.local ? '<span class="ok">локально</span>' : '<span class="muted">нужно скачать</span>'}
+       ${f.current ? '<b>— текущая</b>' : ''} ${f.adb ? '' : '<span class="err">ADB не откроется</span>'}</div>`).join('');
+  }
+  if (j.recommend) html += `<p class="hint" style="margin-top:8px">${j.recommend}</p>`;
+  $('dev').innerHTML = html;
+}
+
+async function restartStack() {
+  chip('r_stack', false, 'перезапускаю…');
+  const r = await (await fetch('/api/restart', {method: 'POST', body: new URLSearchParams({mode: 'offline'})})).json();
+  chip('r_stack', r.ok, r.ok ? `стек перезапущен · ${r.routes} маршрутов` : 'ошибка');
+  append('перезапуск стека: ' + (r.text || ''));
+}
+
+async function guard() {
+  $('btnG').disabled = true; chip('r_guard', false, 'ставлю…');
+  const r = await (await fetch('/api/guard', {method: 'POST', body: new URLSearchParams()})).json();
+  $('btnG').disabled = false;
+  $('o_maint').textContent = r.text || '';
+  chip('r_guard', r.ok, r.ok ? 'применено' : 'ошибка');
+}
+
+async function caInstall() {
+  $('btnC').disabled = true; chip('r_ca', false, 'ставлю…');
+  const r = await (await fetch('/api/ca', {method: 'POST', body: new URLSearchParams()})).json();
+  $('btnC').disabled = false;
+  $('o_maint').textContent = r.text || '';
+  chip('r_ca', r.ok, r.ok ? 'применено' : 'ошибка');
+}
+
 async function backup() {
-  $('btnBackup').disabled = true; chip('r_backup', false, 'снимаю…');
-  const r = await (await fetch('/api/backup', {method: 'POST', body: body()})).json();
-  $('btnBackup').disabled = false;
-  $('o_backup').textContent = r.text || '';
+  $('btnB').disabled = true; chip('r_backup', false, 'снимаю…');
+  const r = await (await fetch('/api/backup', {method: 'POST', body: new URLSearchParams()})).json();
+  $('btnB').disabled = false;
+  $('o_maint').textContent = r.text || '';
   chip('r_backup', r.ok, r.ok ? 'бэкап готов' : 'ошибка');
 }
 
@@ -363,8 +417,10 @@ async function init() {
   ITEMS = (await (await fetch('/api/items')).json()).items;
   renderPreset();
   loadCerts();
-  state(); stackState();
+  loadDevice();
+  state(); stackState(); loadDevice();
   setInterval(state, 5000);
+  setInterval(loadDevice, 3000);
   setInterval(poll, 1200);
   setInterval(pollStack, 900);
   setInterval(stackState, 3000);

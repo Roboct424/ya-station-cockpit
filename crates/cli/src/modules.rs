@@ -540,19 +540,47 @@ fn net_hotspot(ctx: &ModuleCtx) -> Result<String, String> {
 
 fn net_names() -> Result<String, String> {
     let names = [
-        "oauth.yandex.ru", "scbh.yandex.net", "quasar.yandex.ru", "quasar.yandex.net",
-        "quasar.yandex.com", "quasar-internal.yandex.net", "quasar.s3.yandex.net",
-        "s3.yandex.net", "storage.yandex.net", "uniproxy.alice.yandex.net",
-        "uniproxy-quic.alice.yandex.net", "uniproxy-roz.alice.yandex.net",
-        "rpc.alice.yandex.net", "voiceservices.yandex.net", "alicesbc.tel.yandex.net",
-        "alice-ats.yandex.net", "alice-ats-test.yandex.net", "iot.yandex.net",
-        "api.iot.yandex.net", "backend.yandex.net", "clck.yandex.net", "mc.yandex.ru",
-        "log.strm.yandex.ru", "report.appmetrica.yandex.net",
-        "start.appmetrica.yandex.net", "updates.yandex.net", "ota.yandex.net",
-        "time.yandex.net", "ntp.yantp.net", "ntp.yandex.net", "time1.yandex.net",
-        "time2.yandex.net", "yandex.ru", "ya.ru", "pool.ntp.org", "ru.pool.ntp.org",
-        "0.ru.pool.ntp.org", "1.ru.pool.ntp.org", "2.ru.pool.ntp.org",
-        "3.ru.pool.ntp.org", "europe.pool.ntp.org",
+        "oauth.yandex.ru",
+        "scbh.yandex.net",
+        "quasar.yandex.ru",
+        "quasar.yandex.net",
+        "quasar.yandex.com",
+        "quasar-internal.yandex.net",
+        "quasar.s3.yandex.net",
+        "s3.yandex.net",
+        "storage.yandex.net",
+        "uniproxy.alice.yandex.net",
+        "uniproxy-quic.alice.yandex.net",
+        "uniproxy-roz.alice.yandex.net",
+        "rpc.alice.yandex.net",
+        "voiceservices.yandex.net",
+        "alicesbc.tel.yandex.net",
+        "alice-ats.yandex.net",
+        "alice-ats-test.yandex.net",
+        "iot.yandex.net",
+        "api.iot.yandex.net",
+        "backend.yandex.net",
+        "clck.yandex.net",
+        "mc.yandex.ru",
+        "log.strm.yandex.ru",
+        "report.appmetrica.yandex.net",
+        "start.appmetrica.yandex.net",
+        "updates.yandex.net",
+        "ota.yandex.net",
+        "time.yandex.net",
+        "ntp.yantp.net",
+        "ntp.yandex.net",
+        "time1.yandex.net",
+        "time2.yandex.net",
+        "yandex.ru",
+        "ya.ru",
+        "pool.ntp.org",
+        "ru.pool.ntp.org",
+        "0.ru.pool.ntp.org",
+        "1.ru.pool.ntp.org",
+        "2.ru.pool.ntp.org",
+        "3.ru.pool.ntp.org",
+        "europe.pool.ntp.org",
     ];
 
     let hosts = PathBuf::from(std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".into()))
@@ -584,7 +612,10 @@ fn net_names() -> Result<String, String> {
 
     std::fs::write(&hosts, out)
         .map_err(|e| format!("hosts не записался ({e}) — запустите от администратора"))?;
-    Ok(format!("записей: {}\nимена теперь указывают на 192.168.137.1", names.len()))
+    Ok(format!(
+        "записей: {}\nимена теперь указывают на 192.168.137.1",
+        names.len()
+    ))
 }
 
 fn net_static_ip(ctx: &ModuleCtx) -> Result<String, String> {

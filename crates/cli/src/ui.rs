@@ -257,6 +257,23 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
             (200, "application/json", json.to_string())
         }
         ("GET", "/api/stack") => (200, "application/json", stack_json()),
+        ("GET", "/api/device") => (200, "application/json", device_json()),
+        ("POST", "/api/restart") => {
+            let stop = stop_stack();
+            let _ = stop;
+            let start = start_stack(body);
+            (200, "application/json", start)
+        }
+        ("POST", "/api/guard") => {
+            let ctx = ctx_from(body);
+            let result = run_module("adb.guard", ctx);
+            (200, "application/json", result)
+        }
+        ("POST", "/api/ca") => {
+            let ctx = ctx_from(body);
+            let result = run_module("ca.install", ctx);
+            (200, "application/json", result)
+        }
         ("GET", "/api/tail") => {
             let after = query(path, "after")
                 .and_then(|v| v.parse::<usize>().ok())
@@ -486,6 +503,121 @@ fn certs_json_items(body: &str) -> Vec<(String, bool)> {
         }
     }
     out
+}
+
+/// Панель собранных данных: что за станция, на чём она, можно ли ждать ADB.
+fn device_json() -> String {
+    let station = crate::modules::find_station();
+    let adb_open = station
+        .as_ref()
+        .map(|ip| {
+            use std::net::TcpStream;
+            use std::time::Duration;
+            TcpStream::connect_timeout(
+                &format!("{ip}:5555").parse().expect("addr"),
+                Duration::from_millis(500),
+            )
+            .is_ok()
+        })
+        .unwrap_or(false);
+
+    let log = std::fs::read_to_string("data/ota.log").unwrap_or_default();
+    let device_id = log
+        .lines()
+        .rev()
+        .find_map(|l| l.split("device_id=").nth(1))
+        .map(|rest| rest.split('&').next().unwrap_or("").to_string())
+        .unwrap_or_default();
+    let log_version = log
+        .lines()
+        .rev()
+        .find(|l| l.contains("/check_updates"))
+        .and_then(|l| l.split("version=").nth(1))
+        .map(|rest| rest.split('&').next().unwrap_or("").to_string());
+
+    // Версию прошивки берём из запроса станции к /check_updates: там она
+    // точная. ADB-путь — только запасной (там лежит версия ядра, не OTA).
+    let firmware = log_version.clone().unwrap_or_else(|| {
+        if adb_open {
+            adb_shell(&station, "cat /etc/os-release 2>/dev/null | head -2")
+                .map(|t| t.replace('\n', " ").trim().to_string())
+                .unwrap_or_default()
+        } else {
+            String::new()
+        }
+    });
+
+    let unlock = if firmware.contains(".46") {
+        "да — ADB открывается, сертификат принимается"
+    } else if firmware.contains(".50") {
+        "нет — .50 открывает ADB, но режет наш сертификат; нужна .46"
+    } else if adb_open {
+        "ADB уже открыт"
+    } else if firmware.is_empty() {
+        "неизвестно — включите «Экстра» и прошейте .46"
+    } else {
+        "неизвестно — предлагаем .46"
+    };
+
+    let available = available_firmware(&firmware);
+    let model = if device_id.starts_with("M00GDW") {
+        "Station Mini 2 (YNDX-00020)".to_string()
+    } else if device_id.is_empty() {
+        "не определена".to_string()
+    } else {
+        device_id.clone()
+    };
+
+    serde_json::json!({
+        "station": station,
+        "device_id": device_id,
+        "model": model,
+        "firmware": firmware,
+        "adb": adb_open,
+        "unlock": unlock,
+        "available": available,
+        "recommend": if !adb_open && !firmware.contains(".46") {
+            "Прошейте .46 из локального файла — на ней ADB открывается и сертификат принимается"
+                .to_string()
+        } else {
+            String::new()
+        }
+    })
+    .to_string()
+}
+
+/// Локально доступные прошивки из манифеста и папки firmware/.
+fn available_firmware(current: &str) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    if let Ok(text) = std::fs::read_to_string("data/manifests.json") {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+            if let Some(platform) = json.get("yandexmini_2").and_then(|v| v.as_object()) {
+                for version in platform.keys() {
+                    let file = format!("firmware/{version}.zip.off");
+                    let present = std::path::Path::new(&file).exists()
+                        || std::path::Path::new(&format!("firmware/{version}.zip")).exists();
+                    out.push(serde_json::json!({
+                        "version": version,
+                        "local": present,
+                        "current": version == current,
+                        "adb": version.contains(".46"),
+                        "cert": !version.contains(".50")
+                    }));
+                }
+            }
+        }
+    }
+    out
+}
+
+fn adb_shell(station: &Option<String>, cmd: &str) -> Option<String> {
+    let ip = station.as_ref()?;
+    let adb = crate::modules::find_adb().unwrap_or_else(|| std::path::PathBuf::from("adb"));
+    let out = std::process::Command::new(adb)
+        .args(["-s", &format!("{ip}:5555"), "shell", cmd])
+        .output()
+        .ok()?;
+    Some(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
 fn stack_json() -> String {
