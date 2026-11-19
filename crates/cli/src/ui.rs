@@ -257,6 +257,16 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
             (200, "application/json", json.to_string())
         }
         ("GET", "/api/stack") => (200, "application/json", stack_json()),
+        ("GET", "/api/tail") => {
+            let after = query(path, "after")
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(0);
+            let text = std::fs::read_to_string("data/ota.log").unwrap_or_default();
+            let all: Vec<&str> = text.lines().collect();
+            let slice: Vec<String> = all.iter().skip(after).map(|l| l.to_string()).collect();
+            let json = serde_json::json!({ "next": after + slice.len(), "lines": slice });
+            (200, "application/json", json.to_string())
+        }
         ("GET", "/api/certs") => (200, "application/json", certs_json()),
         ("POST", "/api/certs") => (200, "application/json", set_certs(body)),
         ("POST", "/api/cleanup") => {

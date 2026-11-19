@@ -36,7 +36,8 @@ button:disabled{opacity:.55;cursor:default}
 .ansgrid{display:grid;grid-template-columns:1fr 190px;gap:8px 12px;align-items:center}
 .ansgrid .nm{font-size:12px;color:#c7d2e0}
 pre{background:#0b0e12;border:1px solid #1e242c;border-radius:10px;padding:11px;margin:0;
- white-space:pre-wrap;font:12px/1.45 ui-monospace,Consolas,monospace;height:430px;overflow:auto;color:#cbd5e1}
+ white-space:pre-wrap;font:12px/1.45 ui-monospace,Consolas,monospace;height:340px;overflow:auto;color:#cbd5e1}
+pre.term{height:calc(100vh - 210px);min-height:420px}
 .muted{color:#7f8ea3;font-size:12px}
 .bar{height:6px;background:#1d2430;border-radius:99px;overflow:hidden;margin:8px 0}
 .bar i{display:block;height:100%;background:#3d7eff;width:0;transition:width .4s}
@@ -145,7 +146,7 @@ pre{background:#0b0e12;border:1px solid #1e242c;border-radius:10px;padding:11px;
 
 <section id="s3">
   <div class="row">
-    <div class="col" style="flex:0 0 360px">
+    <div class="col" style="flex:0 0 330px">
       <div class="card">
         <h2>Звук сопряжения</h2>
         <label>SSID</label><input type="text" id="pssid" value="YaRig">
@@ -165,7 +166,7 @@ pre{background:#0b0e12;border:1px solid #1e242c;border-radius:10px;padding:11px;
     <div class="col">
       <div class="card">
         <h2>Терминал</h2>
-        <pre id="log">готов</pre>
+        <pre id="log" class="term">готов</pre>
       </div>
     </div>
   </div>
@@ -297,9 +298,17 @@ async function pair() {
   chip('r_pair', r.ok, r.text);
 }
 
+let tailCursor = 0;
+
 async function poll() {
   const r = await (await fetch('/api/log?after=' + cursor)).json();
   cursor = r.next;
+  if (r.lines.length) append(r.lines.join('\n'));
+}
+
+async function pollStack() {
+  const r = await (await fetch('/api/tail?after=' + tailCursor)).json();
+  tailCursor = r.next;
   if (r.lines.length) append(r.lines.join('\n'));
 }
 
@@ -357,8 +366,10 @@ async function init() {
   state(); stackState();
   setInterval(state, 5000);
   setInterval(poll, 1200);
+  setInterval(pollStack, 900);
   setInterval(stackState, 3000);
   poll();
+  pollStack();
 }
 init();
 </script>
