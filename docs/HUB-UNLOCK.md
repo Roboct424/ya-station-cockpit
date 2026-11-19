@@ -122,7 +122,7 @@
 В `poc/fake-quasar.log` таких запросов 38 штук, например:
 
 ```
-GET /get_sync_info?device_id=S006NQ20034ZFW&platform=saturn&version=0.369.1.0.4698823002.20260924.188
+GET /get_sync_info?device_id=S006NQ…&platform=saturn&version=0.369.1.0.4698823002.20260924.188
 2026-10-26T19:06:03.414472 192.168.137.5 "GET /get_sync_info… HTTP/1.1" 200 -
 ```
 
