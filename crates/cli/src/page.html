@@ -248,14 +248,15 @@ async function loadDevice() {
   const row = (k, v) => `<div style="display:flex;gap:8px;padding:3px 0"><span style="color:#8b97a8;min-width:96px">${k}</span><span>${v}</span></div>`;
   let html = row('станция', j.station || 'не найдена') +
              row('модель', j.model) +
+             row('платформа', j.platform || 'не определена') +
              row('прошивка', j.firmware || 'неизвестна') +
              row('ADB', j.adb ? '<span class="ok">открыт</span>' : '<span class="err">закрыт</span>') +
              row('разблокировка', j.unlock);
-  if (j.available && j.available.length) {
-    html += '<div style="margin-top:8px;color:#8b97a8">доступные прошивки:</div>';
-    html += j.available.map(f =>
-      `<div style="padding:2px 0">• ${f.version} ${f.local ? '<span class="ok">локально</span>' : '<span class="muted">нужно скачать</span>'}
-       ${f.current ? '<b>— текущая</b>' : ''} ${f.adb ? '' : '<span class="err">ADB не откроется</span>'}</div>`).join('');
+  if (j.known && j.known.length) {
+    html += '<div style="margin-top:8px;color:#8b97a8">проверенные прошивки платформы:</div>';
+    html += j.known.map(f =>
+      `<div style="padding:2px 0">• ${f.version} ${f.local ? '<span class="ok">файл есть</span>' : '<span class="muted">нужно скачать</span>'}
+       ${f.adb ? '<span class="ok">ADB открывается</span>' : '<span class="err">ADB не откроется</span>'}</div>`).join('');
   }
   if (j.recommend) html += `<p class="hint" style="margin-top:8px">${j.recommend}</p>`;
   $('dev').innerHTML = html;

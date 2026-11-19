@@ -522,44 +522,54 @@ fn device_json() -> String {
         .unwrap_or(false);
 
     let log = std::fs::read_to_string("data/ota.log").unwrap_or_default();
-    let device_id = log
-        .lines()
-        .rev()
-        .find_map(|l| l.split("device_id=").nth(1))
-        .map(|rest| rest.split('&').next().unwrap_or("").to_string())
-        .unwrap_or_default();
-    let log_version = log
+
+    // Платформу и версию станция сама сообщает в запросе к /check_updates:
+    // `?device_id=..&version=..&platform=yandexmini_2`.
+    let last_updates = log
         .lines()
         .rev()
         .find(|l| l.contains("/check_updates"))
-        .and_then(|l| l.split("version=").nth(1))
-        .map(|rest| rest.split('&').next().unwrap_or("").to_string());
+        .unwrap_or("");
+    let device_id = last_updates
+        .split("device_id=")
+        .nth(1)
+        .map(|rest| rest.split('&').next().unwrap_or("").to_string())
+        .unwrap_or_default();
+    let version = last_updates
+        .split("version=")
+        .nth(1)
+        .map(|rest| rest.split('&').next().unwrap_or("").to_string())
+        .unwrap_or_default();
+    let platform = last_updates
+        .split("platform=")
+        .nth(1)
+        .map(|rest| rest.split('&').next().unwrap_or("").to_string())
+        .unwrap_or_default();
 
-    // Версию прошивки берём из запроса станции к /check_updates: там она
-    // точная. ADB-путь — только запасной (там лежит версия ядра, не OTA).
-    let firmware = log_version.clone().unwrap_or_else(|| {
-        if adb_open {
-            adb_shell(&station, "cat /etc/os-release 2>/dev/null | head -2")
-                .map(|t| t.replace('\n', " ").trim().to_string())
-                .unwrap_or_default()
-        } else {
-            String::new()
-        }
-    });
+    // Что мы знаем про эту платформу: только проверенные прошивки.
+    let known = known_firmware(&platform);
+    let good: Vec<String> = known
+        .iter()
+        .filter(|(_, adb, _)| *adb)
+        .map(|(v, _, _)| v.clone())
+        .collect();
+    let is_good = good.iter().any(|v| v == &version);
 
-    let unlock = if firmware.contains(".46") {
-        "да — ADB открывается, сертификат принимается"
-    } else if firmware.contains(".50") {
-        "нет — .50 открывает ADB, но режет наш сертификат; нужна .46"
-    } else if adb_open {
-        "ADB уже открыт"
-    } else if firmware.is_empty() {
-        "неизвестно — включите «Экстра» и прошейте .46"
+    let unlock = if adb_open {
+        "ADB уже открыт".to_string()
+    } else if is_good {
+        "должна открываться — проверьте стек и сертификат".to_string()
+    } else if version.contains(".50") {
+        "нет: .50 открывает ADB, но режет наш сертификат".to_string()
+    } else if good.is_empty() {
+        format!(
+            "неизвестно: по платформе «{}» нет проверенных прошивок",
+            if platform.is_empty() { "?" } else { &platform }
+        )
     } else {
-        "неизвестно — предлагаем .46"
+        format!("неизвестно — проверенная рабочая: {}", good.join(", "))
     };
 
-    let available = available_firmware(&firmware);
     let model = if device_id.starts_with("M00GDW") {
         "Station Mini 2 (YNDX-00020)".to_string()
     } else if device_id.is_empty() {
@@ -568,44 +578,63 @@ fn device_json() -> String {
         device_id.clone()
     };
 
+    // Предлагаем прошивку только если платформа известна, версия не проверена
+    // и для платформы есть проверенная рабочая прошивка.
+    let recommend = if adb_open || is_good || good.is_empty() || platform.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "Платформа {}: проверенная рабочая прошивка {} — обновите из локального файла",
+            platform,
+            good.join(", ")
+        )
+    };
+
     serde_json::json!({
         "station": station,
         "device_id": device_id,
+        "platform": platform,
         "model": model,
-        "firmware": firmware,
+        "firmware": version,
         "adb": adb_open,
         "unlock": unlock,
-        "available": available,
-        "recommend": if !adb_open && !firmware.contains(".46") {
-            "Прошейте .46 из локального файла — на ней ADB открывается и сертификат принимается"
-                .to_string()
-        } else {
-            String::new()
-        }
+        "known": known
+            .iter()
+            .map(|(v, adb, local)| serde_json::json!({
+                "version": v, "adb": adb, "local": local
+            }))
+            .collect::<Vec<_>>(),
+        "recommend": recommend
     })
     .to_string()
 }
 
-/// Локально доступные прошивки из манифеста и папки firmware/.
-fn available_firmware(current: &str) -> Vec<serde_json::Value> {
+/// Проверенные прошивки для платформы: (версия, открывает ли ADB, есть ли файл).
+fn known_firmware(platform: &str) -> Vec<(String, bool, bool)> {
     let mut out = Vec::new();
-    if let Ok(text) = std::fs::read_to_string("data/manifests.json") {
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
-            if let Some(platform) = json.get("yandexmini_2").and_then(|v| v.as_object()) {
-                for version in platform.keys() {
-                    let file = format!("firmware/{version}.zip.off");
-                    let present = std::path::Path::new(&file).exists()
-                        || std::path::Path::new(&format!("firmware/{version}.zip")).exists();
-                    out.push(serde_json::json!({
-                        "version": version,
-                        "local": present,
-                        "current": version == current,
-                        "adb": version.contains(".46"),
-                        "cert": !version.contains(".50")
-                    }));
-                }
-            }
+    if platform.is_empty() {
+        return out;
+    }
+    let Ok(text) = std::fs::read_to_string("firmware/db.json") else {
+        return out;
+    };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return out;
+    };
+    let Some(list) = json.get("firmwares").and_then(|v| v.as_array()) else {
+        return out;
+    };
+    for item in list {
+        if item.get("platform").and_then(|v| v.as_str()) != Some(platform) {
+            continue;
         }
+        let Some(version) = item.get("version").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let adb = item.get("adb").and_then(|v| v.as_bool()).unwrap_or(false);
+        let local = std::path::Path::new(&format!("firmware/{version}.zip.off")).exists()
+            || std::path::Path::new(&format!("firmware/{version}.zip")).exists();
+        out.push((version.to_string(), adb, local));
     }
     out
 }
