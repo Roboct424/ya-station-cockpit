@@ -755,10 +755,6 @@ fn serve(
     stream.set_write_timeout(Some(Duration::from_secs(5)))?;
 
     // Без SNI (клиент пришёл по IP) выпускаем сертификат на локальный IP.
-    let peer = stream
-        .peer_addr()
-        .map(|a| a.ip().to_string())
-        .unwrap_or_default();
     let host = match peek_sni(&stream)? {
         Some(name) => name,
         None => stream.local_addr()?.ip().to_string(),
@@ -807,10 +803,6 @@ fn serve_forward(
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
 
-    let peer = stream
-        .peer_addr()
-        .map(|a| a.ip().to_string())
-        .unwrap_or_default();
     let host = match peek_sni(&stream)? {
         Some(name) => name,
         None => stream.local_addr()?.ip().to_string(),
@@ -1128,10 +1120,6 @@ fn serve_local(
     stream.set_read_timeout(Some(Duration::from_secs(10)))?;
     stream.set_write_timeout(Some(Duration::from_secs(10)))?;
 
-    let peer = stream
-        .peer_addr()
-        .map(|a| a.ip().to_string())
-        .unwrap_or_default();
     let host = match peek_sni(&stream)? {
         Some(name) => name,
         None => stream.local_addr()?.ip().to_string(),
@@ -1147,6 +1135,10 @@ fn serve_local(
     } else {
         host.clone()
     };
+    let peer = stream
+        .peer_addr()
+        .map(|a| a.ip().to_string())
+        .unwrap_or_default();
     let config = ca.config_for(&cert_host)?;
     let conn = ServerConnection::new(config)?;
     let mut tls = StreamOwned::new(conn, stream);
