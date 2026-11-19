@@ -9,9 +9,12 @@ header h1{font-size:14px;margin:0;font-weight:600;white-space:nowrap}
 .badge{padding:3px 9px;border-radius:999px;font-size:11px;background:#23303f;color:#9fb4cc;white-space:nowrap}
 .badge.ok{background:#173a28;color:#7ee2a8}
 .badge.bad{background:#3a1b1b;color:#ff9a9a}
-nav{display:flex;gap:3px;margin-left:auto;flex-shrink:0}
-nav button{background:transparent;border:0;color:#8b97a8;padding:8px 12px;border-radius:9px;cursor:pointer;font-size:13px;white-space:nowrap}
-nav button.on{background:#22303f;color:#e8ecf1}
+.tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:10px 16px;background:#12161c;border-bottom:1px solid #232a34}
+.tabs button{padding:11px 10px;border:1px solid #232a34;border-radius:10px;background:#161b22;color:#8b97a8;
+ cursor:pointer;font-size:13px;font-weight:600;text-align:center;white-space:nowrap}
+.tabs button.on{background:#22303f;color:#e8ecf1;border-color:#33465c}
+.apply{width:100%;padding:14px;font-size:15px;border-radius:12px;margin-top:4px}
+.tabs button.on{background:#22303f;color:#e8ecf1}
 main{padding:16px 18px;max-width:1220px;margin:0 auto}
 section{display:none}section.on{display:block}
 .row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start}
@@ -49,13 +52,13 @@ pre.term{height:calc(100vh - 210px);min-height:420px}
   <span id="b_hosts" class="badge">hosts: ?</span>
   <span id="b_station" class="badge">станция: ?</span>
   <span id="b_stack" class="badge">стек: остановлен</span>
-  <nav>
-    <button class="on" data-tab="s1">1 · Окружение</button>
-    <button data-tab="s2">2 · Перехват</button>
-    <button data-tab="s3">3 · Сопряжение</button>
-    <button data-tab="s4">4 · Обслуживание</button>
-  </nav>
 </header>
+<div class="tabs">
+  <button class="on" data-tab="s1">1 · Окружение</button>
+  <button data-tab="s2">2 · Настройка</button>
+  <button data-tab="s3">3 · Попытка</button>
+  <button data-tab="s4">4 · Обслуживание</button>
+</div>
 
 <main>
 <section id="s1" class="on">
@@ -109,11 +112,6 @@ pre.term{height:calc(100vh - 210px);min-height:420px}
         <button class="act" onclick="saveProfile()">Сохранить профиль</button>
         <span id="r_profile" class="chip wait">не сохранён</span>
       </div>
-      <div class="card">
-        <h2>4. Дальше</h2>
-        <p class="hint">Бэкап, сторож ADB и установка нашего CA — на вкладке
-        «4 · Обслуживание», после разблокировки.</p>
-      </div>
     </div>
   </div>
 </section>
@@ -154,17 +152,20 @@ pre.term{height:calc(100vh - 210px);min-height:420px}
 
   <div class="card">
     <h2>4. Обновление</h2>
-    <p class="hint">Доступные прошивки для платформы профиля. «Проверена» — есть
-    в базе и открывает ADB. Файл нужен локально, иначе обновление не поедет.</p>
+    <div class="check" style="margin-bottom:8px"><input type="checkbox" id="ex_update">
+      <span><b>Разрешить обновление</b> на выбранную прошивку</span></div>
+    <p class="hint">По умолчанию выключено: без разрешения станция получает
+    «обновлений нет». «Проверена» — есть в базе и открывает ADB.</p>
     <div id="fwlistbox" class="muted">…</div>
     <label>Скачать базу прошивок по ссылке (JSON)</label>
     <input type="text" id="dburl" placeholder="https://…/firmware-db.json">
     <button class="act ghost" onclick="fetchDb()">Скачать базу</button>
     <span id="r_db" class="chip wait">не выполнялось</span>
-    <div class="check" style="margin-top:10px"><input type="checkbox" id="ex_update" checked>
-      <span>Разрешить обновление на выбранную прошивку</span></div>
     <p class="hint" id="fw_hint"></p>
   </div>
+
+  <button class="act apply" id="btnApply" onclick="applyAndRestart()">Применить и перезапустить стек</button>
+  <p class="hint" id="apply_hint" style="text-align:center"></p>
 </section>
 
 <section id="s3">
@@ -214,8 +215,8 @@ pre.term{height:calc(100vh - 210px);min-height:420px}
 const $ = id => document.getElementById(id);
 let ITEMS = [], cursor = 0;
 
-document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
-  document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
+document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('on', x === b));
   document.querySelectorAll('section').forEach(s => s.classList.toggle('on', s.id === b.dataset.tab));
 });
 
@@ -239,6 +240,7 @@ function body(extra) {
 
 function chip(id, ok, text) {
   const el = $(id);
+  if (!el) return;
   el.className = 'chip ' + (ok ? 'ok' : 'bad');
   el.textContent = text;
 }
@@ -355,9 +357,9 @@ async function loadDevice() {
 }
 
 async function restartStack() {
-  chip('r_stack', false, 'перезапускаю…');
-  const r = await (await fetch('/api/restart', {method: 'POST', body: new URLSearchParams({mode: 'offline'})})).json();
-  chip('r_stack', r.ok, r.ok ? `стек перезапущен · ${r.routes} маршрутов` : 'ошибка');
+  $('apply_hint').textContent = 'перезапускаю стек…';
+  const r = await (await fetch('/api/restart', {method: 'POST', body: new URLSearchParams({mode: 'offline', update: '0'})})).json();
+  $('apply_hint').textContent = r.ok ? `стек работает: ${r.routes} маршрутов` : 'ошибка';
   append('перезапуск стека: ' + (r.text || ''));
 }
 
@@ -409,7 +411,7 @@ function selectAll(on) {
   ITEMS.forEach(it => $('on_' + it.id).checked = on);
 }
 
-async function startStack() {
+async function applyAndRestart() {
   const online = document.querySelector('input[name=reg]:checked').value === 'online';
   const fw = document.querySelector('input[name=fw]:checked');
   const updating = $('ex_update').checked && fw;
@@ -420,14 +422,14 @@ async function startStack() {
     version: updating ? fw.value : '',
     firmware_path: ''
   });
-  $('btnStack').disabled = true; chip('r_stack', false, 'запускаю…');
-  const r = await (await fetch('/api/stack/start', {method: 'POST', body: f})).json();
-  $('btnStack').disabled = false;
-  chip('r_stack', r.ok, r.ok ? `стек запущен · ${r.routes} маршрутов` : 'ошибка');
-  $('stack_hint').textContent = r.text || '';
-  document.querySelector('nav button[data-tab="s3"]').click();
-  append(r.ok ? 'стек запущен: ' + r.routes + ' маршрутов, pid ' + r.pid
+  $('btnApply').disabled = true;
+  $('apply_hint').textContent = 'перезапускаю стек…';
+  const r = await (await fetch('/api/restart', {method: 'POST', body: f})).json();
+  $('btnApply').disabled = false;
+  $('apply_hint').textContent = r.ok ? `стек работает: ${r.routes} маршрутов, pid ${r.pid}` : (r.text || 'ошибка');
+  append(r.ok ? 'стек перезапущен с новыми параметрами: ' + r.routes + ' маршрутов'
               : 'ошибка запуска: ' + r.text);
+  if (r.ok) document.querySelector('.tabs button[data-tab="s3"]').click();
 }
 
 async function stopStack() {

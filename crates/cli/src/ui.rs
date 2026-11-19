@@ -931,13 +931,19 @@ fn device_json() -> String {
     };
 
     let mut mismatch: Vec<String> = Vec::new();
-    if !profile.model.is_empty() && profile.model != model {
+    // Сравниваем только когда станция реально что-то сообщила (G-045).
+    let detected = !device_id.is_empty();
+    if detected && !profile.model.is_empty() && profile.model != model {
         mismatch.push(format!(
             "модель: указано «{}», от станции «{}»",
             profile.model, model
         ));
     }
-    if !profile.firmware.is_empty() && !version.is_empty() && profile.firmware != version {
+    if detected
+        && !profile.firmware.is_empty()
+        && !version.is_empty()
+        && profile.firmware != version
+    {
         mismatch.push(format!(
             "прошивка: указано «{}», от станции «{}»",
             profile.firmware, version
