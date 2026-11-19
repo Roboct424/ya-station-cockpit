@@ -119,6 +119,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: CaptureCmd,
     },
+    /// Поиск станций по Bluetooth
+    Ble {
+        #[command(subcommand)]
+        cmd: BleCmd,
+    },
     /// Модули мастера: список и запуск
     Module {
         #[command(subcommand)]
@@ -348,6 +353,15 @@ enum CaptureCmd {
     Stats {
         #[arg(long, default_value = "data/capture.jsonl")]
         log: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum BleCmd {
+    /// Сканировать эфир и показать найденные устройства
+    Scan {
+        #[arg(long, default_value_t = 6)]
+        seconds: u64,
     },
 }
 
@@ -586,6 +600,7 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
         Cmd::Ota { cmd } => run_ota(cmd),
         Cmd::Pair { cmd } => run_pair(cmd),
         Cmd::Module { cmd } => run_module_cmd(cmd),
+        Cmd::Ble { cmd } => run_ble(cmd),
         Cmd::Telemetry { cmd } => run_telemetry(&cfg, cmd),
         Cmd::Capture { cmd } => run_capture(&cfg, cmd),
         Cmd::Ui { port } => {
@@ -1190,6 +1205,34 @@ fn run_capture(cfg: &Config, cmd: CaptureCmd) -> cockpit_core::Result<ExitCode> 
 
 fn now_stamp() -> String {
     chrono::Utc::now().to_rfc3339()
+}
+
+/// Поиск станций по Bluetooth из командной строки.
+fn run_ble(cmd: BleCmd) -> cockpit_core::Result<ExitCode> {
+    match cmd {
+        BleCmd::Scan { seconds } => {
+            #[cfg(windows)]
+            {
+                match cockpit_net::ble::scan(seconds) {
+                    Ok(devices) => {
+                        if devices.is_empty() {
+                            println!("ничего не найдено");
+                        }
+                        for device in devices {
+                            println!("{}", device.describe());
+                        }
+                    }
+                    Err(e) => println!("не удалось: {e}"),
+                }
+            }
+            #[cfg(not(windows))]
+            {
+                let _ = seconds;
+                println!("поиск по Bluetooth реализован для Windows");
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+    }
 }
 
 /// Модули мастера из командной строки.

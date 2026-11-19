@@ -325,6 +325,18 @@ async function setEthernet() {
   $('eth_hint').textContent = r.text || '';
 }
 
+async function bleScan() {
+  $('btnBle').disabled = true;
+  $('blelist').innerHTML = '<span class="muted">сканирую эфир, 6 секунд…</span>';
+  const j = await (await fetch('/api/ble')).json();
+  $('btnBle').disabled = false;
+  if (!j.ok) { $('blelist').textContent = j.text || 'не удалось'; return; }
+  if (!j.items.length) { $('blelist').innerHTML = '<span class="muted">рядом ничего не видно</span>'; return; }
+  $('blelist').innerHTML = j.items.map(d =>
+    `<div class="check"><span>${d.station ? '📻' : '•'} ${d.name || '(без имени)'}
+      <span class="muted">${d.address} · ${d.rssi} dBm</span></span></div>`).join('');
+}
+
 async function saveProfile() {
   const r = await (await fetch('/api/profile', {method: 'POST', body: new URLSearchParams({
     model: $('model').value, firmware: $('profile_fw').value,

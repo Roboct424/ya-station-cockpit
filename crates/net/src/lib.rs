@@ -9,6 +9,8 @@
 //! Хотспот пока не реализован: Windows требует WinRT, Linux — hostapd.
 //! Возвращаем `NotImplemented` — честнее, чем «сделали вид».
 
+#[cfg(windows)]
+pub mod ble;
 pub mod sys;
 #[cfg(windows)]
 mod winrt_hotspot;

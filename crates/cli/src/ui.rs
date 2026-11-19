@@ -310,6 +310,7 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
         ("GET", "/api/device") => (200, "application/json", device_json()),
         ("GET", "/api/advice") => (200, "application/json", advice_json()),
         ("GET", "/api/adapters") => (200, "application/json", adapters_json()),
+        ("GET", "/api/ble") => (200, "application/json", ble_json()),
         ("POST", "/api/ethernet") => (200, "application/json", set_ethernet(body)),
         ("POST", "/api/allow") => {
             let value = if field(body, "value") == "1" {
@@ -950,6 +951,38 @@ fn fetch_db(body: &str) -> String {
             Err(e) => serde_json::json!({ "ok": false, "text": format!("файл: {e}") }).to_string(),
         },
         _ => serde_json::json!({ "ok": false, "text": "не удалось скачать" }).to_string(),
+    }
+}
+
+/// Поиск станций по Bluetooth (6 секунд, синхронно).
+fn ble_json() -> String {
+    #[cfg(windows)]
+    {
+        match cockpit_net::ble::scan(6) {
+            Ok(devices) => {
+                let items: Vec<_> = devices
+                    .iter()
+                    .filter(|d| d.station || !d.name.is_empty())
+                    .map(|d| {
+                        serde_json::json!({
+                            "name": d.name,
+                            "address": d.address,
+                            "rssi": d.rssi,
+                            "station": d.station
+                        })
+                    })
+                    .collect();
+                push_log(format!("bluetooth: найдено {}", items.len()));
+                serde_json::json!({ "ok": true, "items": items }).to_string()
+            }
+            Err(e) => {
+                serde_json::json!({ "ok": false, "items": [], "text": e.to_string() }).to_string()
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        serde_json::json!({ "ok": false, "items": [], "text": "только Windows" }).to_string()
     }
 }
 
