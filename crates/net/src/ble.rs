@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use windows::Devices::Bluetooth::Advertisement::{
     BluetoothLEAdvertisementReceivedEventArgs, BluetoothLEAdvertisementWatcher,
+    BluetoothLEScanningMode,
 };
 use windows::Foundation::TypedEventHandler;
 
@@ -27,6 +28,8 @@ pub struct BleDevice {
     pub manufacturer: Vec<String>,
     /// Сервисы из рекламы.
     pub services: Vec<String>,
+    /// Все секции рекламы: "тип:hex".
+    pub sections: Vec<String>,
 }
 
 impl BleDevice {
@@ -51,6 +54,9 @@ fn looks_like_station(name: &str) -> bool {
 pub fn scan(seconds: u64) -> Result<Vec<BleDevice>, NetError> {
     let watcher = BluetoothLEAdvertisementWatcher::new()
         .map_err(|e| NetError::Os(format!("BLE watcher: {e}")))?;
+    // Активное сканирование: только так станция присылает ответ на запрос
+    // (scan response) с именем и сервисами.
+    let _ = watcher.SetScanningMode(BluetoothLEScanningMode::Active);
     let watcher = Arc::new(watcher);
 
     let found: Arc<Mutex<Vec<BleDevice>>> = Arc::new(Mutex::new(Vec::new()));
@@ -84,6 +90,11 @@ pub fn scan(seconds: u64) -> Result<Vec<BleDevice>, NetError> {
         // данные производителя — в 0xFF, сервисы — в 0x16.
         let mut manufacturer = Vec::new();
         let mut services = Vec::new();
+        let mut section_list: Vec<String> = Vec::new();
+        let kind_marker = args
+            .AdvertisementType()
+            .map(|t| format!("{t:?}"))
+            .unwrap_or_default();
         let mut section_name = String::new();
         if let Ok(adv) = args.Advertisement() {
             if let Ok(sections) = adv.DataSections() {
@@ -91,6 +102,7 @@ pub fn scan(seconds: u64) -> Result<Vec<BleDevice>, NetError> {
                     let kind = section.DataType().unwrap_or(0);
                     let bytes = section.Data().map(|d| buffer_bytes(&d)).unwrap_or_default();
                     let hex = bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
+                    section_list.push(format!("{kind:02x}:{hex}"));
                     match kind {
                         0x08 | 0x09 => {
                             if section_name.is_empty() {
@@ -125,6 +137,11 @@ pub fn scan(seconds: u64) -> Result<Vec<BleDevice>, NetError> {
                     station,
                     manufacturer,
                     services,
+                    sections: {
+                        let mut list = vec![kind_marker.clone()];
+                        list.extend(section_list);
+                        list
+                    },
                 });
             }
         }

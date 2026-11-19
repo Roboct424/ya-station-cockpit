@@ -961,6 +961,28 @@ fn fetch_db(body: &str) -> String {
     }
 }
 
+/// Модель по имени из BLE-рекламы: «Yandex Station Mini 2 RGBB» → Station Mini 2.
+fn model_from_name(name: &str) -> Option<&'static str> {
+    let n = name.to_lowercase();
+    if n.contains("mini 3") || n.contains("00027") {
+        Some("Station Mini 3 (YNDX-00027)")
+    } else if n.contains("mini 2") || n.contains("00020") {
+        Some("Station Mini 2")
+    } else if n.contains("mini") {
+        Some("Station Mini")
+    } else if n.contains("hub") {
+        Some("Station Hub")
+    } else if n.contains("midi") {
+        Some("Station Midi")
+    } else if n.contains("max") {
+        Some("Station Max")
+    } else if n.contains("lite") {
+        Some("Station Lite")
+    } else {
+        None
+    }
+}
+
 /// Известные устройства: MAC → модель (чтобы узнавать колонку в следующий раз).
 fn devices_map_path() -> std::path::PathBuf {
     std::path::PathBuf::from("data").join("devices.json")
@@ -1008,18 +1030,28 @@ fn ble_json() -> String {
                     .iter()
                     .filter(|d| d.station || !d.name.is_empty())
                     .map(|d| {
-                        let model = known
+                        let known_model = known
                             .get(&d.address)
                             .and_then(|v| v.get("model"))
                             .and_then(|v| v.as_str())
-                            .unwrap_or("");
+                            .unwrap_or("")
+                            .to_string();
+                        let suggested =
+                            model_from_name(&d.name).map(|m| m.to_string()).or_else(|| {
+                                if known_model.is_empty() {
+                                    None
+                                } else {
+                                    Some(known_model.clone())
+                                }
+                            });
                         serde_json::json!({
                             "name": d.name,
                             "address": d.address,
                             "rssi": d.rssi,
                             "station": d.station,
-                            "known_model": model,
-                            "manufacturer": d.manufacturer,
+                            "known_model": known_model,
+                            "suggested_model": suggested,
+                            "sections": d.sections,
                         })
                     })
                     .collect();

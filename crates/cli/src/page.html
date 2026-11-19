@@ -346,7 +346,9 @@ async function bleScan() {
   if (!j.ok) { $('blelist').textContent = j.text || 'не удалось'; return; }
   if (!j.items.length) { $('blelist').innerHTML = '<span class="muted">рядом ничего не видно</span>'; return; }
   $('blelist').innerHTML = j.items.map(d => {
-    const model = d.known_model ? `<span class="ok">${d.known_model}</span>` : '<span class="muted">модель неизвестна</span>';
+    const model = d.suggested_model
+      ? `<span class="ok">${d.suggested_model}</span>`
+      : '<span class="muted">модель не определена</span>';
     const remember = d.station
       ? `<button class="act ghost" style="margin:4px 0 0" onclick="rememberDevice('${d.address}')">Запомнить модель из профиля</button>`
       : '';
@@ -354,11 +356,12 @@ async function bleScan() {
       <span class="muted">${d.address} · ${d.rssi} dBm</span> — ${model}</span></div>${remember}`;
   }).join('');
 
-  // Если станция уже была замечена — подставляем модель в профиль.
-  const station = j.items.find(d => d.station && d.known_model);
+  // Подставляем модель, если её удалось определить по имени или по памяти.
+  const station = j.items.find(d => d.station && d.suggested_model);
   if (station) {
-    $('model').value = station.known_model;
-    append('bluetooth: узнал станцию ' + station.address + ' → ' + station.known_model);
+    $('model').value = station.suggested_model;
+    checkMic(station.suggested_model);
+    append('bluetooth: нашёл «' + (station.name || station.address) + '» → ' + station.suggested_model);
   }
 }
 
