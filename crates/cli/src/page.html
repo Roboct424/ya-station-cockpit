@@ -227,6 +227,7 @@ pre.term{height:100%;min-height:0}
           <div class="col">
             <label>Громкость (рабочая 0.5)</label><input type="text" id="gain" value="0.5">
             <label>Повторов</label><input type="text" id="repeat" value="1">
+            <label>Предстарт (0–4)</label><input type="text" id="preroll" value="1">
           </div>
         </div>
         <button class="act" id="btnPair" onclick="pair()">Проиграть код</button>
@@ -579,7 +580,7 @@ async function pair() {
   const r = await (await fetch('/api/pair', {method: 'POST', body: new URLSearchParams({
     ssid: $('pssid').value, password: $('ppass').value,
     gain: $('gain').value, repeat: $('repeat').value,
-    tones: 'standard', preroll: '1' 
+    tones: 'standard', preroll: $('preroll').value
   })})).json();
   $('btnPair').disabled = false;
   chip('r_pair', r.ok, r.text);
