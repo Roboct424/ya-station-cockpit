@@ -313,6 +313,12 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
         ("GET", "/api/ble") => (200, "application/json", ble_json()),
         ("POST", "/api/device-map") => (200, "application/json", set_device_map(body)),
         ("POST", "/api/ethernet") => (200, "application/json", set_ethernet(body)),
+        ("GET", "/api/iface") => {
+            let adapter = query(path, "adapter").unwrap_or_else(|| "Ethernet".to_string());
+            let ip = iface_ip(&adapter);
+            let json = serde_json::json!({ "adapter": adapter, "ip": ip });
+            (200, "application/json", json.to_string())
+        }
         ("POST", "/api/share") => {
             let mut ctx = ctx_from(body);
             let adapter = field(body, "adapter");
@@ -1131,6 +1137,23 @@ fn adapters_json() -> String {
         }
     }
     serde_json::json!({ "items": items }).to_string()
+}
+
+/// IPv4-адрес адаптера (без PowerShell-кракозябр: адрес — только ASCII).
+fn iface_ip(adapter: &str) -> String {
+    let out = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            &format!(
+                "(Get-NetIPAddress -InterfaceAlias '{adapter}' -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -First 1).IPAddress"
+            ),
+        ])
+        .output();
+    match out {
+        Ok(res) => String::from_utf8_lossy(&res.stdout).trim().to_string(),
+        Err(_) => String::new(),
+    }
 }
 
 /// Назначает статический адрес на выбранный адаптер (проводной вариант).

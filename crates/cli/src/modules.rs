@@ -569,8 +569,10 @@ fn net_share(ctx: &ModuleCtx) -> Result<String, String> {
     };
     let script = format!(
         r#"
+chcp 65001 > $null
 $ErrorActionPreference='Stop'
 $uplink = (Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric | Select-Object -First 1).InterfaceAlias
+if ($uplink -eq '{adapter}') {{ throw "выбран тот же адаптер, что и интернет ($uplink) — выберите Ethernet" }}
 $share = New-Object -ComObject HNetCfg.HNetShare
 $pub = $null; $priv = $null
 foreach ($c in $share.EnumEveryConnection) {{
@@ -619,6 +621,7 @@ fn net_unshare(ctx: &ModuleCtx) -> Result<String, String> {
     };
     let script = format!(
         r#"
+chcp 65001 > $null
 $ErrorActionPreference='Stop'
 $share = New-Object -ComObject HNetCfg.HNetShare
 foreach ($c in $share.EnumEveryConnection) {{

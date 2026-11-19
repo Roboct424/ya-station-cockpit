@@ -336,7 +336,7 @@ function toggleLink() {
   const wifi = $('link').value !== 'ethernet';
   $('ap_card').style.display = wifi ? 'block' : 'none';
   $('eth_card').style.display = wifi ? 'none' : 'block';
-  if (!wifi) loadAdapters();
+  if (!wifi) { loadAdapters().then(() => refreshIface($('adapter').value)); }
 }
 
 async function loadAdapters() {
@@ -344,15 +344,32 @@ async function loadAdapters() {
   const sel = $('adapter');
   if (!j.items.length) { sel.innerHTML = '<option value="">адаптеры не найдены</option>'; return; }
   sel.innerHTML = j.items.map(a => `<option value="${a.name}">${a.name} — ${a.desc}</option>`).join('');
+  // По умолчанию — проводной адаптер, иначе легко выбрать Wi-Fi и получить ошибку ICS.
+  const wired = j.items.find(a => /ethernet|локальн/i.test(a.name) || /ethernet/i.test(a.desc));
+  if (wired) sel.value = wired.name;
+}
+
+async function refreshIface(adapter) {
+  const j = await (await fetch('/api/iface?adapter=' + encodeURIComponent(adapter))).json();
+  if (j.ip) {
+    $('eth_ip').value = j.ip;
+    return j.ip;
+  }
+  return '';
 }
 
 async function enableShare() {
+  const adapter = $('adapter').value || 'Ethernet';
   $('btnShare').disabled = true; chip('r_eth', false, 'включаю общий доступ…');
-  const r = await (await fetch('/api/share', {method: 'POST', body: new URLSearchParams({
-    adapter: $('adapter').value || 'Ethernet'})})).json();
+  const r = await (await fetch('/api/share', {method: 'POST', body: new URLSearchParams({adapter})})).json();
   $('btnShare').disabled = false;
   chip('r_eth', r.ok, r.ok ? 'общий доступ включён' : 'ошибка');
   $('eth_hint').textContent = r.text || '';
+  // Адрес порта подхватываем сами — руками вводить не нужно.
+  if (r.ok) {
+    const ip = await refreshIface(adapter);
+    if (ip) append('ethernet: ' + adapter + ' получил адрес ' + ip);
+  }
 }
 
 async function setEthernet() {
