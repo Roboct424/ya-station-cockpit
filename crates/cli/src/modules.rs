@@ -271,6 +271,13 @@ pub const MODULES: &[Module] = &[
         needs_adb: false,
     },
     Module {
+        id: "net.names",
+        group: "Сеть",
+        title: "Имена станции → мы",
+        summary: "Пишет облачные имена в hosts ноутбука: Windows-DNS отдаёт станции наш адрес",
+        needs_adb: false,
+    },
+    Module {
         id: "net.static-ip",
         group: "Сеть",
         title: "Статический адрес",
@@ -357,6 +364,7 @@ pub fn run(id: &str, ctx: &ModuleCtx) -> Result<String, String> {
     match id {
         "env.cleanup" => env_cleanup(),
         "net.hotspot" => net_hotspot(ctx),
+        "net.names" => net_names(),
         "net.static-ip" => net_static_ip(ctx),
         "net.hosts" => net_hosts(ctx),
         "ca.install" => ca_install(ctx),
@@ -442,9 +450,23 @@ fn env_cleanup() -> Result<String, String> {
         .join("System32\\drivers\\etc\\hosts");
     match std::fs::read_to_string(&hosts) {
         Ok(text) => {
+            // Блок `# cockpit-names` — наш, его не трогаем: именно он
+            // направляет имена станции на нас (G-041).
+            let mut in_our_block = false;
             let kept: Vec<&str> = text
                 .lines()
                 .filter(|l| {
+                    let line = l.trim();
+                    if line.starts_with("# cockpit-names") {
+                        in_our_block = true;
+                        return true;
+                    }
+                    if in_our_block {
+                        if line.starts_with("192.168.137.1") {
+                            return true;
+                        }
+                        in_our_block = false;
+                    }
                     let bad = (l.contains("192.168.137.1") || l.contains("127.0.0.1"))
                         && (l.contains("yandex") || l.contains("ya.ru"));
                     !bad
@@ -514,6 +536,55 @@ fn net_hotspot(ctx: &ModuleCtx) -> Result<String, String> {
         return Err(text);
     }
     Ok(text)
+}
+
+fn net_names() -> Result<String, String> {
+    let names = [
+        "oauth.yandex.ru", "scbh.yandex.net", "quasar.yandex.ru", "quasar.yandex.net",
+        "quasar.yandex.com", "quasar-internal.yandex.net", "quasar.s3.yandex.net",
+        "s3.yandex.net", "storage.yandex.net", "uniproxy.alice.yandex.net",
+        "uniproxy-quic.alice.yandex.net", "uniproxy-roz.alice.yandex.net",
+        "rpc.alice.yandex.net", "voiceservices.yandex.net", "alicesbc.tel.yandex.net",
+        "alice-ats.yandex.net", "alice-ats-test.yandex.net", "iot.yandex.net",
+        "api.iot.yandex.net", "backend.yandex.net", "clck.yandex.net", "mc.yandex.ru",
+        "log.strm.yandex.ru", "report.appmetrica.yandex.net",
+        "start.appmetrica.yandex.net", "updates.yandex.net", "ota.yandex.net",
+        "time.yandex.net", "ntp.yantp.net", "ntp.yandex.net", "time1.yandex.net",
+        "time2.yandex.net", "yandex.ru", "ya.ru", "pool.ntp.org", "ru.pool.ntp.org",
+        "0.ru.pool.ntp.org", "1.ru.pool.ntp.org", "2.ru.pool.ntp.org",
+        "3.ru.pool.ntp.org", "europe.pool.ntp.org",
+    ];
+
+    let hosts = PathBuf::from(std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".into()))
+        .join("System32\\drivers\\etc\\hosts");
+    let text = std::fs::read_to_string(&hosts).map_err(|e| format!("hosts: {e}"))?;
+
+    // Убираем прежний наш блок целиком, затем пишем свежий.
+    let mut out = String::new();
+    let mut skip = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("# cockpit-names") {
+            skip = true;
+            continue;
+        }
+        if skip {
+            if trimmed.starts_with("192.168.137.1") {
+                continue;
+            }
+            skip = false;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out.push_str("# cockpit-names: имена станции -> наш сервер\n");
+    for name in names {
+        out.push_str(&format!("192.168.137.1 {name}\n"));
+    }
+
+    std::fs::write(&hosts, out)
+        .map_err(|e| format!("hosts не записался ({e}) — запустите от администратора"))?;
+    Ok(format!("записей: {}\nимена теперь указывают на 192.168.137.1", names.len()))
 }
 
 fn net_static_ip(ctx: &ModuleCtx) -> Result<String, String> {

@@ -9,3 +9,4 @@ cockpit.toml
 
 firmware/*.zip
 firmware/*.off
+target_check/
