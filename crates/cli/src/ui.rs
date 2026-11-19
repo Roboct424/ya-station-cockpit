@@ -993,19 +993,42 @@ fn ble_json() -> String {
 }
 
 /// Сетевые адаптеры ноутбука.
+///
+/// GOTCHA: G-049 — читаем через файл в UTF-8: консоль PowerShell отдаёт
+/// русские имена в OEM-кодировке, и в интерфейсе они превращаются в кракозябры.
 fn adapters_json() -> String {
-    let out = std::process::Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-Command",
-            "Get-NetAdapter | Where-Object Status -eq 'Up' | ForEach-Object { $_.Name + '|' + $_.InterfaceDescription }",
-        ])
-        .output();
+    let path = std::env::temp_dir().join("cockpit_adapters.json");
+    let script = format!(
+        "Get-NetAdapter | Where-Object Status -eq 'Up' | \
+         Select-Object Name,InterfaceDescription | ConvertTo-Json -Compress | \
+         Out-File -Encoding utf8 '{}'",
+        path.display()
+    );
+    let _ = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-Command", &script])
+        .status();
+
+    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    let parsed: serde_json::Value =
+        serde_json::from_str(text.trim()).unwrap_or_else(|_| serde_json::json!([]));
+    let list = if parsed.is_array() {
+        parsed
+    } else if parsed.is_null() {
+        serde_json::json!([])
+    } else {
+        serde_json::json!([parsed])
+    };
+
     let mut items = Vec::new();
-    if let Ok(out) = out {
-        for line in String::from_utf8_lossy(&out.stdout).lines() {
-            if let Some((name, desc)) = line.split_once('|') {
-                items.push(serde_json::json!({ "name": name.trim(), "desc": desc.trim() }));
+    if let Some(array) = list.as_array() {
+        for item in array {
+            let name = item.get("Name").and_then(|v| v.as_str()).unwrap_or("");
+            let desc = item
+                .get("InterfaceDescription")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if !name.is_empty() {
+                items.push(serde_json::json!({ "name": name, "desc": desc }));
             }
         }
     }
@@ -1039,7 +1062,7 @@ fn set_ethernet(body: &str) -> String {
         }
         Ok(res) => serde_json::json!({
             "ok": false,
-            "text": format!("{}", String::from_utf8_lossy(&res.stderr).trim())
+            "text": String::from_utf8_lossy(&res.stderr).trim().to_string()
         })
         .to_string(),
         Err(e) => serde_json::json!({ "ok": false, "text": format!("{e}") }).to_string(),

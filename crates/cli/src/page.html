@@ -115,7 +115,9 @@ pre.term{height:calc(100vh - 170px);min-height:360px}
       </div>
     </div>
     <button class="act" onclick="saveProfile()">Сохранить профиль</button>
+    <button class="act ghost" id="btnBle" onclick="bleScan()">Найти по Bluetooth</button>
     <span id="r_profile" class="chip wait">не сохранён</span>
+    <div id="blelist" class="muted" style="margin-top:8px"></div>
   </div>
 
   <div class="card" id="ap_card">
