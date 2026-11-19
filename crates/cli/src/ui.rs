@@ -962,6 +962,9 @@ fn fetch_db(body: &str) -> String {
 }
 
 /// Модель по имени из BLE-рекламы: «Yandex Station Mini 2 RGBB» → Station Mini 2.
+///
+/// На Linux не используется (BLE есть только в Windows) — глушим dead_code.
+#[cfg_attr(not(windows), allow(dead_code))]
 fn model_from_name(name: &str) -> Option<&'static str> {
     let n = name.to_lowercase();
     if n.contains("mini 3") || n.contains("00027") {
