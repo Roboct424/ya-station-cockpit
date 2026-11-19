@@ -561,6 +561,168 @@ fn session_id() -> &'static str {
     SESSION.get_or_init(|| chrono::Utc::now().format("%Y%m%d%H%M%S").to_string())
 }
 
+/// Мягкое сравнение модели: «Station Mini 2» входит в «Station Mini 2 (YNDX-00020)».
+fn model_matches(declared: &str, actual: &str) -> bool {
+    let d = declared.trim().to_lowercase();
+    let a = actual.trim().to_lowercase();
+    !d.is_empty() && (a.contains(&d) || d.contains(&a))
+}
+
+/// Сравнение прошивки: `factory` — любая заводская, иначе совпадение по началу.
+fn firmware_matches(declared: &str, actual: &str) -> bool {
+    let d = declared.trim().to_lowercase();
+    let a = actual.trim().to_lowercase();
+    if d.is_empty() {
+        return true;
+    }
+    if d == "factory" {
+        return a.contains("factory");
+    }
+    a == d || a.starts_with(&d)
+}
+
+/// Снимок станции на момент попытки.
+#[derive(Default, Clone)]
+struct DeviceSnapshot {
+    device_id: String,
+    model: String,
+    firmware: String,
+}
+
+/// Состояние попыток: что ожидали и что было в прошлый раз.
+#[derive(Default, Clone)]
+struct AttemptState {
+    number: u32,
+    expected_version: String,
+    update_requested: bool,
+    previous: DeviceSnapshot,
+}
+
+fn attempts_dir() -> std::path::PathBuf {
+    std::path::PathBuf::from("data").join("attempts")
+}
+
+fn attempt_state_path() -> std::path::PathBuf {
+    attempts_dir().join("state.json")
+}
+
+fn read_attempt_state() -> AttemptState {
+    let Ok(text) = std::fs::read_to_string(attempt_state_path()) else {
+        return AttemptState::default();
+    };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return AttemptState::default();
+    };
+    let prev = json.get("previous").cloned().unwrap_or_default();
+    AttemptState {
+        number: json.get("number").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+        expected_version: json
+            .get("expected_version")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        update_requested: json
+            .get("update_requested")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        previous: DeviceSnapshot {
+            device_id: prev
+                .get("device_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            model: prev
+                .get("model")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            firmware: prev
+                .get("firmware")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+        },
+    }
+}
+
+/// Достаёт из лога то, что станция сообщила о себе.
+fn snapshot_from_log() -> DeviceSnapshot {
+    let log = std::fs::read_to_string("data/ota.log").unwrap_or_default();
+    let last = log.lines().rev().find(|l| l.contains("/check_updates"));
+    let Some(line) = last else {
+        return DeviceSnapshot::default();
+    };
+    let get = |key: &str| {
+        line.split(key)
+            .nth(1)
+            .map(|rest| rest.split('&').next().unwrap_or("").to_string())
+            .unwrap_or_default()
+    };
+    let device_id = get("device_id=");
+    let firmware = get("version=");
+    DeviceSnapshot {
+        model: if device_id.starts_with("M00GDW") {
+            "Station Mini 2 (YNDX-00020)".to_string()
+        } else if device_id.is_empty() {
+            String::new()
+        } else {
+            device_id.clone()
+        },
+        device_id,
+        firmware,
+    }
+}
+
+/// Новый лог на каждую попытку + снимок прошлой попытки.
+fn rotate_attempt(expected_version: &str, update_requested: bool) {
+    let dir = attempts_dir();
+    let _ = std::fs::create_dir_all(&dir);
+
+    let state = read_attempt_state();
+    let current = snapshot_from_log();
+    let previous = if current.firmware.is_empty() {
+        state.previous.clone()
+    } else {
+        current
+    };
+
+    // Сохраняем лог прошлой попытки, если он что-то содержал.
+    let log_path = std::path::PathBuf::from("data").join("ota.log");
+    if let Ok(text) = std::fs::read_to_string(&log_path) {
+        if text.lines().count() > 9 {
+            let name = format!("attempt-{:03}.log", state.number.max(1));
+            let _ = std::fs::write(dir.join(name), text);
+        }
+    }
+
+    let next = AttemptState {
+        number: state.number + 1,
+        expected_version: expected_version.to_string(),
+        update_requested,
+        previous,
+    };
+    let json = serde_json::json!({
+        "number": next.number,
+        "expected_version": next.expected_version,
+        "update_requested": next.update_requested,
+        "previous": {
+            "device_id": next.previous.device_id,
+            "model": next.previous.model,
+            "firmware": next.previous.firmware
+        }
+    });
+    let _ = std::fs::write(attempt_state_path(), json.to_string());
+    push_log(format!(
+        "попытка №{}: прошлая прошивка «{}»",
+        next.number,
+        if next.previous.firmware.is_empty() {
+            "—"
+        } else {
+            &next.previous.firmware
+        }
+    ));
+}
+
 /// Профиль устройства, заданный на первом шаге.
 #[derive(Default, Clone)]
 struct Profile {
@@ -930,11 +1092,13 @@ fn device_json() -> String {
         String::new()
     };
 
-    let mut mismatch: Vec<String> = Vec::new();
-    // Сравниваем только когда станция реально что-то сообщила (G-045).
+    // 1) Защита от невнимательности: профиль (шаг 1) ↔ факт.
+    //    Сравнение мягкое: «Station Mini 2» и «Station Mini 2 (YNDX-00020)» — одно и то же,
+    //    а профиль «factory» совпадает с любой заводской прошивкой.
+    let mut guard: Vec<String> = Vec::new();
     let detected = !device_id.is_empty();
-    if detected && !profile.model.is_empty() && profile.model != model {
-        mismatch.push(format!(
+    if detected && !profile.model.is_empty() && !model_matches(&profile.model, &model) {
+        guard.push(format!(
             "модель: указано «{}», от станции «{}»",
             profile.model, model
         ));
@@ -942,18 +1106,62 @@ fn device_json() -> String {
     if detected
         && !profile.firmware.is_empty()
         && !version.is_empty()
-        && profile.firmware != version
+        && !firmware_matches(&profile.firmware, &version)
     {
-        mismatch.push(format!(
+        guard.push(format!(
             "прошивка: указано «{}», от станции «{}»",
             profile.firmware, version
         ));
     }
 
+    // 2) Результат попытки: прошлая попытка ↔ текущая.
+    let state = read_attempt_state();
+    let prev = state.previous.clone();
+    let mut progress: Vec<String> = Vec::new();
+    let mut verdict = "none";
+    if detected && !version.is_empty() && !prev.firmware.is_empty() {
+        if prev.firmware == version {
+            if state.update_requested && !state.expected_version.is_empty() {
+                progress.push(format!(
+                    "обновление не применилось: версия осталась {}",
+                    version
+                ));
+                verdict = "error";
+            } else {
+                progress.push(format!("версия не изменилась: {version}"));
+                verdict = "same";
+            }
+        } else if state.update_requested && !state.expected_version.is_empty() {
+            if version == state.expected_version {
+                progress.push(format!(
+                    "✓ обновление выполнено: {} → {}",
+                    prev.firmware, version
+                ));
+                verdict = "ok";
+            } else {
+                progress.push(format!(
+                    "версия сменилась, но не на ожидаемую: {} → {} (ожидали {})",
+                    prev.firmware, version, state.expected_version
+                ));
+                verdict = "error";
+            }
+        } else {
+            progress.push(format!(
+                "версия изменилась: {} → {}",
+                prev.firmware, version
+            ));
+            verdict = "changed";
+        }
+    }
+
     serde_json::json!({
         "station": station,
         "profile": { "model": profile.model, "firmware": profile.firmware, "reset": profile.reset },
-        "mismatch": mismatch,
+        "guard": guard,
+        "progress": progress,
+        "verdict": verdict,
+        "attempt": state.number,
+        "expected": state.expected_version,
         "warning": warning,
         "device_id": device_id,
         "platform": platform,
@@ -1100,6 +1308,7 @@ fn start_stack(body: &str) -> String {
     }
 
     let update_enabled = field(body, "update") == "1";
+    rotate_attempt(&version, update_enabled);
     let routes = build_routes(
         allow,
         UpdatePolicy {

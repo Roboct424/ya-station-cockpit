@@ -347,9 +347,14 @@ async function loadDevice() {
       `<div style="padding:2px 0">• ${f.version} ${f.local ? '<span class="ok">файл есть</span>' : '<span class="muted">нужно скачать</span>'}
        ${f.adb ? '<span class="ok">ADB открывается</span>' : '<span class="err">ADB не откроется</span>'}</div>`).join('');
   }
-  if (j.mismatch && j.mismatch.length) {
-    html += '<div style="margin-top:8px;color:#ffce6a">не совпадает с профилем:</div>' +
-      j.mismatch.map(m => `<div style="color:#ffce6a">• ${m}</div>`).join('');
+  if (j.guard && j.guard.length) {
+    html += '<div style="margin-top:8px;color:#ffce6a">не совпадает с профилем (шаг 1):</div>' +
+      j.guard.map(m => `<div style="color:#ffce6a">• ${m}</div>`).join('');
+  }
+  if (j.progress && j.progress.length) {
+    const color = j.verdict === 'ok' ? '#7ee2a8' : (j.verdict === 'error' ? '#ff9a9a' : '#9fb4cc');
+    html += `<div style="margin-top:8px">попытка №${j.attempt}:</div>` +
+      j.progress.map(m => `<div style="color:${color}">• ${m}</div>`).join('');
   }
   if (j.warning) html += `<p class="hint" style="margin-top:8px;color:#ff9a9a">⚠ ${j.warning}</p>`;
   if (j.recommend) html += `<p class="hint" style="margin-top:8px">${j.recommend}</p>`;
