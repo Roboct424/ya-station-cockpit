@@ -907,7 +907,8 @@ fn local_file(version: &str) -> bool {
 
 fn platform_for_model(model: &str) -> String {
     match model {
-        m if m.contains("Mini 2") => "yandexmini_2".to_string(),
+        m if m.contains("Mini 3") || m.contains("00027") => "yandexmini_3".to_string(),
+        m if m.contains("Mini 2") || m.contains("00020") => "yandexmini_2".to_string(),
         m if m.contains("Mini") => "yandexmini".to_string(),
         m if m.contains("Max") => "yandexmax".to_string(),
         m if m.contains("Lite") => "yandexlite".to_string(),
