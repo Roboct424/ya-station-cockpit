@@ -7,3 +7,5 @@ cockpit.toml
 *.out
 *.err
 
+firmware/*.zip
+firmware/*.off

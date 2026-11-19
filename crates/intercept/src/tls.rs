@@ -168,15 +168,87 @@ impl CertAuthority {
     }
 }
 
-/// Набор корневых CA с перебором: если станция не приняла текущий,
+/// Готовый сертификат с цепочкой: отдаём как есть, без подписи нашим CA.
+///
+/// Нужен, когда у нас есть сертификат от публичного CA: станция доверяет ему
+/// из коробки, и ADB для установки чего-либо не требуется.
+pub struct FixedCert {
+    pub name: String,
+    chain: Vec<CertificateDer<'static>>,
+    key: PrivateKeyDer<'static>,
+    cache: Mutex<HashMap<String, Arc<ServerConfig>>>,
+}
+
+impl FixedCert {
+    /// Загружает цепочку PEM и ключ PEM.
+    pub fn load(
+        chain_path: &std::path::Path,
+        key_path: &std::path::Path,
+    ) -> Result<Self, TlsError> {
+        let chain_bytes = std::fs::read(chain_path)?;
+        let chain: Vec<CertificateDer<'static>> =
+            rustls_pemfile::certs(&mut &chain_bytes[..]).collect::<Result<Vec<_>, _>>()?;
+        if chain.is_empty() {
+            return Err(TlsError::Io(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("в {} нет сертификатов", chain_path.display()),
+            )));
+        }
+        let key_bytes = std::fs::read(key_path)?;
+        let key = rustls_pemfile::private_key(&mut &key_bytes[..])?.ok_or_else(|| {
+            TlsError::Io(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("в {} нет ключа", key_path.display()),
+            ))
+        })?;
+        let name = chain_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("fixed")
+            .to_string();
+        Ok(Self {
+            name,
+            chain,
+            key,
+            cache: Mutex::new(HashMap::new()),
+        })
+    }
+
+    fn config(&self) -> Result<Arc<ServerConfig>, TlsError> {
+        if let Ok(cache) = self.cache.lock() {
+            if let Some(cfg) = cache.get("*") {
+                return Ok(cfg.clone());
+            }
+        }
+        let config =
+            ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+                .with_safe_default_protocol_versions()?
+                .with_no_client_auth()
+                .with_single_cert(self.chain.clone(), self.key.clone_key())?;
+        let config = Arc::new(config);
+        if let Ok(mut cache) = self.cache.lock() {
+            cache.insert("*".to_string(), config.clone());
+        }
+        Ok(config)
+    }
+}
+
+/// Элемент пула: либо наш CA (подписываем на лету), либо готовый сертификат.
+#[allow(clippy::large_enum_variant)]
+pub enum PoolEntry {
+    Dynamic(CertAuthority),
+    Fixed(FixedCert),
+}
+
+/// Набор сертификатов с перебором: если станция не приняла текущий,
 /// переключаемся на следующий и пробуем снова.
 pub struct CertPool {
-    cas: Vec<CertAuthority>,
+    cas: Vec<PoolEntry>,
     active: std::sync::atomic::AtomicUsize,
 }
 
 impl CertPool {
-    pub fn new(cas: Vec<CertAuthority>) -> Self {
+    pub fn new(cas: Vec<PoolEntry>) -> Self {
         Self {
             cas,
             active: std::sync::atomic::AtomicUsize::new(0),
@@ -184,7 +256,7 @@ impl CertPool {
     }
 
     pub fn single(ca: CertAuthority) -> Self {
-        Self::new(vec![ca])
+        Self::new(vec![PoolEntry::Dynamic(ca)])
     }
 
     pub fn count(&self) -> usize {
@@ -197,26 +269,49 @@ impl CertPool {
 
     pub fn active_name(&self) -> String {
         let index = self.active_index();
-        self.cas
-            .get(index)
-            .map(|ca| ca.name.clone())
-            .unwrap_or_else(|| "нет CA".to_string())
+        match self.cas.get(index) {
+            Some(PoolEntry::Dynamic(ca)) => ca.name.clone(),
+            Some(PoolEntry::Fixed(fixed)) => fixed.name.clone(),
+            None => "нет сертификата".to_string(),
+        }
     }
 
     pub fn ca_der(&self) -> CertificateDer<'static> {
         let index = self.active_index().min(self.cas.len() - 1);
-        self.cas[index].ca_der()
+        match &self.cas[index] {
+            PoolEntry::Dynamic(ca) => ca.ca_der(),
+            PoolEntry::Fixed(fixed) => fixed.chain[0].clone(),
+        }
     }
 
     /// PEM активного сертификата (его и ставим на устройство).
     pub fn ca_pem(&self) -> String {
         let index = self.active_index().min(self.cas.len() - 1);
-        self.cas[index].ca_pem()
+        match &self.cas[index] {
+            PoolEntry::Dynamic(ca) => ca.ca_pem(),
+            PoolEntry::Fixed(fixed) => {
+                // Для готового сертификата отдаём всю цепочку в PEM.
+                let mut out = String::new();
+                for cert in &fixed.chain {
+                    out.push_str("-----BEGIN CERTIFICATE-----\n");
+                    let b64 = base64_encode(cert.as_ref());
+                    for chunk in b64.as_bytes().chunks(64) {
+                        out.push_str(&String::from_utf8_lossy(chunk));
+                        out.push('\n');
+                    }
+                    out.push_str("-----END CERTIFICATE-----\n");
+                }
+                out
+            }
+        }
     }
 
     pub fn config_for(&self, host: &str) -> Result<Arc<ServerConfig>, TlsError> {
         let index = self.active_index().min(self.cas.len() - 1);
-        self.cas[index].config_for(host)
+        match &self.cas[index] {
+            PoolEntry::Dynamic(ca) => ca.config_for(host),
+            PoolEntry::Fixed(fixed) => fixed.config(),
+        }
     }
 
     /// Переходит к следующему CA. Возвращает `true`, если был переход.
@@ -228,6 +323,33 @@ impl CertPool {
         self.active.store(next, Ordering::Relaxed);
         true
     }
+}
+
+/// Минимальный base64: нужен только для выгрузки цепочки в PEM.
+fn base64_encode(data: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len() * 4 / 3 + 4);
+    for chunk in data.chunks(3) {
+        let b = [
+            chunk[0],
+            *chunk.get(1).unwrap_or(&0),
+            *chunk.get(2).unwrap_or(&0),
+        ];
+        let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
+        out.push(TABLE[(n >> 18) as usize & 63] as char);
+        out.push(TABLE[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 {
+            TABLE[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            TABLE[n as usize & 63] as char
+        } else {
+            '='
+        });
+    }
+    out
 }
 
 /// Достаёт SNI из ClientHello. `None` — если данных мало или это не TLS.
@@ -316,6 +438,8 @@ pub struct ForwardOptions {
     pub roots: rustls::RootCertStore,
     /// Подмена DNS для тестов: (имя, адрес).
     pub resolve_override: Option<(String, SocketAddr)>,
+    /// Куда спрашивать настоящие адреса, если системный резолвер вернул нас.
+    pub resolvers: Vec<String>,
 }
 
 impl Default for ForwardOptions {
@@ -334,6 +458,7 @@ impl Default for ForwardOptions {
             upstream_port: 443,
             roots,
             resolve_override: None,
+            resolvers: vec!["8.8.8.8:53".to_string(), "1.1.1.1:53".to_string()],
         }
     }
 }
@@ -712,15 +837,140 @@ fn resolve_upstream(host: &str, options: &ForwardOptions) -> Result<SocketAddr, 
         }
     }
     use std::net::ToSocketAddrs;
-    (host, options.upstream_port)
-        .to_socket_addrs()?
-        .next()
-        .ok_or_else(|| {
-            TlsError::Io(io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("не удалось разрешить {host}"),
-            ))
-        })
+
+    let system = (host, options.upstream_port)
+        .to_socket_addrs()
+        .ok()
+        .and_then(|mut it| it.next());
+
+    // GOTCHA: G-038 — станции мы отдаём наш адрес через hosts ноутбука
+    // (ICS-DNS), поэтому системный резолвер может вернуть нас же. В этом
+    // случае спрашиваем настоящий DNS напрямую, обходя hosts.
+    let looks_like_us = |ip: &std::net::IpAddr| {
+        ip.is_loopback()
+            || matches!(ip, std::net::IpAddr::V4(v4) if v4.octets()[..3] == [192, 168, 137])
+    };
+
+    if let Some(addr) = system {
+        if !looks_like_us(&addr.ip()) {
+            return Ok(addr);
+        }
+        if let Some(ip) = resolve_public(host, &options.resolvers) {
+            return Ok(SocketAddr::new(ip, options.upstream_port));
+        }
+        return Ok(addr);
+    }
+
+    if let Some(ip) = resolve_public(host, &options.resolvers) {
+        return Ok(SocketAddr::new(ip, options.upstream_port));
+    }
+
+    Err(TlsError::Io(io::Error::new(
+        io::ErrorKind::NotFound,
+        format!("не удалось разрешить {host}"),
+    )))
+}
+
+/// Спрашивает A-запись напрямую у публичных DNS (обход hosts/ICS).
+fn resolve_public(host: &str, servers: &[String]) -> Option<std::net::IpAddr> {
+    for server in servers {
+        let server: SocketAddr = match server.parse() {
+            Ok(addr) => addr,
+            Err(_) => continue,
+        };
+        if let Some(ip) = dns_a_query(host, server) {
+            return Some(ip);
+        }
+    }
+    None
+}
+
+/// Минимальный DNS-клиент: один A-запрос по UDP.
+fn dns_a_query(host: &str, server: SocketAddr) -> Option<std::net::IpAddr> {
+    use std::net::UdpSocket;
+
+    let id: u16 = 0x4242;
+    let mut packet = Vec::with_capacity(64);
+    packet.extend_from_slice(&id.to_be_bytes());
+    packet.extend_from_slice(&[0x01, 0x00]); // RD=1
+    packet.extend_from_slice(&1u16.to_be_bytes()); // qdcount
+    packet.extend_from_slice(&0u16.to_be_bytes());
+    packet.extend_from_slice(&0u16.to_be_bytes());
+    packet.extend_from_slice(&0u16.to_be_bytes());
+    for label in host.split('.') {
+        if label.len() > 63 {
+            return None;
+        }
+        packet.push(label.len() as u8);
+        packet.extend_from_slice(label.as_bytes());
+    }
+    packet.push(0);
+    packet.extend_from_slice(&1u16.to_be_bytes()); // A
+    packet.extend_from_slice(&1u16.to_be_bytes()); // IN
+
+    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket
+        .set_read_timeout(Some(Duration::from_millis(1200)))
+        .ok()?;
+    socket.send_to(&packet, server).ok()?;
+
+    let mut buf = [0u8; 512];
+    let (len, _) = socket.recv_from(&mut buf).ok()?;
+    let response = &buf[..len];
+    if len < 12 {
+        return None;
+    }
+    let ancount = u16::from_be_bytes([response[6], response[7]]);
+    if ancount == 0 {
+        return None;
+    }
+
+    // Пропускаем вопрос.
+    let mut pos = 12usize;
+    loop {
+        let len = *response.get(pos)? as usize;
+        pos += 1;
+        if len == 0 {
+            break;
+        }
+        if len > 63 {
+            return None;
+        }
+        pos += len;
+    }
+    pos += 4; // qtype + qclass
+
+    for _ in 0..ancount {
+        // Имя может быть указателем.
+        let first = *response.get(pos)?;
+        if first & 0xC0 == 0xC0 {
+            pos += 2;
+        } else {
+            loop {
+                let len = *response.get(pos)? as usize;
+                pos += 1;
+                if len == 0 {
+                    break;
+                }
+                pos += len;
+            }
+        }
+        let rtype = u16::from_be_bytes([*response.get(pos)?, *response.get(pos + 1)?]);
+        pos += 8; // type, class, ttl
+        let rdlen = u16::from_be_bytes([*response.get(pos)?, *response.get(pos + 1)?]) as usize;
+        pos += 2;
+        if rtype == 1 && rdlen == 4 {
+            let ip = std::net::Ipv4Addr::new(
+                response[pos],
+                response[pos + 1],
+                response[pos + 2],
+                response[pos + 3],
+            );
+            return Some(std::net::IpAddr::V4(ip));
+        }
+        pos += rdlen;
+    }
+    None
 }
 
 fn client_config(roots: &rustls::RootCertStore) -> Result<ClientConfig, TlsError> {
@@ -955,6 +1205,7 @@ fn routes_forward(routes: &LocalRoutes) -> ForwardOptions {
             upstream_port: opts.upstream_port,
             roots: opts.roots.clone(),
             resolve_override: opts.resolve_override.clone(),
+            resolvers: opts.resolvers.clone(),
         },
         None => ForwardOptions::default(),
     }

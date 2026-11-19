@@ -58,6 +58,7 @@ fn forwarding_tunnels_to_upstream() {
         upstream_port: 443,
         roots: root_store_with(&ca),
         resolve_override: Some(("example.com".to_string(), upstream_addr)),
+        resolvers: Vec::new(),
     };
     let proxy =
         TlsInterceptor::start_forwarding("127.0.0.1:0".parse().unwrap(), ca.clone(), options)
@@ -108,6 +109,7 @@ fn forwarding_rejects_untrusted_upstream() {
         upstream_port: 443,
         roots: root_store_with(&ca), // доверяем только своему CA
         resolve_override: Some(("example.com".to_string(), upstream_addr)),
+        resolvers: Vec::new(),
     };
     let proxy =
         TlsInterceptor::start_forwarding("127.0.0.1:0".parse().unwrap(), ca.clone(), options)

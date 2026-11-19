@@ -97,22 +97,26 @@ pre{background:#0b0e12;border:1px solid #1e242c;border-radius:10px;padding:11px;
 
 <section id="s2">
   <div class="card">
-    <h2>1. Что перехватываем</h2>
-    <p class="hint">Отмеченное остаётся у нас. Неотмеченное уходит в настоящее облако.
-    Можно снять всё — тогда станция не получит ни одного нашего ответа.</p>
-    <div class="row" style="gap:24px">
-      <div class="col" id="listA"></div>
-      <div class="col" id="listB"></div>
-    </div>
-    <button class="act ghost" onclick="selectAll(true)">Выбрать всё</button>
-    <button class="act ghost" onclick="selectAll(false)">Снять всё</button>
+    <h2>1. Пресет перехвата — одинаков для всех станций</h2>
+    <p class="hint">Эти ответы не меняются от колонки к колонке. По умолчанию
+    <b>ни один пакет не уходит в облако</b>: всё, что не перечислено, остаётся
+    без ответа.</p>
+    <div id="preset" class="muted">…</div>
   </div>
 
   <div class="card">
-    <h2>2. Чем отвечаем</h2>
-    <p class="hint">Для каждого перехваченного пакета — тип ответа. «Не отвечать»
-    означает молчание: запрос не получит ответа и не уйдёт в облако.</p>
-    <div id="answers" class="ansgrid"></div>
+    <h2>2. Режим</h2>
+    <div class="check"><input type="radio" name="mode" value="offline" checked>
+      <span><b>Полный оффлайн</b> — ни один пакет не уходит в облако</span></div>
+    <div class="check"><input type="radio" name="mode" value="cloud">
+      <span><b>Через облако</b> — выбранные пакеты идут в настоящее облако</span></div>
+    <div id="allow" style="margin-left:24px;display:none">
+      <div class="check"><input type="checkbox" id="via_register"><span>регистрация (/register)</span></div>
+      <div class="check"><input type="checkbox" id="via_voice"><span>голос (uni.ws)</span></div>
+      <div class="check"><input type="checkbox" id="via_metrics"><span>телеметрия</span></div>
+      <div class="check"><input type="checkbox" id="via_rest"><span>всё остальное</span></div>
+      <p class="hint">Обновления всегда наши: скачать прошивку из облака станция не сможет.</p>
+    </div>
   </div>
 
   <div class="card">
@@ -233,52 +237,49 @@ async function backup() {
   chip('r_backup', r.ok, r.ok ? 'бэкап готов' : 'ошибка');
 }
 
-function renderItems() {
-  const half = Math.ceil(ITEMS.length / 2);
-  const mk = (it) => `
-    <div class="check">
-      <input type="checkbox" id="on_${it.id}" checked>
-      <span>${it.title}</span>
-    </div>`;
-  $('listA').innerHTML = ITEMS.slice(0, half).map(mk).join('');
-  $('listB').innerHTML = ITEMS.slice(half).map(mk).join('');
-
-  $('answers').innerHTML = ITEMS.map(it => `
-    <div class="nm">${it.title}</div>
-    <div><select id="act_${it.id}">${ACTIONS.map(([v, t]) =>
-        `<option value="${v}" ${v === it.default ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
-    <div style="grid-column:1/-1;display:none" id="box_${it.id}">
-      <textarea id="body_${it.id}" placeholder='{"status":"ok"}'></textarea>
-    </div>`).join('');
-
-  ITEMS.forEach(it => {
-    $('act_' + it.id).onchange = e => {
-      $('box_' + it.id).style.display = e.target.value === 'custom' ? 'block' : 'none';
-    };
-  });
+function renderPreset() {
+  const local = [
+    ['Проверка связи', '204'],
+    ['Авторизация', 'локальный токен'],
+    ['Регистрация', 'локальная'],
+    ['Обновления', 'наша прошивка'],
+    ['Конфиг', 'adbd.network'],
+    ['Файл прошивки', 'локальный'],
+    ['Голос', 'не отвечать'],
+    ['Телеметрия', 'не отвечать'],
+    ['Всё остальное', 'не отвечать']
+  ];
+  $('preset').innerHTML = local.map(([n, a]) =>
+    `<div class="check"><span>${n}</span><span class="muted">${a}</span></div>`).join('');
 }
+
+document.querySelectorAll('input[name=mode]').forEach(r => r.onchange = () => {
+  $('allow').style.display = document.querySelector('input[name=mode]:checked').value === 'cloud' ? 'block' : 'none';
+});
 
 function selectAll(on) {
   ITEMS.forEach(it => $('on_' + it.id).checked = on);
 }
 
 async function startStack() {
-  const f = body({version: $('version').value, firmware_path: $('firmware').value});
-  if (!$('ex_update').checked) f.set('version', ''), f.set('firmware_path', '');
-  ITEMS.forEach(it => {
-    f.set('on_' + it.id, $('on_' + it.id).checked ? '1' : '0');
-    f.set('act_' + it.id, $('act_' + it.id).value);
-    f.set('body_' + it.id, ($('body_' + it.id) || {}).value || '');
+  const cloud = document.querySelector('input[name=mode]:checked').value === 'cloud';
+  const f = new URLSearchParams({
+    mode: cloud ? 'cloud' : 'offline',
+    via_register: cloud && $('via_register').checked ? '1' : '0',
+    via_voice: cloud && $('via_voice').checked ? '1' : '0',
+    via_metrics: cloud && $('via_metrics').checked ? '1' : '0',
+    via_rest: cloud && $('via_rest').checked ? '1' : '0',
+    version: $('ex_update').checked ? $('version').value : '',
+    firmware_path: $('ex_update').checked ? $('firmware').value : ''
   });
   $('btnStack').disabled = true; chip('r_stack', false, 'запускаю…');
   const r = await (await fetch('/api/stack/start', {method: 'POST', body: f})).json();
   $('btnStack').disabled = false;
   chip('r_stack', r.ok, r.ok ? `стек запущен · ${r.routes} маршрутов` : 'ошибка');
   $('stack_hint').textContent = r.text || '';
-  if (r.ok) {
-    document.querySelector('nav button[data-tab="s3"]').click();
-    append('стек запущен: ' + r.routes + ' маршрутов, pid ' + r.pid);
-  }
+  document.querySelector('nav button[data-tab="s3"]').click();
+  append(r.ok ? 'стек запущен: ' + r.routes + ' маршрутов, pid ' + r.pid
+              : 'ошибка запуска: ' + r.text);
 }
 
 async function stopStack() {
@@ -351,7 +352,7 @@ async function state() {
 
 async function init() {
   ITEMS = (await (await fetch('/api/items')).json()).items;
-  renderItems();
+  renderPreset();
   loadCerts();
   state(); stackState();
   setInterval(state, 5000);

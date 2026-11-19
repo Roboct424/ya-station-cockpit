@@ -350,6 +350,29 @@ fn process_alive(pid: u32) -> bool {
     }
 }
 
+/// Ищет файл прошивки: сначала в firmware/, затем рядом с программой.
+fn find_firmware() -> Option<String> {
+    let dir = std::path::Path::new("firmware");
+    let mut best: Option<(std::time::SystemTime, String)> = None;
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if !(name.ends_with(".zip") || name.ends_with(".zip.off")) {
+                continue;
+            }
+            let modified = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::UNIX_EPOCH);
+            if best.as_ref().map(|(t, _)| modified > *t).unwrap_or(true) {
+                best = Some((modified, path.to_string_lossy().replace('\\', "/")));
+            }
+        }
+    }
+    best.map(|(_, path)| path)
+}
+
 /// Каталог с сертификатами мастера.
 fn certs_dir() -> std::path::PathBuf {
     std::path::PathBuf::from("data").join("certs")
@@ -502,73 +525,72 @@ fn stack_state() -> &'static Mutex<StackState> {
 
 /// Собирает маршруты из выбора и запускает стек в фоне.
 fn start_stack(body: &str) -> String {
-    let selections: Vec<(String, String, String)> = ITEMS
-        .iter()
-        .map(|item| {
-            let intercept = field(body, &format!("on_{}", item.id)) == "1";
-            let action = {
-                let chosen = field(body, &format!("act_{}", item.id));
-                if chosen.is_empty() {
-                    item.default.to_string()
-                } else {
-                    chosen
-                }
-            };
-            let custom = field(body, &format!("body_{}", item.id));
-            (intercept, action, custom)
-        })
-        .map(|(on, act, custom)| {
-            // «Не отвечать» — явный отказ, а не уход в облако.
-            let act = if act == "-" { "block".to_string() } else { act };
-            if on {
-                (act, "on".to_string(), custom)
-            } else {
-                ("proxy".to_string(), "off".to_string(), custom)
-            }
-        })
-        .collect();
+    let cloud = field(body, "mode") == "cloud";
+    let allow = CloudAllow {
+        register: cloud && field(body, "via_register") == "1",
+        voice: cloud && field(body, "via_voice") == "1",
+        metrics: cloud && field(body, "via_metrics") == "1",
+        rest: cloud && field(body, "via_rest") == "1",
+    };
 
-    let firmware = field(body, "firmware_path");
-    let firmware = if firmware.is_empty() {
-        "firmware/0.369.1.46.4778262943.20261013.299.zip.off".to_string()
-    } else {
-        firmware
+    let firmware = {
+        let value = field(body, "firmware_path");
+        if value.is_empty() {
+            find_firmware().unwrap_or_default()
+        } else {
+            value
+        }
     };
     let version = {
-        let v = field(body, "version");
-        if v.is_empty() {
+        let value = field(body, "version");
+        if value.is_empty() {
             "0.369.1.46.4778262943.20261013.299".to_string()
         } else {
-            v
+            value
         }
     };
 
     if !std::path::Path::new(&firmware).exists() {
-        return serde_json::json!({
-            "ok": false,
-            "text": format!("нет файла прошивки: {firmware} — укажите путь в блоке «Экстра»")
-        })
-        .to_string();
+        let text = format!("нет файла прошивки: {firmware} — укажите путь в блоке «Экстра»");
+        push_log(format!("✗ стек: {text}"));
+        return serde_json::json!({ "ok": false, "text": text }).to_string();
     }
-    if !std::path::Path::new("data/manifests.json").exists() {
-        return serde_json::json!({
-            "ok": false,
-            "text": "нет data/manifests.json — положите снимок манифеста рядом с программой"
-        })
-        .to_string();
+    // Порт занят — значит стек уже работает. Не трогаем его лог.
+    for port in [443u16, 80] {
+        if std::net::TcpListener::bind(("0.0.0.0", port)).is_err() {
+            let text = format!(
+                "порт {port} занят: стек уже запущен. Нажмите «Остановить стек» и запустите снова"
+            );
+            push_log(format!("✗ стек: {text}"));
+            return serde_json::json!({ "ok": false, "text": text }).to_string();
+        }
     }
 
-    let routes = build_routes(&selections);
+    if !std::path::Path::new("data/manifests.json").exists() {
+        let text = "нет data/manifests.json — положите снимок манифеста рядом с программой";
+        push_log(format!("✗ стек: {text}"));
+        return serde_json::json!({ "ok": false, "text": text }).to_string();
+    }
+
+    let routes = build_routes(allow);
     if let Some(dir) = std::path::Path::new("data/routes.toml").parent() {
         let _ = std::fs::create_dir_all(dir);
     }
     if let Err(e) = std::fs::write("data/routes.toml", &routes) {
-        return serde_json::json!({ "ok": false, "text": format!("маршруты не записались: {e}") })
-            .to_string();
+        let text = format!("маршруты не записались: {e}");
+        push_log(format!("✗ стек: {text}"));
+        return serde_json::json!({ "ok": false, "text": text }).to_string();
     }
 
     let count = routes.matches("[[route]]").count();
-    push_log(format!("▶ стек: маршрутов {count}, прошивка {version}"));
+    let certs = active_certs()
+        .iter()
+        .map(|p| p.to_string_lossy().to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    push_log(format!(
+        "▶ стек: маршрутов {count}, прошивка {version}, сертификатов {certs}"
+    ));
 
     let exe = std::env::current_exe().unwrap_or_else(|_| "cockpit".into());
     let log = std::fs::File::create("data/ota.log").ok();
@@ -646,42 +668,50 @@ fn stop_stack() -> String {
     serde_json::json!({ "ok": true, "text": "стек остановлен" }).to_string()
 }
 
-/// Превращает выбор в таблицу маршрутов.
-fn build_routes(selections: &[(String, String, String)]) -> String {
+/// Что пропускаем в облако в режиме «через облако».
+#[derive(Default, Clone, Copy)]
+struct CloudAllow {
+    register: bool,
+    voice: bool,
+    metrics: bool,
+    rest: bool,
+}
+
+/// Собирает таблицу маршрутов из пресета и режима.
+///
+/// Пресет одинаков для всех станций: проверка связи, токен, регистрация,
+/// обновления, конфиг, прошивка — наши. По умолчанию всё остальное молчит
+/// (полный оффлайн). В режиме «через облако» разрешённые пакеты уходят
+/// в настоящее облако, но обновления — всегда наши.
+fn build_routes(allow: CloudAllow) -> String {
     let mut out = String::from(
-        "# Сгенерировано мастером: что перехватываем и чем отвечаем.\n\
+        "# Сгенерировано мастером: пресет перехвата.\n\
          # Первое совпадение выигрывает, `*` — запасное правило.\n\n",
     );
-    let mut fallback = String::from("proxy");
-    for (index, item) in ITEMS.iter().enumerate() {
-        let (action, state, custom) = &selections[index];
-        if item.pattern == "*" {
-            fallback = if state == "on" {
-                action.clone()
-            } else {
-                "proxy".to_string()
-            };
-            continue;
-        }
-        let action = if state == "on" {
-            action.as_str()
-        } else {
-            "proxy"
-        };
+    let rules: [(&str, &str); 9] = [
+        ("generate_204", "204"),
+        ("/connectivity", "204"),
+        ("/token", "token"),
+        (
+            "/register",
+            if allow.register { "proxy" } else { "register" },
+        ),
+        ("/check_updates", "check_updates"),
+        ("/get_sync_info", "sync_info"),
+        ("/firmware/", "firmware"),
+        ("/uni.ws", if allow.voice { "proxy" } else { "block" }),
+        (
+            "/quasar_metrics",
+            if allow.metrics { "proxy" } else { "block" },
+        ),
+    ];
+    for (pattern, action) in rules {
         out.push_str(&format!(
-            "[[route]]\nmatch = \"{}\"\naction = \"{}\"\n",
-            item.pattern, action
+            "[[route]]\nmatch = \"{pattern}\"\naction = \"{action}\"\n\n"
         ));
-        if action == "custom" && !custom.is_empty() {
-            out.push_str("body = \"\"\"");
-            out.push_str(custom);
-            out.push_str("\"\"\"\n");
-        }
-        out.push('\n');
     }
-    out.push_str(&format!(
-        "[[route]]\nmatch = \"*\"\naction = \"{fallback}\"\n"
-    ));
+    let rest = if allow.rest { "proxy" } else { "block" };
+    out.push_str(&format!("[[route]]\nmatch = \"*\"\naction = \"{rest}\"\n"));
     out
 }
 

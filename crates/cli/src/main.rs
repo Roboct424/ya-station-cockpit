@@ -1293,7 +1293,7 @@ fn run_pair(cmd: PairCmd) -> cockpit_core::Result<ExitCode> {
 fn load_cert_pool(
     paths: &[std::path::PathBuf],
 ) -> cockpit_core::Result<cockpit_intercept::tls::CertPool> {
-    use cockpit_intercept::tls::{CertAuthority, CertPool};
+    use cockpit_intercept::tls::{CertAuthority, CertPool, FixedCert, PoolEntry};
 
     let mut cas = Vec::new();
     for path in paths {
@@ -1302,23 +1302,41 @@ fn load_cert_pool(
         } else {
             path.with_extension("key")
         };
-        let loaded = if key.exists() {
-            CertAuthority::load_pair(path, &key)
-        } else {
-            CertAuthority::load_or_create(&ca_key_path())
-        };
-        match loaded {
-            Ok(ca) => {
-                cas.push(ca.with_name(path.file_stem().and_then(|s| s.to_str()).unwrap_or("ca")))
+        let chain = path.with_extension("chain");
+
+        // Готовая цепочка от публичного CA: отдаём как есть, ничего не подписываем.
+        if chain.exists() && key.exists() {
+            match FixedCert::load(&chain, &key) {
+                Ok(fixed) => {
+                    println!("готовый сертификат: {}", fixed.name);
+                    cas.push(PoolEntry::Fixed(fixed));
+                }
+                Err(e) => println!("{} пропущен: {e}", chain.display()),
             }
-            Err(e) => println!("CA {} пропущен: {e}", path.display()),
+            continue;
+        }
+
+        if key.exists() {
+            match CertAuthority::load_pair(path, &key) {
+                Ok(ca) => cas.push(PoolEntry::Dynamic(
+                    ca.with_name(path.file_stem().and_then(|s| s.to_str()).unwrap_or("ca")),
+                )),
+                Err(e) => println!("CA {} пропущен: {e}", path.display()),
+            }
+            continue;
+        }
+
+        match CertAuthority::load_or_create(&ca_key_path()) {
+            Ok(ca) => cas.push(PoolEntry::Dynamic(ca)),
+            Err(e) => println!("CA наш не загрузился: {e}"),
         }
     }
+
     if cas.is_empty() {
-        cas.push(
+        cas.push(PoolEntry::Dynamic(
             CertAuthority::load_or_create(&ca_key_path())
                 .map_err(|e| CockpitError::Internal(format!("CA: {e}")))?,
-        );
+        ));
     }
     if cas.len() > 1 {
         println!("сертификатов в пуле: {} (перебор при отказе)", cas.len());
