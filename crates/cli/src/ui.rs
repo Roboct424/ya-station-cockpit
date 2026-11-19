@@ -290,11 +290,12 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
             let after = query(path, "after")
                 .and_then(|v| v.parse::<usize>().ok())
                 .unwrap_or(0);
-            let lines: Vec<String> = log_buffer()
-                .lock()
-                .map(|l| l.iter().skip(after).cloned().collect())
-                .unwrap_or_default();
-            let next = after + lines.len();
+            let all = log_buffer().lock().map(|l| l.clone()).unwrap_or_default();
+            // GOTCHA: G-051 — после перезапуска буфер короче курсора, и без
+            // зажима терминал навсегда оставался пустым.
+            let start = after.min(all.len());
+            let lines: Vec<String> = all[start..].to_vec();
+            let next = start + lines.len();
             let json = serde_json::json!({ "next": next, "lines": lines });
             (200, "application/json", json.to_string())
         }
@@ -386,8 +387,9 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
                 .unwrap_or(0);
             let text = std::fs::read_to_string("data/ota.log").unwrap_or_default();
             let all: Vec<&str> = text.lines().collect();
-            let slice: Vec<String> = all.iter().skip(after).map(|l| l.to_string()).collect();
-            let json = serde_json::json!({ "next": after + slice.len(), "lines": slice });
+            let start = after.min(all.len());
+            let slice: Vec<String> = all[start..].iter().map(|l| l.to_string()).collect();
+            let json = serde_json::json!({ "next": start + slice.len(), "lines": slice });
             (200, "application/json", json.to_string())
         }
         ("GET", "/api/certs") => (200, "application/json", certs_json()),
