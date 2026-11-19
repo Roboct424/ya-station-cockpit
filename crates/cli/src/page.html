@@ -87,7 +87,24 @@ pre.term{height:calc(100vh - 210px);min-height:420px}
       </div>
 
       <div class="card">
-        <h2>3. Дальше</h2>
+        <h2>3. Профиль устройства</h2>
+        <p class="hint">Что за колонка сейчас подключаем. Нужно, чтобы предлагать
+        только совместимые прошивки и сертификаты.</p>
+        <label>Модель</label>
+        <select id="model">
+          <option>Station Mini 2</option>
+          <option>Station Mini</option>
+          <option>Station Max</option>
+          <option>Station Lite</option>
+        </select>
+        <label>Прошивка</label>
+        <input type="text" id="profile_fw" value="factory" list="fwlist">
+        <datalist id="fwlist"><option value="factory"></option></datalist>
+        <button class="act" onclick="saveProfile()">Сохранить профиль</button>
+        <span id="r_profile" class="chip wait">не сохранён</span>
+      </div>
+      <div class="card">
+        <h2>4. Дальше</h2>
         <p class="hint">Бэкап, сторож ADB и установка нашего CA — на вкладке
         «4 · Обслуживание», после разблокировки.</p>
       </div>
@@ -106,18 +123,11 @@ pre.term{height:calc(100vh - 210px);min-height:420px}
   </details>
 
   <div class="card">
-    <h2>2. Режим</h2>
-    <div class="check"><input type="radio" name="mode" value="offline" checked>
-      <span><b>Полный оффлайн</b> — ни один пакет не уходит в облако</span></div>
-    <div class="check"><input type="radio" name="mode" value="cloud">
-      <span><b>Через облако</b> — выбранные пакеты идут в настоящее облако</span></div>
-    <div id="allow" style="margin-left:24px;display:none">
-      <div class="check"><input type="checkbox" id="via_register"><span>регистрация (/register)</span></div>
-      <div class="check"><input type="checkbox" id="via_voice"><span>голос (uni.ws)</span></div>
-      <div class="check"><input type="checkbox" id="via_metrics"><span>телеметрия</span></div>
-      <div class="check"><input type="checkbox" id="via_rest"><span>всё остальное</span></div>
-      <p class="hint">Обновления всегда наши: скачать прошивку из облака станция не сможет.</p>
-    </div>
+    <h2>2. Регистрация</h2>
+    <div class="check"><input type="radio" name="reg" value="offline" checked>
+      <span><b>Оффлайн</b> — токен и регистрация локальные, облако не участвует</span></div>
+    <div class="check"><input type="radio" name="reg" value="online">
+      <span><b>Через облако</b> — регистрацию отдаём в облако (для отдельных моделей)</span></div>
   </div>
 
   <div class="card">
@@ -132,15 +142,17 @@ pre.term{height:calc(100vh - 210px);min-height:420px}
   </div>
 
   <div class="card">
-    <h2>4. Экстра</h2>
-    <div class="check"><input type="checkbox" id="ex_update"><span>Заставить станцию обновиться на выбранную прошивку</span></div>
-    <div class="row">
-      <div class="col"><label>Версия</label><input type="text" id="version" value="0.369.1.46.4778262943.20261013.299"></div>
-      <div class="col"><label>Файл прошивки</label><input type="text" id="firmware" value="firmware/0.369.1.46.4778262943.20261013.299.zip.off"></div>
-    </div>
-    <button class="act" id="btnStack" onclick="startStack()">Подтвердить и продолжить</button>
-    <span id="r_stack" class="chip wait">стек не запущен</span>
-    <p class="hint" id="stack_hint"></p>
+    <h2>4. Обновление</h2>
+    <p class="hint">Доступные прошивки для платформы профиля. «Проверена» — есть
+    в базе и открывает ADB. Файл нужен локально, иначе обновление не поедет.</p>
+    <div id="fwlistbox" class="muted">…</div>
+    <label>Скачать базу прошивок по ссылке (JSON)</label>
+    <input type="text" id="dburl" placeholder="https://…/firmware-db.json">
+    <button class="act ghost" onclick="fetchDb()">Скачать базу</button>
+    <span id="r_db" class="chip wait">не выполнялось</span>
+    <div class="check" style="margin-top:10px"><input type="checkbox" id="ex_update" checked>
+      <span>Разрешить обновление на выбранную прошивку</span></div>
+    <p class="hint" id="fw_hint"></p>
   </div>
 </section>
 
@@ -244,6 +256,43 @@ async function hotspot() {
   state();
 }
 
+async function saveProfile() {
+  const r = await (await fetch('/api/profile', {method: 'POST', body: new URLSearchParams({
+    model: $('model').value, firmware: $('profile_fw').value})})).json();
+  chip('r_profile', r.ok, r.text);
+  loadFirmwares();
+  loadDevice();
+}
+
+async function loadProfile() {
+  const j = await (await fetch('/api/profile')).json();
+  if (j.model) $('model').value = j.model;
+  if (j.firmware) $('profile_fw').value = j.firmware;
+}
+
+async function loadFirmwares() {
+  const j = await (await fetch('/api/firmwares')).json();
+  $('fwlistbox').innerHTML = j.items.length ? j.items.map((f, i) => `
+    <label class="check"><input type="radio" name="fw" value="${f.version}" ${i === 0 ? 'checked' : ''}>
+      <span>${f.version}
+        ${f.local ? '<span class="ok">файл есть</span>' : '<span class="muted">нет файла</span>'}
+        ${f.verified ? '<span class="ok">проверена</span>' : '<span class="muted">не проверена</span>'}
+        ${f.adb ? '<span class="ok">ADB откроется</span>' : '<span class="err">ADB не откроется</span>'}
+      </span></label>`).join('')
+    : '<span class="muted">для платформы нет прошивок — загрузите базу</span>';
+  $('fw_hint').textContent = 'платформа: ' + j.platform;
+  const dl = $('fwlist');
+  if (dl) dl.innerHTML = '<option value="factory"></option>' +
+    j.items.map(f => `<option value="${f.version}">`).join('');
+}
+
+async function fetchDb() {
+  $('r_db').className = 'chip wait'; $('r_db').textContent = 'скачиваю…';
+  const r = await (await fetch('/api/db', {method: 'POST', body: new URLSearchParams({url: $('dburl').value})})).json();
+  chip('r_db', r.ok, r.text);
+  loadFirmwares();
+}
+
 async function loadDevice() {
   const j = await (await fetch('/api/device')).json();
   const row = (k, v) => `<div style="display:flex;gap:8px;padding:3px 0"><span style="color:#8b97a8;min-width:96px">${k}</span><span>${v}</span></div>`;
@@ -259,6 +308,7 @@ async function loadDevice() {
       `<div style="padding:2px 0">• ${f.version} ${f.local ? '<span class="ok">файл есть</span>' : '<span class="muted">нужно скачать</span>'}
        ${f.adb ? '<span class="ok">ADB открывается</span>' : '<span class="err">ADB не откроется</span>'}</div>`).join('');
   }
+  if (j.warning) html += `<p class="hint" style="margin-top:8px;color:#ff9a9a">⚠ ${j.warning}</p>`;
   if (j.recommend) html += `<p class="hint" style="margin-top:8px">${j.recommend}</p>`;
   $('dev').innerHTML = html;
 }
@@ -319,15 +369,15 @@ function selectAll(on) {
 }
 
 async function startStack() {
-  const cloud = document.querySelector('input[name=mode]:checked').value === 'cloud';
+  const online = document.querySelector('input[name=reg]:checked').value === 'online';
+  const fw = document.querySelector('input[name=fw]:checked');
+  const updating = $('ex_update').checked && fw;
   const f = new URLSearchParams({
-    mode: cloud ? 'cloud' : 'offline',
-    via_register: cloud && $('via_register').checked ? '1' : '0',
-    via_voice: cloud && $('via_voice').checked ? '1' : '0',
-    via_metrics: cloud && $('via_metrics').checked ? '1' : '0',
-    via_rest: cloud && $('via_rest').checked ? '1' : '0',
-    version: $('ex_update').checked ? $('version').value : '',
-    firmware_path: $('ex_update').checked ? $('firmware').value : ''
+    mode: online ? 'cloud' : 'offline',
+    via_register: online ? '1' : '0',
+    update: updating ? '1' : '0',
+    version: updating ? fw.value : '',
+    firmware_path: ''
   });
   $('btnStack').disabled = true; chip('r_stack', false, 'запускаю…');
   const r = await (await fetch('/api/stack/start', {method: 'POST', body: f})).json();
@@ -398,6 +448,16 @@ async function saveCerts() {
   $('cert_hint').textContent = r.ok ? 'выбор сохранён в data/certs/active.txt' : '';
 }
 
+let SESSION = null;
+
+async function pingSession() {
+  try {
+    const j = await (await fetch('/api/ping')).json();
+    if (SESSION && j.session !== SESSION) { location.reload(); return; }
+    SESSION = j.session;
+  } catch (e) { /* сервер перезапускается — просто ждём */ }
+}
+
 async function state() {
   const j = await (await fetch('/api/state')).json();
   const set = (id, ok, text, cls) => {
@@ -416,8 +476,11 @@ async function init() {
   ITEMS = (await (await fetch('/api/items')).json()).items;
   renderPreset();
   loadCerts();
+  loadProfile();
+  loadFirmwares();
   loadDevice();
   state(); stackState(); loadDevice();
+  setInterval(pingSession, 2000);
   setInterval(state, 5000);
   setInterval(loadDevice, 3000);
   setInterval(poll, 1200);
@@ -429,6 +492,7 @@ async function init() {
   setInterval(pollStack, 900);
   poll();
   pollStack();
+  pingSession();
 }
 init();
 </script>

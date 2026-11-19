@@ -297,6 +297,14 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
             (200, "application/json", json.to_string())
         }
         ("GET", "/api/stack") => (200, "application/json", stack_json()),
+        ("GET", "/api/ping") => {
+            let json = serde_json::json!({ "session": session_id() });
+            (200, "application/json", json.to_string())
+        }
+        ("GET", "/api/profile") => (200, "application/json", profile_json()),
+        ("POST", "/api/profile") => (200, "application/json", set_profile(body)),
+        ("GET", "/api/firmwares") => (200, "application/json", firmwares_json()),
+        ("POST", "/api/db") => (200, "application/json", fetch_db(body)),
         ("GET", "/api/device") => (200, "application/json", device_json()),
         ("POST", "/api/restart") => {
             let stop = stop_stack();
@@ -545,6 +553,169 @@ fn certs_json_items(body: &str) -> Vec<(String, bool)> {
     out
 }
 
+/// Идентификатор запуска мастера: по нему страница понимает, что сервер
+/// перезапустился, и перезагружается сама (G-044).
+fn session_id() -> &'static str {
+    static SESSION: OnceLock<String> = OnceLock::new();
+    SESSION.get_or_init(|| chrono::Utc::now().format("%Y%m%d%H%M%S").to_string())
+}
+
+/// Профиль устройства, заданный на первом шаге.
+#[derive(Default, Clone)]
+struct Profile {
+    model: String,
+    firmware: String,
+}
+
+fn profile_path() -> std::path::PathBuf {
+    std::path::PathBuf::from("data").join("profile.json")
+}
+
+fn read_profile() -> Profile {
+    let Ok(text) = std::fs::read_to_string(profile_path()) else {
+        return Profile {
+            model: "Station Mini 2".to_string(),
+            firmware: "factory".to_string(),
+        };
+    };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return Profile::default();
+    };
+    Profile {
+        model: json
+            .get("model")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        firmware: json
+            .get("firmware")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+    }
+}
+
+fn profile_json() -> String {
+    let p = read_profile();
+    serde_json::json!({ "model": p.model, "firmware": p.firmware }).to_string()
+}
+
+fn set_profile(body: &str) -> String {
+    let profile = Profile {
+        model: field(body, "model"),
+        firmware: field(body, "firmware"),
+    };
+    if let Some(dir) = profile_path().parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let json = serde_json::json!({ "model": profile.model, "firmware": profile.firmware });
+    match std::fs::write(profile_path(), json.to_string()) {
+        Ok(()) => {
+            push_log(format!("профиль: {} / {}", profile.model, profile.firmware));
+            serde_json::json!({ "ok": true, "text": "профиль сохранён" }).to_string()
+        }
+        Err(e) => {
+            serde_json::json!({ "ok": false, "text": format!("не записалось: {e}") }).to_string()
+        }
+    }
+}
+
+/// Список прошивок: из манифеста и из базы проверенных.
+fn firmwares_json() -> String {
+    let profile = read_profile();
+    let platform = platform_for_model(&profile.model);
+
+    let mut by_version: std::collections::BTreeMap<String, (bool, bool, bool)> =
+        std::collections::BTreeMap::new();
+    // (есть файл, проверена, открывает ADB)
+    if let Ok(text) = std::fs::read_to_string("data/manifests.json") {
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+            if let Some(platforms) = json.get(&platform).and_then(|v| v.as_object()) {
+                for version in platforms.keys() {
+                    by_version.insert(version.clone(), (local_file(version), false, false));
+                }
+            }
+        }
+    }
+    for (version, adb, local) in known_firmware(&platform) {
+        let entry = by_version.entry(version).or_insert((false, false, false));
+        entry.0 = entry.0 || local;
+        entry.1 = true;
+        entry.2 = adb;
+    }
+
+    let items: Vec<_> = by_version
+        .into_iter()
+        .map(|(version, (local, verified, adb))| {
+            serde_json::json!({
+                "version": version,
+                "local": local,
+                "verified": verified,
+                "adb": adb
+            })
+        })
+        .collect();
+
+    serde_json::json!({
+        "platform": platform,
+        "profile": { "model": profile.model, "firmware": profile.firmware },
+        "items": items
+    })
+    .to_string()
+}
+
+fn local_file(version: &str) -> bool {
+    std::path::Path::new(&format!("firmware/{version}.zip.off")).exists()
+        || std::path::Path::new(&format!("firmware/{version}.zip")).exists()
+}
+
+fn platform_for_model(model: &str) -> String {
+    match model {
+        m if m.contains("Mini 2") => "yandexmini_2".to_string(),
+        m if m.contains("Mini") => "yandexmini".to_string(),
+        m if m.contains("Max") => "yandexmax".to_string(),
+        m if m.contains("Lite") => "yandexlite".to_string(),
+        _ => "yandexmini_2".to_string(),
+    }
+}
+
+/// Скачивает базу прошивок по ссылке и проверяет, что это JSON.
+fn fetch_db(body: &str) -> String {
+    let url = field(body, "url");
+    if url.is_empty() {
+        return serde_json::json!({ "ok": false, "text": "укажите ссылку на базу" }).to_string();
+    }
+    let path = std::path::PathBuf::from("firmware").join("db.json");
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let status = std::process::Command::new("curl")
+        .args(["-L", "--fail", "-o"])
+        .arg(&path)
+        .arg(&url)
+        .status();
+    match status {
+        Ok(s) if s.success() => match std::fs::read_to_string(&path) {
+            Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
+                Ok(json) => {
+                    let count = json
+                        .get("firmwares")
+                        .and_then(|v| v.as_array())
+                        .map(|a| a.len())
+                        .unwrap_or(0);
+                    push_log(format!("база прошивок: {count} записей"));
+                    serde_json::json!({ "ok": true, "text": format!("база загружена: {count} записей") })
+                        .to_string()
+                }
+                Err(e) => serde_json::json!({ "ok": false, "text": format!("это не JSON: {e}") })
+                    .to_string(),
+            },
+            Err(e) => serde_json::json!({ "ok": false, "text": format!("файл: {e}") }).to_string(),
+        },
+        _ => serde_json::json!({ "ok": false, "text": "не удалось скачать" }).to_string(),
+    }
+}
+
 /// Панель собранных данных: что за станция, на чём она, можно ли ждать ADB.
 fn device_json() -> String {
     let station = crate::modules::find_station();
@@ -630,8 +801,29 @@ fn device_json() -> String {
         )
     };
 
+    // Предупреждение по профилю и фактической прошивке.
+    let profile = read_profile();
+    let factory = profile.firmware == "factory" || version.is_empty();
+    let warning = if factory && !adb_open {
+        format!(
+            "Профиль: factory. На такой прошивке ADB не разблокировать — сначала обновите на {}",
+            good.first()
+                .cloned()
+                .unwrap_or_else(|| "проверенную прошивку".to_string())
+        )
+    } else if !version.is_empty() && !profile.firmware.is_empty() && profile.firmware != version {
+        format!(
+            "Фактическая прошивка {} не совпадает с профилем ({})",
+            version, profile.firmware
+        )
+    } else {
+        String::new()
+    };
+
     serde_json::json!({
         "station": station,
+        "profile": { "model": profile.model, "firmware": profile.firmware },
+        "warning": warning,
         "device_id": device_id,
         "platform": platform,
         "model": model,
@@ -734,20 +926,23 @@ fn start_stack(body: &str) -> String {
         rest: cloud && field(body, "via_rest") == "1",
     };
 
-    let firmware = {
-        let value = field(body, "firmware_path");
-        if value.is_empty() {
-            find_firmware().unwrap_or_default()
-        } else {
-            value
-        }
-    };
     let version = {
         let value = field(body, "version");
         if value.is_empty() {
             "0.369.1.46.4778262943.20261013.299".to_string()
         } else {
             value
+        }
+    };
+    let firmware = {
+        let off = format!("firmware/{version}.zip.off");
+        let zip = format!("firmware/{version}.zip");
+        if std::path::Path::new(&off).exists() {
+            off
+        } else if std::path::Path::new(&zip).exists() {
+            zip
+        } else {
+            find_firmware().unwrap_or_default()
         }
     };
 
@@ -773,7 +968,13 @@ fn start_stack(body: &str) -> String {
         return serde_json::json!({ "ok": false, "text": text }).to_string();
     }
 
-    let routes = build_routes(allow);
+    let update_enabled = field(body, "update") == "1";
+    let routes = build_routes(
+        allow,
+        UpdatePolicy {
+            enabled: update_enabled,
+        },
+    );
     if let Some(dir) = std::path::Path::new("data/routes.toml").parent() {
         let _ = std::fs::create_dir_all(dir);
     }
@@ -871,6 +1072,12 @@ fn stop_stack() -> String {
 
 /// Что пропускаем в облако в режиме «через облако».
 #[derive(Default, Clone, Copy)]
+struct UpdatePolicy {
+    /// Пользователь разрешил обновление на выбранную прошивку.
+    enabled: bool,
+}
+
+#[derive(Default, Clone, Copy)]
 struct CloudAllow {
     register: bool,
     voice: bool,
@@ -884,11 +1091,16 @@ struct CloudAllow {
 /// обновления, конфиг, прошивка — наши. По умолчанию всё остальное молчит
 /// (полный оффлайн). В режиме «через облако» разрешённые пакеты уходят
 /// в настоящее облако, но обновления — всегда наши.
-fn build_routes(allow: CloudAllow) -> String {
+fn build_routes(allow: CloudAllow, update: UpdatePolicy) -> String {
     let mut out = String::from(
         "# Сгенерировано мастером: пресет перехвата.\n\
          # Первое совпадение выигрывает, `*` — запасное правило.\n\n",
     );
+    let updates = if update.enabled {
+        "check_updates"
+    } else {
+        "custom"
+    };
     let rules: [(&str, &str); 9] = [
         ("generate_204", "204"),
         ("/connectivity", "204"),
@@ -897,7 +1109,7 @@ fn build_routes(allow: CloudAllow) -> String {
             "/register",
             if allow.register { "proxy" } else { "register" },
         ),
-        ("/check_updates", "check_updates"),
+        ("/check_updates", updates),
         ("/get_sync_info", "sync_info"),
         ("/firmware/", "firmware"),
         ("/uni.ws", if allow.voice { "proxy" } else { "block" }),
@@ -908,8 +1120,13 @@ fn build_routes(allow: CloudAllow) -> String {
     ];
     for (pattern, action) in rules {
         out.push_str(&format!(
-            "[[route]]\nmatch = \"{pattern}\"\naction = \"{action}\"\n\n"
+            "[[route]]\nmatch = \"{pattern}\"\naction = \"{action}\"\n"
         ));
+        if pattern == "/check_updates" && !update.enabled {
+            // Обновление не подтверждено — станция получит «обновлений нет».
+            out.push_str("body = \"\"\"{\\\"hasUpdate\\\":false}\"\"\"\n");
+        }
+        out.push('\n');
     }
     let rest = if allow.rest { "proxy" } else { "block" };
     out.push_str(&format!("[[route]]\nmatch = \"*\"\naction = \"{rest}\"\n"));
