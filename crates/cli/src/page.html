@@ -150,8 +150,8 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
       <div class="col">
         <label>Сетевой адаптер</label>
         <select id="adapter"><option value="">загружаю…</option></select>
-        <label>Адрес порта (шлюз для станции)</label>
-        <input type="text" id="eth_ip" value="192.168.137.1">
+        <label>Адрес порта (шлюз для станции) — подставляется сам</label>
+        <input type="text" id="eth_ip" value="192.168.137.1" readonly style="color:#9fb4cc">
         <p class="hint" id="eth_station">станция в сети: —</p>
         <button class="act" id="btnEth" onclick="setEthernet()">Назначить адрес</button>
         <button class="act ghost" id="btnShare" onclick="enableShare()">Включить общий доступ (DHCP)</button>
@@ -337,7 +337,14 @@ function toggleLink() {
   const wifi = $('link').value !== 'ethernet';
   $('ap_card').style.display = wifi ? 'block' : 'none';
   $('eth_card').style.display = wifi ? 'none' : 'block';
-  if (!wifi) { loadAdapters().then(() => refreshIface($('adapter').value)); }
+  if (!wifi) {
+    loadAdapters().then(() => refreshIface($('adapter').value));
+    if (!window.__ifaceTimer) {
+      window.__ifaceTimer = setInterval(() => {
+        if ($('eth_card').style.display !== 'none') refreshIface($('adapter').value);
+      }, 4000);
+    }
+  }
 }
 
 async function loadAdapters() {
