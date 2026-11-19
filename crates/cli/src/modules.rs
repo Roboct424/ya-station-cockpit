@@ -629,9 +629,11 @@ fn net_share(ctx: &ModuleCtx) -> Result<String, String> {
     let script = format!(
         r#"
 chcp 65001 > $null
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+$OutputEncoding = [Text.Encoding]::UTF8
 $ErrorActionPreference='Stop'
 $uplink = (Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric | Select-Object -First 1).InterfaceAlias
-if ($uplink -eq '{adapter}') {{ throw "выбран тот же адаптер, что и интернет ($uplink) — выберите Ethernet" }}
+if ($uplink -eq '{adapter}') {{ throw "same adapter as uplink ($uplink): choose Ethernet" }}
 $share = New-Object -ComObject HNetCfg.HNetShare
 $pub = $null; $priv = $null
 foreach ($c in $share.EnumEveryConnection) {{
@@ -639,15 +641,15 @@ foreach ($c in $share.EnumEveryConnection) {{
     if ($n -eq $uplink) {{ $pub = $c }}
     if ($n -eq '{adapter}') {{ $priv = $c }}
 }}
-if (-not $pub) {{ throw "не нашёл аплинк $uplink" }}
-if (-not $priv) {{ throw "не нашёл адаптер {adapter}" }}
+if (-not $pub) {{ throw "uplink not found: $uplink" }}
+if (-not $priv) {{ throw "adapter not found: {adapter}" }}
 $p1 = $share.INetSharingConfigurationForINetConnection($priv)
 $p2 = $share.INetSharingConfigurationForINetConnection($pub)
 $p1.DisableSharing(); $p2.DisableSharing()
 $p2.EnableSharing(0)
 $p1.EnableSharing(1)
 Start-Sleep -Seconds 4
-"аплинк: $uplink -> {adapter}: общий доступ включён"
+"uplink $uplink -> {adapter}: sharing enabled"
 "#
     );
     let out = Command::new("powershell")
@@ -681,6 +683,8 @@ fn net_unshare(ctx: &ModuleCtx) -> Result<String, String> {
     let script = format!(
         r#"
 chcp 65001 > $null
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+$OutputEncoding = [Text.Encoding]::UTF8
 $ErrorActionPreference='Stop'
 $share = New-Object -ComObject HNetCfg.HNetShare
 foreach ($c in $share.EnumEveryConnection) {{
@@ -690,7 +694,7 @@ foreach ($c in $share.EnumEveryConnection) {{
     }}
 }}
 netsh interface ip set address name="{adapter}" dhcp | Out-Null
-"общий доступ снят, {adapter} снова на DHCP"
+"sharing disabled, {adapter} back on DHCP"
 "#
     );
     let out = Command::new("powershell")
