@@ -381,7 +381,6 @@ enum CaptureCmd {
     },
 }
 
-
 #[derive(Subcommand)]
 enum BleCmd {
     /// Сканировать эфир и показать найденные устройства
@@ -673,9 +672,9 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
                 let mode = hub::Mode::parse(&mode).ok_or_else(|| {
                     CockpitError::Config("режим должен быть setup или sync".into())
                 })?;
-                let alias = alias.parse::<std::net::Ipv4Addr>().map_err(|_| {
-                    CockpitError::Config(format!("неверный адрес: {alias}"))
-                })?;
+                let alias = alias
+                    .parse::<std::net::Ipv4Addr>()
+                    .map_err(|_| CockpitError::Config(format!("неверный адрес: {alias}")))?;
                 hub::serve(mode, alias).map_err(CockpitError::Internal)?;
                 Ok(ExitCode::SUCCESS)
             }

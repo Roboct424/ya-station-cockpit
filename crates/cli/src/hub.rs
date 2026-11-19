@@ -189,7 +189,9 @@ fn a_answer(query: &[u8], q_end: usize, ip: Ipv4Addr) -> Vec<u8> {
     out.extend_from_slice(&query[0..2]);
     out.extend_from_slice(&[0x81, 0x80, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00]);
     out.extend_from_slice(&query[12..q_end]);
-    out.extend_from_slice(&[0xC0, 0x0C, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x3C, 0x00, 0x04]);
+    out.extend_from_slice(&[
+        0xC0, 0x0C, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x3C, 0x00, 0x04,
+    ]);
     out.extend_from_slice(&ip.octets());
     out
 }
@@ -268,7 +270,10 @@ fn dhcp_loop() {
     // поэтому слушаем оба — на Windows доставка зависит от порядка bind.
     let tx = udp_reuse((SERVER_IP.octets(), 67)).ok();
     if let Some(sock) = tx.as_ref() {
-        let _ = TX.set(sock.try_clone().unwrap_or_else(|_| sock.try_clone().expect("clone")));
+        let _ = TX.set(
+            sock.try_clone()
+                .unwrap_or_else(|_| sock.try_clone().expect("clone")),
+        );
         log("DHCP: ответы пойдут с 192.168.137.1");
     }
     if let Some(sock) = tx {
@@ -364,16 +369,17 @@ fn quasar_loop() {
         log("quasar: не загрузились сертификаты data/certs/p384_wide_sha384.*");
         return;
     };
-    let config = match rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS12])
-        .with_no_client_auth()
-        .with_single_cert(chain.0, chain.1)
-    {
-        Ok(c) => Arc::new(c),
-        Err(error) => {
-            log(&format!("quasar: конфиг TLS: {error}"));
-            return;
-        }
-    };
+    let config =
+        match rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS12])
+            .with_no_client_auth()
+            .with_single_cert(chain.0, chain.1)
+        {
+            Ok(c) => Arc::new(c),
+            Err(error) => {
+                log(&format!("quasar: конфиг TLS: {error}"));
+                return;
+            }
+        };
     let Ok(listener) = TcpListener::bind(("0.0.0.0", 443)) else {
         log("quasar: порт 443 занят");
         return;
@@ -390,8 +396,7 @@ fn quasar_loop() {
                     conn.complete_io(&mut stream).map_err(|_| ())?;
                 }
                 Ok(rustls::StreamOwned::new(conn, stream))
-            })()
-            else {
+            })() else {
                 return;
             };
             let _ = handle_quasar(&mut tls);
@@ -420,7 +425,9 @@ fn load_cert_chain() -> Result<
     Ok((certs, key))
 }
 
-fn handle_quasar(stream: &mut rustls::StreamOwned<rustls::ServerConnection, TcpStream>) -> std::io::Result<()> {
+fn handle_quasar(
+    stream: &mut rustls::StreamOwned<rustls::ServerConnection, TcpStream>,
+) -> std::io::Result<()> {
     let mut head = Vec::new();
     let mut byte = [0u8; 1];
     while !head.ends_with(b"\r\n\r\n") && head.len() < 8192 {
@@ -436,7 +443,8 @@ fn handle_quasar(stream: &mut rustls::StreamOwned<rustls::ServerConnection, TcpS
         .lines()
         .find_map(|line| {
             let (name, value) = line.split_once(':')?;
-            name.eq_ignore_ascii_case("host").then(|| value.trim().to_string())
+            name.eq_ignore_ascii_case("host")
+                .then(|| value.trim().to_string())
         })
         .unwrap_or_default();
     log(&format!("{host}{path}"));
@@ -473,7 +481,6 @@ fn respond(
     stream.flush()?;
     Ok(())
 }
-
 
 /// Ждёт открытия 5555 и сам забирает root-ADB, без кнопок.
 fn auto_grab() {

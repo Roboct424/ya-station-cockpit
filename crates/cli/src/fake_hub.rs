@@ -48,10 +48,7 @@ impl FakeHub {
         let key = self
             .private
             .decrypt(Pkcs1v15Encrypt, &c)
-            .or_else(|_| {
-                self.private
-                    .decrypt(Oaep::new::<sha2::Sha256>(), &c)
-            })
+            .or_else(|_| self.private.decrypt(Oaep::new::<sha2::Sha256>(), &c))
             .or_else(|_| self.private.decrypt(Oaep::new::<sha2::Sha256>(), &c));
 
         let key = match key {
@@ -71,7 +68,11 @@ impl FakeHub {
             eprintln!("[fake] M не base64");
             return;
         };
-        eprintln!("[fake] ciphertext ({} Б): {}", ciphertext.len(), hex(&ciphertext));
+        eprintln!(
+            "[fake] ciphertext ({} Б): {}",
+            ciphertext.len(),
+            hex(&ciphertext)
+        );
 
         // AES-GCM: nonce 12 Б (нули или первые 12 байт), тег 16 Б.
         use aes_gcm::aead::{Aead, KeyInit};
@@ -87,7 +88,8 @@ impl FakeHub {
                     n[..take].copy_from_slice(&ciphertext[..take]);
                     n
                 };
-                if let Ok(plain) = cipher.decrypt(Nonce::from_slice(&nonce_bytes), ciphertext.as_ref())
+                if let Ok(plain) =
+                    cipher.decrypt(Nonce::from_slice(&nonce_bytes), ciphertext.as_ref())
                 {
                     eprintln!(
                         "[fake] РАСШИФРОВАНО (AES-256-GCM, nonce={nonce_kind}): {} Б\n{}",
@@ -187,7 +189,9 @@ fn handle(mut stream: TcpStream, hub: &FakeHub) -> std::io::Result<()> {
             }
             "HTTP/1.1 200 Ok\r\nContent-Type: text/plain\r\nContent-Length: 2\r\n\r\nok".to_string()
         }
-        _ => "HTTP/1.1 200 Ok\r\nContent-Type: text/plain\r\nContent-Length: 2\r\n\r\nok".to_string(),
+        _ => {
+            "HTTP/1.1 200 Ok\r\nContent-Type: text/plain\r\nContent-Length: 2\r\n\r\nok".to_string()
+        }
     };
 
     stream.write_all(response.as_bytes())?;

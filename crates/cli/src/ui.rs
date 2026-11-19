@@ -190,7 +190,13 @@ fn ensure_firewall() {
     let add = ["advfirewall", "firewall", "add", "rule"];
     let program = format!("program={exe}");
     let rules: [&[&str]; 3] = [
-        &["name=cockpit-app-in", "dir=in", "action=allow", &program, "enable=yes"],
+        &[
+            "name=cockpit-app-in",
+            "dir=in",
+            "action=allow",
+            &program,
+            "enable=yes",
+        ],
         &[
             "name=cockpit-hub-udp",
             "dir=in",
@@ -2144,7 +2150,6 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).to_string()
 }
 
-
 // ------------------------------------------------------------ Хаб ---------
 
 static HUB_CHILD: std::sync::Mutex<Option<std::process::Child>> = std::sync::Mutex::new(None);
@@ -2184,11 +2189,11 @@ fn hub_serve(body: &str) -> String {
                 *guard = Some(child);
             }
             push_log(format!("хаб: службы {mode} запущены (pid {pid})"));
-            serde_json::json!({ "ok": true, "text": format!("службы {mode} запущены") })
-                .to_string()
+            serde_json::json!({ "ok": true, "text": format!("службы {mode} запущены") }).to_string()
         }
-        Err(e) => serde_json::json!({ "ok": false, "text": format!("не запустилось: {e}") })
-            .to_string(),
+        Err(e) => {
+            serde_json::json!({ "ok": false, "text": format!("не запустилось: {e}") }).to_string()
+        }
     }
 }
 
