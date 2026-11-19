@@ -912,6 +912,8 @@ fn local_file(version: &str) -> bool {
 
 fn platform_for_model(model: &str) -> String {
     match model {
+        m if m.contains("Hub") || m.contains("Хаб") => "yandexhub".to_string(),
+        m if m.contains("Midi") || m.contains("Миди") => "yandexmidi".to_string(),
         m if m.contains("Mini 3") || m.contains("00027") => "yandexmini_3".to_string(),
         m if m.contains("Mini 2") || m.contains("00020") => "yandexmini_2".to_string(),
         m if m.contains("Mini") => "yandexmini".to_string(),
@@ -1096,6 +1098,14 @@ fn advice_json() -> String {
         push(
             "info",
             "Идёт обновление прошивки — дождитесь перезагрузки станции".to_string(),
+        );
+    }
+
+    if profile.model.to_lowercase().contains("hub") {
+        push(
+            "warn",
+            "У Хаба нет микрофона: звуковой код не сработает — подключайте по Ethernet или BLE"
+                .to_string(),
         );
     }
 

@@ -87,8 +87,10 @@ pre.term{height:calc(100vh - 170px);min-height:360px}
     <div class="row">
       <div class="col">
         <label>Модель</label>
-        <select id="model">
+        <select id="model" onchange="checkMic(this.value)">
           <option value="">—</option>
+          <option>Station Hub</option>
+          <option>Station Midi</option>
           <option>Station Mini 3 (YNDX-00027)</option>
           <option>Station Mini 2</option>
           <option>Station Mini</option>
@@ -218,6 +220,9 @@ pre.term{height:calc(100vh - 170px);min-height:360px}
         <label>Предстарт (0–4)</label><input type="text" id="preroll" value="0">
         <button class="act" id="btnPair" onclick="pair()">Проиграть код</button>
         <span id="r_pair" class="chip wait">не выполнялось</span>
+        <p class="hint" id="nomichint" style="color:#ffce6a;display:none">
+          У этой модели нет микрофона — звуковой код не сработает. Подключайте по Ethernet или Bluetooth.
+        </p>
       </div>
       <div class="card">
         <h2>Станция</h2>
@@ -352,11 +357,19 @@ async function saveProfile() {
   loadDevice();
 }
 
+function checkMic(model) {
+  const el = $('nomichint');
+  if (el) el.style.display = (model || '').toLowerCase().includes('hub') ? 'block' : 'none';
+}
+
 async function loadProfile() {
   const j = await (await fetch('/api/profile')).json();
+  checkMic(j.model);
   $('model').value = j.model || '';
+  checkMic(j.model || '');
   $('reset').value = j.reset || 'unknown';
   $('link').value = j.link || 'wifi';
+  checkMic(j.model);
   toggleLink();
   await loadFirmwareOptions(j.firmware || '');
 }
