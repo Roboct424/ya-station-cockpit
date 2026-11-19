@@ -1182,20 +1182,19 @@ fn device_json() -> String {
 
     // Предупреждение по профилю и фактической прошивке.
     let profile = read_profile();
+    // С профилем (шаг 1) сверяемся только на первой попытке (G-047).
+    let first_attempt = read_attempt_state().number <= 1;
     let factory = profile.firmware == "factory" || version.is_empty();
-    let warning = if factory && !adb_open {
+    let warning = if first_attempt && factory && !adb_open {
         format!(
             "Профиль: factory. На такой прошивке ADB не разблокировать — сначала обновите на {}",
             good.first()
                 .cloned()
                 .unwrap_or_else(|| "проверенную прошивку".to_string())
         )
-    } else if !version.is_empty() && !profile.firmware.is_empty() && profile.firmware != version {
-        format!(
-            "Фактическая прошивка {} не совпадает с профилем ({})",
-            version, profile.firmware
-        )
     } else {
+        // Расхождение с профилем показывает отдельный блок `guard`, и только
+        // на первой попытке — дублировать предупреждением не нужно.
         String::new()
     };
 
@@ -1204,13 +1203,18 @@ fn device_json() -> String {
     //    а профиль «factory» совпадает с любой заводской прошивкой.
     let mut guard: Vec<String> = Vec::new();
     let detected = !device_id.is_empty();
-    if detected && !profile.model.is_empty() && !model_matches(&profile.model, &model) {
+    if first_attempt
+        && detected
+        && !profile.model.is_empty()
+        && !model_matches(&profile.model, &model)
+    {
         guard.push(format!(
             "модель: указано «{}», от станции «{}»",
             profile.model, model
         ));
     }
-    if detected
+    if first_attempt
+        && detected
         && !profile.firmware.is_empty()
         && !version.is_empty()
         && !firmware_matches(&profile.firmware, &version)
