@@ -347,6 +347,20 @@ pub const MODULES: &[Module] = &[
         needs_adb: false,
     },
     Module {
+        id: "net.yandex-ips",
+        group: "Сеть",
+        title: "Адреса Яндекса на нас",
+        summary: "Вешает реальные IP облака на наш порт: станция идёт к нам без DNS",
+        needs_adb: false,
+    },
+    Module {
+        id: "net.yandex-ips-off",
+        group: "Сеть",
+        title: "Снять адреса Яндекса",
+        summary: "Убирает перенаправление по IP",
+        needs_adb: false,
+    },
+    Module {
         id: "net.names",
         group: "Сеть",
         title: "Имена станции → мы",
@@ -442,6 +456,8 @@ pub fn run(id: &str, ctx: &ModuleCtx) -> Result<String, String> {
         "net.hotspot" => net_hotspot(ctx),
         "net.share" => net_share(ctx),
         "net.unshare" => net_unshare(ctx),
+        "net.yandex-ips" => net_yandex_ips(ctx, true),
+        "net.yandex-ips-off" => net_yandex_ips(ctx, false),
         "net.names" => net_names(),
         "net.static-ip" => net_static_ip(ctx),
         "net.hosts" => net_hosts(ctx),
@@ -716,6 +732,112 @@ netsh interface ip set address name="{adapter}" dhcp | Out-Null
         return Err(text.trim().to_string());
     }
     Ok(text)
+}
+
+/// Имена, чьи настоящие адреса вешаем на свой порт.
+const REDIRECT_NAMES: &[&str] = &[
+    "quasar.yandex.net",
+    "scbh.yandex.net",
+    "oauth.yandex.ru",
+    "clck.yandex.net",
+    "uniproxy.alice.yandex.net",
+    "quasar.s3.yandex.net",
+    "report.appmetrica.yandex.net",
+    "quasar.yandex.ru",
+];
+
+/// Разрешает имя через публичный DNS, обходя hosts.
+fn resolve_real(name: &str) -> Vec<String> {
+    let out = Command::new("nslookup")
+        .args([name, "8.8.8.8"])
+        .output()
+        .or_else(|_| Command::new("nslookup").arg(name).output());
+    let Ok(out) = out else { return Vec::new() };
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let mut ips = Vec::new();
+    for token in text.split(|c: char| !(c.is_ascii_digit() || c == '.')) {
+        if token.matches('.').count() != 3 || !token.split('.').all(|p| !p.is_empty()) {
+            continue;
+        }
+        // GOTCHA: G-049 — в выводе nslookup первым идёт адрес самого
+        // резолвера; его нельзя вешать на интерфейс, иначе ломается DNS.
+        if token == "8.8.8.8"
+            || token.starts_with("127.")
+            || token.starts_with("0.")
+            || token.starts_with("169.254.")
+            || token.starts_with("192.168.")
+            || token.starts_with("10.")
+        {
+            continue;
+        }
+        ips.push(token.to_string());
+    }
+    ips
+}
+
+/// Вешает (или снимает) настоящие адреса облака на выбранный адаптер.
+///
+/// GOTCHA: G-048 — ICS-DNS не учитывает hosts, поэтому станция ходит на
+/// настоящие IP. Алиасы на нашем порту заставляют трафик приходить к нам.
+fn net_yandex_ips(ctx: &ModuleCtx, add: bool) -> Result<String, String> {
+    let adapter = if ctx.ethernet.is_empty() {
+        "Ethernet".to_string()
+    } else {
+        ctx.ethernet.clone()
+    };
+
+    let mut ips: Vec<String> = Vec::new();
+    for name in REDIRECT_NAMES {
+        for ip in resolve_real(name) {
+            if !ips.contains(&ip) {
+                ips.push(ip);
+            }
+        }
+    }
+    if ips.is_empty() {
+        return Err("не удалось определить адреса облака".to_string());
+    }
+
+    let mut log = String::new();
+    let mut applied = 0usize;
+    for ip in &ips {
+        // Сначала снимаем адрес, чтобы шаг был повторяемым: netsh не умеет
+        // «добавить, если нет» и ругается на существующий адрес.
+        let _ = Command::new("netsh")
+            .args([
+                "interface",
+                "ip",
+                "delete",
+                "address",
+                &format!("name={adapter}"),
+                ip,
+            ])
+            .output();
+        if !add {
+            log.push_str(&format!("- {ip}\n"));
+            continue;
+        }
+        let out = Command::new("netsh")
+            .args([
+                "interface",
+                "ip",
+                "add",
+                "address",
+                &format!("name={adapter}"),
+                ip,
+                "255.255.255.255",
+            ])
+            .output()
+            .map_err(|e| format!("netsh: {e}"))?;
+        if out.status.success() {
+            applied += 1;
+            log.push_str(&format!("+ {ip}\n"));
+        }
+    }
+    if add && applied == 0 {
+        return Err("netsh не применил ни одного адреса (нужны права администратора)".to_string());
+    }
+    Ok(format!("{adapter}: адресов {}\n{log}", ips.len()))
 }
 
 fn net_names() -> Result<String, String> {

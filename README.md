@@ -9,9 +9,12 @@
 проверку результата (`check`), условие пропуска (`skip_if`) и компенсацию
 (`rollback`). При ошибке выполненные шаги откатываются, всё пишется в журнал.
 
-**Статус: фаза 16.** Ядро с таймаутами, конфиг с горячей перезагрузкой,
-YAML-сценарии, слой системных команд, DNS- и TLS-перехват (свой CA, SNI),
-планы хотспота для Windows и Linux, TLS-прокси с туннелем к реальному серверу, CLI.
+**Статус: фаза 31.** Полный локальный проход Mini 2 (звук → регистрация →
+OTA → root ADB) и **разблокировка Yandex Hub (saturn) полностью офлайн**:
+DNS с IPv4-только, DHCP, SNTP и локальный `quasar` с `adbd`. Мастер из четырёх
+шагов (RU/EN) с прогрессом, подсветкой готовых блоков и сведениями о сборке.
+Ядро с таймаутами, конфиг с горячей перезагрузкой, YAML-сценарии, слой
+системных команд, DNS- и TLS-перехват (свой CA, SNI), хотспот Windows/Linux, CLI.
 
 ### Быстрый старт
 
@@ -42,6 +45,7 @@ cargo run -- journal tail           # что произошло
 | `cockpit ota fetch-all` | скачать все версии из манифеста |
 | `cockpit device info\|list` | ADB: подключение, версия, root |
 | `cockpit local-ota` | локальный OTA/sync: прошивка + конфиг с adbd |
+| `cockpit hub serve --mode base\|sync` | службы Хаба: IPv4-DNS, DHCP, SNTP, локальный `quasar` с `adbd` |
 | `cockpit activate` | сценарий: OTA → ADB → root → версия → сторож |
 | `cockpit ui` | локальная веб-панель: форма, диагностика, журнал |
 | `cockpit telemetry status\|enable\|disable` | согласие на метаданные |
@@ -110,9 +114,12 @@ a result check (`check`), a skip condition (`skip_if`) and a compensation
 (`rollback`). On failure the completed steps are rolled back and everything goes
 to the journal.
 
-**Status: phase 4.** Core with timeouts, config with hot reload, YAML scenarios,
-system-command layer, DNS and TLS interception (own CA, SNI), hotspot plans for
-Windows and Linux, TLS proxy with upstream tunneling, CLI.
+**Status: phase 31.** Full local pass for Mini 2 (sound → registration → OTA →
+root ADB) and **fully offline Yandex Hub (saturn) unlock**: IPv4-only DNS, DHCP,
+SNTP and a local `quasar` serving an `adbd` config. Four-step wizard (RU/EN) with
+progress, completed-block highlighting and build info. Core with timeouts, config
+with hot reload, YAML scenarios, system-command layer, DNS/TLS interception
+(own CA, SNI), Windows/Linux hotspot, CLI.
 
 ### Quick start
 
@@ -136,6 +143,7 @@ cargo run -- journal tail
 | `cockpit net info` | selected network adapter |
 | `cockpit dns --bind ADDR --answer IP` | DNS interceptor (A → our address) |
 | `cockpit tls --bind ADDR --ca-out FILE` | TLS interception: own CA, SNI-based certs |
+| `cockpit hub serve --mode base\|sync` | Hub services: IPv4 DNS, DHCP, SNTP, local `quasar` with `adbd` |
 | `cockpit version` | version |
 
 ### Layout

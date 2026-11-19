@@ -10,6 +10,8 @@ use cockpit_config::{Config, LiveConfig};
 use cockpit_core::{CockpitError, Context, Journal, JsonlJournal, Record, Runner, Step};
 use cockpit_scenarios::Scenario;
 
+mod fake_hub;
+mod hub;
 mod modules;
 mod selfcheck;
 mod ui;
@@ -119,6 +121,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: CaptureCmd,
     },
+    /// Фальшивый Хаб: ловим запрос приложения для разбора формата
+    Hub {
+        #[command(subcommand)]
+        cmd: HubCmd,
+    },
     /// Поиск станций по Bluetooth
     Ble {
         #[command(subcommand)]
@@ -203,6 +210,24 @@ enum Cmd {
     },
     /// Версия
     Version,
+}
+
+#[derive(Subcommand)]
+enum HubCmd {
+    /// Запустить фальшивый Хаб (HTTP 8080) и слушать запросы приложения
+    Fake {
+        #[arg(long, default_value = "0.0.0.0:8080")]
+        bind: String,
+    },
+    /// Поднять службы разблокировки: setup — только IPv4-DNS, sync — свой quasar с adbd
+    Serve {
+        /// setup | sync
+        #[arg(long, default_value = "sync")]
+        mode: String,
+        /// Адрес, который вешаем на Ethernet в режиме sync
+        #[arg(long, default_value = "213.180.193.78")]
+        alias: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -355,6 +380,7 @@ enum CaptureCmd {
         log: PathBuf,
     },
 }
+
 
 #[derive(Subcommand)]
 enum BleCmd {
@@ -637,6 +663,23 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
         Cmd::Pair { cmd } => run_pair(cmd),
         Cmd::Module { cmd } => run_module_cmd(cmd),
         Cmd::Ble { cmd } => run_ble(cmd),
+        Cmd::Hub { cmd } => match cmd {
+            HubCmd::Fake { bind } => {
+                fake_hub::serve(&bind)
+                    .map_err(|e| CockpitError::Internal(format!("fake hub {bind}: {e}")))?;
+                Ok(ExitCode::SUCCESS)
+            }
+            HubCmd::Serve { mode, alias } => {
+                let mode = hub::Mode::parse(&mode).ok_or_else(|| {
+                    CockpitError::Config("режим должен быть setup или sync".into())
+                })?;
+                let alias = alias.parse::<std::net::Ipv4Addr>().map_err(|_| {
+                    CockpitError::Config(format!("неверный адрес: {alias}"))
+                })?;
+                hub::serve(mode, alias).map_err(CockpitError::Internal)?;
+                Ok(ExitCode::SUCCESS)
+            }
+        },
         Cmd::Telemetry { cmd } => run_telemetry(&cfg, cmd),
         Cmd::Capture { cmd } => run_capture(&cfg, cmd),
         Cmd::Ui { port } => {
@@ -969,14 +1012,27 @@ fn run_local_ota(
     );
     println!("  /get_sync_info → adbd.network = true");
     println!("  /firmware/{name} → {}", firmware.display());
+    // Смотрим, что реально стоит в запасном правиле `*`, а не только флаг forward.
+    let rest_action = std::fs::read_to_string(routes_file)
+        .ok()
+        .and_then(|text| {
+            let start = text.find("match = \"*\"")?;
+            let tail = &text[start..];
+            let a = tail.find("action = \"")? + "action = \"".len();
+            let b = tail[a..].find('"')?;
+            Some(tail[a..a + b].to_string())
+        })
+        .unwrap_or_default();
     println!(
         "  остальное → {}",
-        if forward {
-            "настоящее облако"
-        } else {
-            "404 (станция решит, что интернета нет)"
+        match rest_action.as_str() {
+            "block" => "блокируется (полный оффлайн, в сеть ничего не уходит)",
+            "proxy" => "настоящее облако",
+            "-" => "молчит",
+            _ => "404 (станция решит, что интернета нет)",
         }
     );
+    let _ = forward;
     // Проверка связи: станция просит http://scbh.yandex.net/generate_204
     // и берёт время из заголовка Date.
     let http = match http_bind.parse::<std::net::SocketAddr>() {

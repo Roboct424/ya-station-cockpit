@@ -181,10 +181,51 @@ fn stop_leftover_stack() {
     }
 }
 
+/// Заранее создаёт правила брандмауэра для служб Хаба: иначе Windows
+/// показывает окно «разрешить сети», а под политикой его не подтвердить.
+fn ensure_firewall() {
+    let exe = std::env::current_exe()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let add = ["advfirewall", "firewall", "add", "rule"];
+    let program = format!("program={exe}");
+    let rules: [&[&str]; 3] = [
+        &["name=cockpit-app-in", "dir=in", "action=allow", &program, "enable=yes"],
+        &[
+            "name=cockpit-hub-udp",
+            "dir=in",
+            "action=allow",
+            "protocol=UDP",
+            "localport=53,67,68,123",
+            "enable=yes",
+        ],
+        &[
+            "name=cockpit-hub-tcp",
+            "dir=in",
+            "action=allow",
+            "protocol=TCP",
+            "localport=80,443,5555",
+            "enable=yes",
+        ],
+    ];
+    for rule in rules {
+        let name = rule[0];
+        // сначала удаляем одноимённое правило, иначе netsh плодит дубликаты
+        let _ = std::process::Command::new("netsh")
+            .args(["advfirewall", "firewall", "delete", "rule", name])
+            .output();
+        let _ = std::process::Command::new("netsh")
+            .args(add)
+            .args(rule)
+            .output();
+    }
+}
+
 pub fn serve(port: u16) -> std::io::Result<()> {
     // G-046: по умолчанию обновление запрещено — разрешает только пользователь.
     let _ = std::fs::write("data/allow_update", "0");
     stop_leftover_stack();
+    ensure_firewall();
     let listener = TcpListener::bind(("127.0.0.1", port))?;
     println!("мастер: http://127.0.0.1:{port}");
     open_window(port);
@@ -321,22 +362,29 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
             (200, "application/json", json.to_string())
         }
         ("POST", "/api/share") => {
-            let mut ctx = ctx_from(body);
             let adapter = field(body, "adapter");
+            let mut ctx = ctx_from(body);
             if !adapter.is_empty() {
-                ctx.ethernet = adapter;
+                ctx.ethernet = adapter.clone();
             }
-            let result = run_module("net.share", ctx);
-            (200, "application/json", result)
+            // Адреса облака вешает отдельный режим перехвата (hub serve sync),
+            // общий доступ — только ICS.
+            let share = run_module("net.share", ctx);
+            (200, "application/json", share)
         }
         ("POST", "/api/unshare") => {
-            let mut ctx = ctx_from(body);
             let adapter = field(body, "adapter");
+            let mut ctx = ctx_from(body);
+            if !adapter.is_empty() {
+                ctx.ethernet = adapter.clone();
+            }
+            let unshare = run_module("net.unshare", ctx);
+            let mut ctx = ctx_from(body);
             if !adapter.is_empty() {
                 ctx.ethernet = adapter;
             }
-            let result = run_module("net.unshare", ctx);
-            (200, "application/json", result)
+            let ips = run_module("net.yandex-ips-off", ctx);
+            (200, "application/json", merge_runs(unshare, ips))
         }
         ("POST", "/api/cleanup-all") => (200, "application/json", cleanup_all(body)),
         ("POST", "/api/allow") => {
@@ -376,6 +424,10 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
             let result = run_module("adb.guard", ctx);
             (200, "application/json", result)
         }
+        ("GET", "/api/about") => (200, "application/json", about_json()),
+        ("GET", "/api/hub/status") => (200, "application/json", hub_status()),
+        ("POST", "/api/hub/serve") => (200, "application/json", hub_serve(body)),
+        ("POST", "/api/hub/grab") => (200, "application/json", hub_grab(body)),
         ("POST", "/api/ca") => {
             let ctx = ctx_from(body);
             let result = run_module("ca.install", ctx);
@@ -892,17 +944,34 @@ fn set_profile(body: &str) -> String {
 /// Список прошивок: из манифеста и из базы проверенных.
 fn firmwares_json() -> String {
     let profile = read_profile();
-    let platform = platform_for_model(&profile.model);
+    let mut platform = platform_for_model(&profile.model);
+
+    let manifests = std::fs::read_to_string("data/manifests.json")
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
+
+    // Если для выбранной модели в базе нет прошивок, показываем те, что есть:
+    // иначе у Хаба список пустой, хотя файлы лежат.
+    if let Some(json) = &manifests {
+        let empty = json
+            .get(&platform)
+            .and_then(|v| v.as_object())
+            .map(|o| o.is_empty())
+            .unwrap_or(true);
+        if empty {
+            if let Some(first) = json.as_object().and_then(|o| o.keys().next()) {
+                platform = first.clone();
+            }
+        }
+    }
 
     let mut by_version: std::collections::BTreeMap<String, (bool, bool, bool)> =
         std::collections::BTreeMap::new();
     // (есть файл, проверена, открывает ADB)
-    if let Ok(text) = std::fs::read_to_string("data/manifests.json") {
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
-            if let Some(platforms) = json.get(&platform).and_then(|v| v.as_object()) {
-                for version in platforms.keys() {
-                    by_version.insert(version.clone(), (local_file(version), false, false));
-                }
+    if let Some(json) = &manifests {
+        if let Some(platforms) = json.get(&platform).and_then(|v| v.as_object()) {
+            for version in platforms.keys() {
+                by_version.insert(version.clone(), (local_file(version), false, false));
             }
         }
     }
@@ -1148,7 +1217,7 @@ fn iface_ip(adapter: &str) -> String {
             "-NoProfile",
             "-Command",
             &format!(
-                "(Get-NetIPAddress -InterfaceAlias '{adapter}' -AddressFamily IPv4 -ErrorAction SilentlyContinue | Select-Object -First 1).IPAddress"
+                "$ips = @(Get-NetIPAddress -InterfaceAlias '{adapter}' -AddressFamily IPv4 -ErrorAction SilentlyContinue | ForEach-Object IPAddress); if ($ips -contains '192.168.137.1') {{ '192.168.137.1' }} else {{ $ips | Select-Object -First 1 }}"
             ),
         ])
         .output();
@@ -1161,19 +1230,35 @@ fn iface_ip(adapter: &str) -> String {
 /// Назначает статический адрес на выбранный адаптер (проводной вариант).
 fn set_ethernet(body: &str) -> String {
     let adapter = field(body, "adapter");
-    let ip = {
-        let value = field(body, "ip");
-        if value.is_empty() {
-            "192.168.137.1".to_string()
-        } else {
-            value
-        }
-    };
     if adapter.is_empty() {
         return serde_json::json!({ "ok": false, "text": "выберите адаптер" }).to_string();
     }
-    let script =
-        format!("netsh interface ip set address name=\"{adapter}\" static {ip} 255.255.255.0");
+    // Защита: пустой или чужой адрес не подставляем молча — иначе на порт
+    // уедет шлюз или публичный адрес.
+    let ip = field(body, "ip");
+    if ip.is_empty() || ip == "—" {
+        return serde_json::json!({
+            "ok": false,
+            "text": "адрес не определён — сначала включите общий доступ (DHCP)"
+        })
+        .to_string();
+    }
+    let Ok(addr) = ip.parse::<std::net::Ipv4Addr>() else {
+        return serde_json::json!({ "ok": false, "text": format!("неверный адрес: {ip}") })
+            .to_string();
+    };
+    if addr.octets()[..3] != [192, 168, 137] {
+        return serde_json::json!({
+            "ok": false,
+            "text": "адрес порта должен быть из 192.168.137.0/24"
+        })
+        .to_string();
+    }
+    let script = format!(
+        "$has = @(Get-NetIPAddress -InterfaceAlias '{adapter}' -AddressFamily IPv4 -ErrorAction SilentlyContinue | ForEach-Object IPAddress); \
+         if ($has -contains '{ip}') {{ 'already' }} \
+         else {{ netsh interface ip add address name=\"{adapter}\" {ip} 255.255.255.0 | Out-Null; 'added' }}"
+    );
     let out = std::process::Command::new("powershell")
         .args(["-NoProfile", "-Command", &script])
         .output();
@@ -1263,14 +1348,15 @@ fn advice_json() -> String {
     }
 
     // Рекомендации: сертификат и режим регистрации.
-    let cert = if profile.reset == "yes" {
-        "noroot"
+    let platform = platform_for_model(&profile.model);
+    // G-057: Хаб принимает только p384_wide_sha384, остальным — noroot.
+    let cert = if platform == "saturn" {
+        "p384_wide_sha384"
     } else if adb_open {
         "cockpit (наш)"
     } else {
         "noroot"
     };
-    let platform = platform_for_model(&profile.model);
     let firmware = known_firmware(&platform)
         .into_iter()
         .find(|(_, adb, local)| *adb && *local)
@@ -1765,7 +1851,9 @@ fn build_routes(allow: CloudAllow, update: UpdatePolicy) -> String {
     let rules: [(&str, &str); 9] = [
         ("generate_204", "204"),
         ("/connectivity", "204"),
-        ("/token", "token"),
+        // В режиме «через облако» токен тоже отдаём в облако, иначе
+        // регистрация на настоящем сервере не пройдёт (G-050).
+        ("/token", if allow.register { "proxy" } else { "token" }),
         (
             "/register",
             if allow.register { "proxy" } else { "register" },
@@ -1792,6 +1880,25 @@ fn build_routes(allow: CloudAllow, update: UpdatePolicy) -> String {
     let rest = if allow.rest { "proxy" } else { "block" };
     out.push_str(&format!("[[route]]\nmatch = \"*\"\naction = \"{rest}\"\n"));
     out
+}
+
+/// Склеивает два результата шагов: основной решает `ok`, текст собирается.
+fn merge_runs(main: String, extra: String) -> String {
+    let a: serde_json::Value = serde_json::from_str(&main).unwrap_or_default();
+    let b: serde_json::Value = serde_json::from_str(&extra).unwrap_or_default();
+    let ok = a["ok"].as_bool().unwrap_or(false);
+    let mut text = String::new();
+    for value in [&a, &b] {
+        if let Some(part) = value["text"].as_str() {
+            if !part.trim().is_empty() {
+                if !text.is_empty() {
+                    text.push('\n');
+                }
+                text.push_str(part.trim_end());
+            }
+        }
+    }
+    serde_json::json!({ "ok": ok, "text": text }).to_string()
 }
 
 fn run_module(id: &str, ctx: ModuleCtx) -> String {
@@ -1940,6 +2047,11 @@ fn cleanup_all(body: &str) -> String {
         Err(e) => report.push(format!("общий доступ: {e}")),
     }
 
+    match crate::modules::run("net.yandex-ips-off", &ctx) {
+        Ok(text) => report.push(text.trim().to_string()),
+        Err(e) => report.push(format!("адреса облака: {e}")),
+    }
+
     // Убираем наш блок имён из hosts.
     let hosts =
         std::path::PathBuf::from(std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".into()))
@@ -2030,4 +2142,155 @@ fn percent_decode(s: &str) -> String {
         }
     }
     String::from_utf8_lossy(&out).to_string()
+}
+
+
+// ------------------------------------------------------------ Хаб ---------
+
+static HUB_CHILD: std::sync::Mutex<Option<std::process::Child>> = std::sync::Mutex::new(None);
+
+/// Запускает службы разблокировки Хаба отдельным процессом.
+fn hub_serve(body: &str) -> String {
+    let mode = match field(body, "mode").as_str() {
+        // base и setup — общие службы без перехвата адресов
+        "base" | "setup" => "setup",
+        _ => "sync",
+    };
+    if let Ok(mut guard) = HUB_CHILD.lock() {
+        if let Some(child) = guard.as_mut() {
+            let _ = child.kill();
+        }
+        *guard = None;
+    }
+    let exe = std::env::current_exe().unwrap_or_else(|_| "cockpit".into());
+    let log = std::fs::File::create("data/rushub.log").ok();
+    let err = log.as_ref().and_then(|f| f.try_clone().ok());
+    let alias = field(body, "alias");
+    let mut cmd = std::process::Command::new(exe);
+    cmd.args(["hub", "serve", "--mode", mode]);
+    if !alias.is_empty() {
+        cmd.args(["--alias", &alias]);
+    }
+    if let Some(out) = log {
+        cmd.stdout(out);
+    }
+    if let Some(e) = err {
+        cmd.stderr(e);
+    }
+    match cmd.spawn() {
+        Ok(child) => {
+            let pid = child.id();
+            if let Ok(mut guard) = HUB_CHILD.lock() {
+                *guard = Some(child);
+            }
+            push_log(format!("хаб: службы {mode} запущены (pid {pid})"));
+            serde_json::json!({ "ok": true, "text": format!("службы {mode} запущены") })
+                .to_string()
+        }
+        Err(e) => serde_json::json!({ "ok": false, "text": format!("не запустилось: {e}") })
+            .to_string(),
+    }
+}
+
+/// Версия, время сборки и сведения о бэкенде — для подвала страницы.
+fn about_json() -> String {
+    let exe = std::env::current_exe().ok();
+    let built = exe
+        .as_ref()
+        .and_then(|path| std::fs::metadata(path).ok())
+        .and_then(|meta| meta.modified().ok())
+        .map(|time| {
+            chrono::DateTime::<chrono::Utc>::from(time)
+                .format("%Y-%m-%d %H:%M")
+                .to_string()
+        })
+        .unwrap_or_default();
+    let routes = std::fs::read_to_string("data/routes.toml")
+        .map(|text| text.matches("[[route]]").count())
+        .unwrap_or(0);
+    serde_json::json!({
+        "version": env!("CARGO_PKG_VERSION"),
+        "build": built,
+        "profile": if cfg!(debug_assertions) { "debug" } else { "release" },
+        "os": std::env::consts::OS,
+        "arch": std::env::consts::ARCH,
+        "routes": routes,
+        "certs": active_certs().len(),
+        "station": crate::modules::find_station()
+    })
+    .to_string()
+}
+
+fn tcp_open(ip: &str, port: u16) -> bool {
+    use std::net::{TcpStream, ToSocketAddrs};
+    let Ok(mut addrs) = (ip, port).to_socket_addrs() else {
+        return false;
+    };
+    let Some(addr) = addrs.next() else {
+        return false;
+    };
+    TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(600)).is_ok()
+}
+
+fn hub_status() -> String {
+    let station = crate::modules::find_station();
+    let adb = station
+        .as_deref()
+        .map(|ip| tcp_open(ip, 5555))
+        .unwrap_or(false);
+    let running = HUB_CHILD
+        .lock()
+        .map(|mut guard| match guard.as_mut() {
+            Some(child) => matches!(child.try_wait(), Ok(None)),
+            None => false,
+        })
+        .unwrap_or(false);
+    serde_json::json!({
+        "ok": true,
+        "running": running,
+        "station": station,
+        "adb": adb
+    })
+    .to_string()
+}
+
+/// Подключается по ADB и закрепляет доступ флагом в /data.
+fn hub_grab(body: &str) -> String {
+    let mut ip = field(body, "ip");
+    if ip.is_empty() {
+        ip = crate::modules::find_station().unwrap_or_default();
+    }
+    if ip.is_empty() {
+        return serde_json::json!({ "ok": false, "text": "станция не найдена" }).to_string();
+    }
+    let adb = if std::path::Path::new("data/adb/adb.exe").exists() {
+        "data/adb/adb.exe".to_string()
+    } else {
+        "adb".to_string()
+    };
+    let target = format!("{ip}:5555");
+    let _ = std::process::Command::new(&adb)
+        .args(["connect", &target])
+        .output();
+    let out = std::process::Command::new(&adb)
+        .args([
+            "-s",
+            &target,
+            "shell",
+            "touch /data/quasar/activate_network_adb; id",
+        ])
+        .output();
+    match out {
+        Ok(result) => {
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr)
+            );
+            let ok = text.contains("uid=0");
+            push_log(format!("хаб: ADB {target}: {}", text.trim()));
+            serde_json::json!({ "ok": ok, "text": text.trim() }).to_string()
+        }
+        Err(e) => serde_json::json!({ "ok": false, "text": format!("adb: {e}") }).to_string(),
+    }
 }

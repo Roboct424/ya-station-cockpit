@@ -9,6 +9,9 @@ header h1{font-size:14px;margin:0;font-weight:600;white-space:nowrap}
 .badge{padding:3px 9px;border-radius:999px;font-size:11px;background:#23303f;color:#9fb4cc;white-space:nowrap}
 .badge.ok{background:#173a28;color:#7ee2a8}
 .badge.bad{background:#3a1b1b;color:#ff9a9a}
+.lang{margin-left:auto;display:flex;gap:4px}
+.lang button{background:#1b222c;color:#8b97a8;border:1px solid #2a3341;border-radius:8px;padding:3px 8px;font-size:11px;cursor:pointer}
+.lang button.on{background:#22303f;color:#e8ecf1;border-color:#33465c}
 .tabs{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:8px 16px;background:#12161c;border-bottom:1px solid #232a34}
 .tabs button{padding:8px 10px;border:1px solid #232a34;border-radius:10px;background:#161b22;color:#8b97a8;
  cursor:pointer;font-size:13px;font-weight:600;text-align:center;white-space:nowrap}
@@ -19,6 +22,32 @@ main{padding:12px 16px;max-width:1320px;margin:0 auto}
 section{display:none}section.on{display:block}
 .row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start}
 .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;align-items:start}
+.rec{background:#14211a;border-left:4px solid #3aa0ff;padding:8px 10px;border-radius:8px;margin-top:10px;font-size:13px;color:#dfe7f2;line-height:1.35}
+.rec b{color:#9fd0ff}
+.cs{position:relative}
+.cs-btn{width:100%;text-align:left;background:#0f141a;color:#dfe7f2;border:1px solid #232a34;border-radius:8px;padding:6px 8px;font:12px/1.2 inherit;cursor:pointer}
+.cs-btn:after{content:'\25BE';float:right;opacity:.6;margin-left:8px}
+.cs-list{position:absolute;left:0;right:0;top:100%;z-index:60;margin:2px 0 0;padding:4px;list-style:none;background:#121821;border:1px solid #2a3442;border-radius:8px;max-height:260px;overflow:auto;display:none}
+.cs-list.open{display:block}
+.cs-list li{padding:5px 8px;border-radius:6px;cursor:pointer;font-size:12px}
+.cs-list li:hover{background:#1d2633}
+.cs-list li.on{background:#22303f;color:#9fd0ff}
+.card.done{border-color:#2f9e5f !important;box-shadow:0 0 0 1px #2f9e5f inset}
+#s2 .card,#s3 .card{padding:8px 10px}
+#s2 h2,#s3 h2{font-size:13px;margin:0 0 4px}
+#s2 .hint,#s3 .hint{font-size:11px;line-height:1.25;margin:3px 0}
+#s2 .cols{gap:8px}
+#s2 label{margin:3px 0 1px;font-size:11px}
+#s2 input,#s2 select{height:26px;padding:2px 6px}
+#s2 .check{margin:3px 0;font-size:12px}
+#s2 button.act,#s3 button.act{margin-top:4px}
+#s2 details{margin:0}
+#s3 .split{height:calc(100vh - 170px);min-height:380px}
+body{overflow:hidden}
+main{overflow:auto}
+#progress{height:6px;background:#1d2430;margin:0 16px 8px;border-radius:99px;overflow:hidden}
+#progress i{display:block;height:100%;width:0;background:#3aa0ff;transition:width .3s}
+
 .col{flex:1 1 220px;min-width:0}
 .card{background:#161b22;border:1px solid #232a34;border-radius:10px;padding:11px 12px;margin-bottom:9px}
 .card h2{font-size:12.5px;margin:0 0 4px;color:#b9c6d6;font-weight:600}
@@ -58,6 +87,10 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
   <span id="b_hosts" class="badge">hosts: ?</span>
   <span id="b_station" class="badge">станция: ?</span>
   <span id="b_stack" class="badge">стек: остановлен</span>
+  <div class="lang">
+    <button data-lang="ru" class="on" onclick="applyLang('ru')">RU</button>
+    <button data-lang="en" onclick="applyLang('en')">EN</button>
+  </div>
 </header>
 <div class="tabs">
   <button class="on" data-tab="s1">1 · Окружение</button>
@@ -65,11 +98,12 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
   <button data-tab="s3">3 · Попытка</button>
   <button data-tab="s4">4 · Обслуживание</button>
 </div>
+<div id="progress"><i></i></div>
 
 <main>
 <section id="s1" class="on">
   <div class="cols">
-  <div class="card">
+  <div class="card" id="clean_card">
     <h2>1. Чистка системы — обязательно</h2>
     <p class="hint">Пока в системе остаются чужие записи и старые прокси, станция
     получает неверные ответы и сбрасывается. Чистим до начала работы.</p>
@@ -79,15 +113,18 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
         <div class="check"><input type="checkbox" checked disabled><span>Запущенные Python-прокси (probe204, net_force3, fake-quasar)</span></div>
         <div class="check"><input type="checkbox" checked disabled><span>Занятые порты 80 и 443</span></div>
         <button class="act" id="btnClean" onclick="cleanup()">Очистить</button>
+        <button class="act" onclick="hubServe('base')">Подготовить сеть</button>
         <span id="r_clean" class="chip wait">не выполнялось</span>
+        <span id="r_sys" class="chip wait">сеть: не готовилась</span>
       </div>
       <div class="col">
         <pre id="o_clean" style="height:88px">—</pre>
-      </div>
+    
+  </div>
     </div>
   </div>
 
-  <div class="card">
+  <div class="card" id="profile_card">
     <h2>2. Профиль устройства</h2>
     <p class="hint">Что известно заранее. Если не знаете — выберите «—»,
     программа предложит варианты на втором шаге.</p>
@@ -96,9 +133,9 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
         <label>Модель</label>
         <select id="model" onchange="checkMic(this.value)">
           <option value="">—</option>
-          <option>Station Hub</option>
+          <option value="Station Hub">Hub</option>
           <option>Station Midi</option>
-          <option>Station Mini 3 (YNDX-00027)</option>
+          <option value="Station Mini 3 (YNDX-00027)">Station Mini 3</option>
           <option>Station Mini 2</option>
           <option>Station Mini</option>
           <option>Station Max</option>
@@ -106,14 +143,10 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
         </select>
         <label>Прошивка</label>
         <select id="profile_fw"><option value="">—</option></select>
+        <label>Своя прошивка (если нет в списке)</label>
+        <input type="text" id="profile_fw_custom" placeholder="например 0.369.1.50.1234567890.20260101.1">
       </div>
       <div class="col">
-        <label>Сброшена к заводским</label>
-        <select id="reset">
-          <option value="unknown">—</option>
-          <option value="yes">да</option>
-          <option value="no">нет</option>
-        </select>
         <label>Тип подключения</label>
         <select id="link" onchange="toggleLink()">
           <option value="wifi">Wi-Fi (точка доступа)</option>
@@ -122,9 +155,11 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
       </div>
     </div>
     <button class="act" onclick="saveProfile()">Сохранить профиль</button>
-    <button class="act ghost" id="btnBle" onclick="bleScan()">Найти по Bluetooth</button>
+    <button class="act ghost" id="btnBle" onclick="bleScan()">Определить модель по Bluetooth</button>
     <span id="r_profile" class="chip wait">не сохранён</span>
     <div id="blelist" class="muted" style="margin-top:8px"></div>
+
+
   </div>
 
   <div class="card" id="ap_card">
@@ -150,18 +185,20 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
       <div class="col">
         <label>Сетевой адаптер</label>
         <select id="adapter"><option value="">загружаю…</option></select>
+        <button class="act" id="btnShare" onclick="enableShare()">Включить общий доступ (DHCP)</button>
         <label>Адрес станции — определяется сам</label>
         <input type="text" id="station_ip" value="—" readonly style="color:#7ee2a8">
         <label>Адрес порта (шлюз для станции)</label>
         <input type="text" id="eth_ip" value="192.168.137.1" readonly style="color:#9fb4cc">
         <button class="act" id="btnEth" onclick="setEthernet()">Назначить адрес</button>
-        <button class="act ghost" id="btnShare" onclick="enableShare()">Включить общий доступ (DHCP)</button>
         <span id="r_eth" class="chip wait">не выполнялось</span>
+
       </div>
       <div class="col"><p class="hint" id="eth_hint"></p></div>
     </div>
   </div>
   </div>
+  <div style="margin-top:12px;display:flex;justify-content:flex-end"><button class="act" onclick="goTab('s2')">Далее: настройка →</button></div>
 </section>
 
 <section id="s2">
@@ -241,13 +278,17 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
         </p>
       </div>
 
-      <div class="card">
+      <div class="card" id="station_card">
         <h2>Станция</h2>
         <div id="dev" class="box muted">…</div>
         <div>
           <button class="act ghost" onclick="restartStack()">Перезапустить стек</button>
           <button class="act ghost" onclick="stopStack()">Остановить</button>
         </div>
+        <div style="margin-top:8px">
+          <span id="r_hub" class="chip wait">службы не запущены</span>
+        </div>
+        <div id="hub_state" class="muted" style="margin-top:6px"></div>
       </div>
     </div>
 
@@ -256,6 +297,7 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
       <pre id="log" class="term">готов</pre>
     </div>
   </div>
+  <div style="margin-top:12px;display:flex;justify-content:flex-end"><button class="act" onclick="goTab('s4')">Далее: обслуживание →</button></div>
 </section>
 
 <section id="s4">
@@ -274,6 +316,7 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
     <pre id="o_maint" style="height:210px;margin-top:10px">—</pre>
   </div>
 </section>
+<footer id="about" class="muted" style="padding:8px 16px 12px;font-size:11px;color:#6f7f93"></footer>
 </main>
 
 <script>
@@ -283,6 +326,10 @@ let ITEMS = [], cursor = 0;
 document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
   document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('on', x === b));
   document.querySelectorAll('section').forEach(s => s.classList.toggle('on', s.id === b.dataset.tab));
+  const bar = $('progress');
+  if (bar) bar.style.display = b.dataset.tab === 's1' ? 'block' : 'none';
+  updateProgress();
+  state(); stackState(); loadDevice(); loadAdvice(); loadAbout();
 });
 
 const ACTIONS = [
@@ -310,9 +357,246 @@ function chip(id, ok, text) {
   el.textContent = text;
 }
 
+async function hubServe(mode) {
+  const target = mode === 'base' ? 'r_sys' : 'r_hub';
+  chip(target, false, 'запускаю…');
+  const r = await (await fetch('/api/hub/serve', {method: 'POST', body: 'mode=' + mode})).json();
+  const text = r.ok
+    ? (mode === 'sync' ? 'перехват включён' : 'службы готовы')
+    : r.text;
+  chip(target, r.ok, text);
+  if (r.ok) markDone(mode === 'base' ? 'clean_card' : 'station_card');
+  hubStatus();
+}
+
+async function hubStatus() {
+  try {
+    const r = await (await fetch('/api/hub/status')).json();
+    const el = $('hub_state');
+    if (el) {
+      el.textContent = 'станция: ' + (r.station || '—') +
+        ' · ADB: ' + (r.adb ? 'открыт' : 'закрыт') +
+        ' · службы: ' + (r.running ? 'работают' : 'остановлены');
+    }
+    if (r.adb) markDone('station_card');
+  } catch (e) {}
+}
+
+async function hubGrab() {
+  chip('r_hub', false, 'подключаюсь…');
+  const r = await (await fetch('/api/hub/grab', {method: 'POST', body: ''})).json();
+  chip('r_hub', r.ok, r.ok ? 'ADB: uid=0' : (r.text || 'не вышло'));
+  hubStatus();
+}
+
+
+let _shareOk = false, _ethOk = false;
+
+function syncEth() {
+  if (_shareOk && _ethOk) markDone('eth_card');
+}
+
+function markDone(id, on = true) {
+  const el = $(id);
+  if (el) el.classList.toggle('done', !!on);
+  updateProgress();
+}
+
+let _applied = false;
+
+function updateProgress() {
+  const active = (document.querySelector('section.on') || {}).id || 's1';
+  let done = 0;
+  let total = 1;
+  if (active === 's1') {
+    total = 3;
+    done = ['clean_card', 'profile_card', 'eth_card'].filter((id) => {
+      const el = $(id);
+      return el && el.classList.contains('done');
+    }).length;
+  } else if (active === 's2') {
+    done = _applied ? 1 : 0;
+  } else if (active === 's3') {
+    const el = $('station_card');
+    done = el && el.classList.contains('done') ? 1 : 0;
+  } else {
+    done = 1;
+  }
+  const bar = document.querySelector('#progress i');
+  if (bar) bar.style.width = Math.round((done / total) * 100) + '%';
+}
+
+
+function goTab(id) {
+  const b = document.querySelector('.tabs button[data-tab="' + id + '"]');
+  if (b) b.click();
+}
+
+
+
+const DICT_EN = {
+  '1 · Окружение': '1 · Environment',
+  '2 · Настройка': '2 · Setup',
+  '3 · Попытка': '3 · Attempt',
+  '4 · Обслуживание': '4 · Maintenance',
+  '1. Чистка системы — обязательно': '1. System cleanup — required',
+  '2. Профиль устройства': '2. Device profile',
+  '3. Точка доступа для станции': '3. Access point for the station',
+  '3. Проводное подключение': '3. Wired connection',
+  'Подсказки по результатам попытки': 'Hints from the attempt',
+  '2. Регистрация': '2. Registration',
+  '3. Сертификаты': '3. Certificates',
+  '4. Обновление': '4. Update',
+  'Звук сопряжения': 'Pairing sound',
+  'Станция': 'Station',
+  'Терминал': 'Terminal',
+  'Очистить': 'Clean up',
+  'Подготовить сеть': 'Prepare network',
+  'Сохранить профиль': 'Save profile',
+  'Определить модель по Bluetooth': 'Detect model via Bluetooth',
+  'Включить общий доступ (DHCP)': 'Enable internet sharing (DHCP)',
+  'Назначить адрес': 'Assign address',
+  'Применить и перезапустить стек': 'Apply and restart stack',
+  'Применить выбор': 'Apply selection',
+  'Скачать базу': 'Download database',
+  'Проиграть код': 'Play pairing code',
+  'Перезапустить стек': 'Restart stack',
+  'Остановить': 'Stop',
+  'Модель': 'Model',
+  'Прошивка': 'Firmware',
+  'Тип подключения': 'Connection type',
+  'Сетевой адаптер': 'Network adapter',
+  'Своя прошивка (если нет в списке)': 'Custom firmware (if not listed)',
+  'Адрес станции — определяется сам': 'Station address — detected automatically',
+  'Адрес порта (шлюз для станции)': 'Port address (gateway for the station)',
+  'Громкость (рабочая 0.5)': 'Volume (0.5 works)',
+  'Повторов': 'Repeats',
+  'Предстарт (0–4)': 'Pre-roll (0–4)',
+  'Разрешить обновление': 'Allow update',
+  'Далее: настройка →': 'Next: setup →',
+  'Далее: попытка →': 'Next: attempt →',
+  'Далее: обслуживание →': 'Next: maintenance →',
+  'Пока в системе остаются чужие записи и старые прокси, станция получает неверные ответы и сбрасывается. Чистим до начала работы.':
+    'Old proxy entries and hosts records make the station get wrong answers and reset. Clean up before we start.',
+  'Что известно заранее. Если не знаете — выберите «—», программа предложит варианты на втором шаге.':
+    'What is known in advance. If unsure, pick “—”; the app will offer options on the second step.',
+  'Станция подключается кабелем к сетевой карте ноутбука. Назначаем карте адрес — станция получит его как шлюз.':
+    'The station is connected by cable to the laptop network card. We assign an address, and the station uses it as a gateway.',
+  'Станция подключится к этой сети после звукового кода. Адрес выдаётся автоматически, вводить ничего не нужно.':
+    'The station will join this network after the sound code. The address is assigned automatically, nothing to type.',
+  'Станция принимает только те цепочки, которым доверяет. Отметьте активные: если выбрано несколько — сервер будет перебирать их при отказе, пока станция не согласится.':
+    'The station only accepts certificate chains it trusts. Tick the active ones: if several are chosen, the server rotates them until the station agrees.',
+  'По умолчанию выключено: без разрешения станция получает «обновлений нет». «Проверена» — есть в базе и открывает ADB.':
+    'Off by default: without consent the station gets “no updates”. “Verified” means it is in the database and opens ADB.',
+  'Скачать базу прошивок по ссылке (JSON)': 'Download the firmware database by URL (JSON)',
+  'У этой модели нет микрофона — звуковой код не сработает. Подключайте по Ethernet или Bluetooth.':
+    'This model has no microphone, so the sound code will not work. Use Ethernet or Bluetooth.',
+  'Всё, что делается через ADB, живёт здесь: снять бэкап, закрепить ADB и поставить наш сертификат.':
+    'Everything done over ADB lives here: back up, pin ADB, install our certificate.'
+};
+
+const _origText = new WeakMap();
+
+function applyLang(lang) {
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  let node;
+  while ((node = walker.nextNode())) {
+    const raw = node.nodeValue;
+    const key = raw.replace(/\s+/g, ' ').trim();
+    if (!key) continue;
+    if (!_origText.has(node)) _origText.set(node, raw);
+    const original = _origText.get(node);
+    if (lang === 'en' && DICT_EN[key]) {
+      node.nodeValue = original.replace(raw.trim(), DICT_EN[key]);
+    } else {
+      node.nodeValue = original;
+    }
+  }
+  localStorage.setItem('lang', lang);
+  document.querySelectorAll('.lang button').forEach((b) => b.classList.toggle('on', b.dataset.lang === lang));
+  document.querySelectorAll('select').forEach((sel) => sel.dispatchEvent(new Event('change')));
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const saved = localStorage.getItem('lang');
+  if (saved === 'en') applyLang('en');
+});
+
+function enhanceSelects() {
+  document.querySelectorAll('select').forEach((sel) => {
+    if (sel.dataset.cs === '1') return;
+    sel.dataset.cs = '1';
+    const wrap = document.createElement('div');
+    wrap.className = 'cs';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'cs-btn';
+    const list = document.createElement('ul');
+    list.className = 'cs-list';
+    wrap.appendChild(btn);
+    wrap.appendChild(list);
+    sel.parentNode.insertBefore(wrap, sel.nextSibling);
+    sel.style.display = 'none';
+
+    const rebuild = () => {
+      list.innerHTML = '';
+      Array.from(sel.options).forEach((opt) => {
+        const li = document.createElement('li');
+        li.textContent = opt.textContent;
+        if (opt.value === sel.value) li.classList.add('on');
+        li.addEventListener('mousedown', (e) => {
+          e.preventDefault();
+          sel.value = opt.value;
+          sel.dispatchEvent(new Event('change'));
+          list.classList.remove('open');
+          rebuild();
+        });
+        list.appendChild(li);
+      });
+      const cur = sel.options[sel.selectedIndex];
+      btn.textContent = cur ? cur.textContent : '—';
+    };
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      const wasOpen = list.classList.contains('open');
+      document.querySelectorAll('.cs-list.open').forEach((x) => x.classList.remove('open'));
+      if (!wasOpen) list.classList.add('open');
+    });
+    new MutationObserver(rebuild).observe(sel, {childList: true});
+    sel.addEventListener('change', rebuild);
+    rebuild();
+  });
+}
+
+document.addEventListener('click', () => {
+  document.querySelectorAll('.cs-list.open').forEach((x) => x.classList.remove('open'));
+});
+
+
+async function loadAbout() {
+  try {
+    const a = await (await fetch('/api/about')).json();
+    const el = $('about');
+    if (el) {
+      el.textContent = 'cockpit ' + a.version +
+        ' · ' + a.profile + ' · ' + a.os + '/' + a.arch +
+        ' · build ' + (a.build || '—') +
+        ' · routes ' + a.routes +
+        ' · certs ' + a.certs +
+        (a.station ? ' · station ' + a.station : '');
+    }
+  } catch (e) {}
+}
+
+setTimeout(loadAbout, 600);
+setTimeout(hubStatus, 700);
+
 function append(text) {
   const el = $('log');
   el.textContent += (el.textContent ? '\n' : '') + text;
+  const lines = el.textContent.split('\n');
+  if (lines.length > 600) el.textContent = lines.slice(-600).join('\n');
   el.scrollTop = el.scrollHeight;
 }
 
@@ -340,11 +624,6 @@ function toggleLink() {
   $('eth_card').style.display = wifi ? 'none' : 'block';
   if (!wifi) {
     loadAdapters().then(() => refreshIface($('adapter').value));
-    if (!window.__ifaceTimer) {
-      window.__ifaceTimer = setInterval(() => {
-        if ($('eth_card').style.display !== 'none') refreshIface($('adapter').value);
-      }, 4000);
-    }
   }
 }
 
@@ -356,6 +635,7 @@ async function loadAdapters() {
   // По умолчанию — проводной адаптер, иначе легко выбрать Wi-Fi и получить ошибку ICS.
   const wired = j.items.find(a => /ethernet|локальн/i.test(a.name) || /ethernet/i.test(a.desc));
   if (wired) sel.value = wired.name;
+  sel.dispatchEvent(new Event('change'));
 }
 
 async function refreshIface(adapter) {
@@ -374,6 +654,7 @@ async function enableShare() {
   $('btnShare').disabled = false;
   chip('r_eth', r.ok, r.ok ? 'общий доступ включён' : 'ошибка');
   $('eth_hint').textContent = r.text || '';
+  if (r.ok) { _shareOk = true; syncEth(); }
   // Адрес порта подхватываем сами — руками вводить не нужно.
   if (r.ok) {
     const ip = await refreshIface(adapter);
@@ -382,12 +663,18 @@ async function enableShare() {
 }
 
 async function setEthernet() {
+  const ip = $('eth_ip').value;
+  if (!ip || ip === '—') {
+    chip('r_eth', false, 'сначала включите общий доступ');
+    return;
+  }
   $('btnEth').disabled = true; chip('r_eth', false, 'назначаю…');
   const r = await (await fetch('/api/ethernet', {method: 'POST', body: new URLSearchParams({
     adapter: $('adapter').value, ip: $('eth_ip').value})})).json();
   $('btnEth').disabled = false;
   chip('r_eth', r.ok, r.ok ? 'адрес назначен' : 'ошибка');
   $('eth_hint').textContent = r.text || '';
+  if (r.ok) { _ethOk = true; markDone('eth_card'); }
 }
 
 async function bleScan() {
@@ -427,9 +714,11 @@ async function rememberDevice(address) {
 
 async function saveProfile() {
   const r = await (await fetch('/api/profile', {method: 'POST', body: new URLSearchParams({
-    model: $('model').value, firmware: $('profile_fw').value,
-    reset: $('reset').value, link: $('link').value})})).json();
+    model: $('model').value,
+    firmware: ($('profile_fw_custom').value || '').trim() || $('profile_fw').value,
+    reset: 'unknown', link: $('link').value})})).json();
   chip('r_profile', r.ok, r.text);
+  if (r.ok) markDone('profile_card');
   loadFirmwares();
   loadDevice();
 }
@@ -444,19 +733,26 @@ async function loadProfile() {
   checkMic(j.model);
   $('model').value = j.model || '';
   checkMic(j.model || '');
-  $('reset').value = j.reset || 'unknown';
   $('link').value = j.link || 'wifi';
   checkMic(j.model);
   toggleLink();
+  $('model').dispatchEvent(new Event('change'));
+  $('link').dispatchEvent(new Event('change'));
   await loadFirmwareOptions(j.firmware || '');
+  enhanceSelects();
 }
 
 async function loadFirmwareOptions(selected) {
   const j = await (await fetch('/api/firmwares')).json();
   const sel = $('profile_fw');
-  sel.innerHTML = '<option value="">—</option><option value="factory">factory</option>' +
+  sel.innerHTML = '<option value="">—</option><option value="factory">сброшена до заводских</option>' +
     j.items.map(f => `<option value="${f.version}">${f.version}</option>`).join('');
   sel.value = selected;
+  sel.dispatchEvent(new Event('change'));
+  const known = Array.from(sel.options).some((o) => o.value === selected);
+  if (selected && !known && $('profile_fw_custom')) {
+    $('profile_fw_custom').value = selected;
+  }
 }
 
 async function loadFirmwares() {
@@ -493,8 +789,9 @@ async function loadAdvice() {
   let html = j.hints.length
     ? j.hints.map(h => `<div style="padding:3px 0;color:${color[h.level] || '#cbd5e1'}">• ${h.text}</div>`).join('')
     : '<span class="muted">пока нет данных — выполните попытку на третьем шаге</span>';
-  html += `<div class="hint" style="margin-top:8px">рекомендуется: сертификат <b>${j.recommend.cert}</b>,
-           регистрация <b>${j.recommend.reg === 'offline' ? 'оффлайн' : 'через облако'}</b>`;
+  const model = ($('model') && $('model').value) || 'станция';
+  html += `<div class="rec"><b>Для модели «${model}»</b>: сертификат <b>${j.recommend.cert}</b>,
+           регистрация <b>${j.recommend.reg === 'offline' ? 'офлайн' : 'через облако'}</b>`;
   if (j.recommend.firmware) html += `, прошивка <b>${j.recommend.firmware}</b>`;
   html += '</div>';
   $('hints').innerHTML = html;
@@ -611,10 +908,27 @@ async function applyAndRestart() {
     version: updating ? fw.value : '',
     firmware_path: ''
   });
+  if (($('model').value || '').includes('Hub')) {
+    $('btnApply').disabled = true;
+    $('apply_hint').textContent = 'включаю перехват для Хаба…';
+    const hub = await (await fetch('/api/hub/serve', {
+      method: 'POST',
+      body: 'mode=sync'
+    })).json();
+    $('btnApply').disabled = false;
+    if (hub.ok) { _applied = true; updateProgress(); }
+    $('apply_hint').textContent = hub.ok
+      ? 'перехват включён — передёрните питание Хаба'
+      : hub.text;
+    append(hub.ok ? 'Хаб: перехват включён' : 'Хаб: ' + hub.text);
+    if (hub.ok) document.querySelector('.tabs button[data-tab="s3"]').click();
+    return;
+  }
   $('btnApply').disabled = true;
   $('apply_hint').textContent = 'перезапускаю стек…';
   const r = await (await fetch('/api/restart', {method: 'POST', body: f})).json();
   $('btnApply').disabled = false;
+  if (r.ok) { _applied = true; updateProgress(); }
   $('apply_hint').textContent = r.ok ? `стек работает: ${r.routes} маршрутов, pid ${r.pid}` : (r.text || 'ошибка');
   append(r.ok ? 'стек перезапущен с новыми параметрами: ' + r.routes + ' маршрутов'
               : 'ошибка запуска: ' + r.text);
@@ -639,16 +953,23 @@ async function pair() {
 
 let tailCursor = 0;
 
+function terminalVisible() {
+  const el = $('s3');
+  return el && el.classList.contains('on');
+}
+
 async function poll() {
+  if (!terminalVisible()) return;
   const r = await (await fetch('/api/log?after=' + cursor)).json();
   cursor = r.next;
-  if (r.lines.length) append(r.lines.join('\n'));
+  if (r.lines.length && terminalVisible()) append(r.lines.join('\n'));
 }
 
 async function pollStack() {
+  if (!terminalVisible()) return;
   const r = await (await fetch('/api/tail?after=' + tailCursor)).json();
   tailCursor = r.next;
-  if (r.lines.length) append(r.lines.join('\n'));
+  if (r.lines.length && terminalVisible()) append(r.lines.join('\n'));
 }
 
 async function stackState() {
@@ -714,21 +1035,16 @@ async function init() {
   loadAdvice();
   loadDevice();
   state(); stackState(); loadDevice();
-  setInterval(pingSession, 2000);
-  setInterval(loadAdvice, 4000);
-  setInterval(state, 5000);
-  setInterval(loadDevice, 3000);
-  setInterval(poll, 1200);
-  setInterval(pollStack, 900);
-  setInterval(stackState, 3000);
+  setInterval(pingSession, 5000);
+  setInterval(poll, 2000);
+  setInterval(pollStack, 2000);
   } catch (e) { append('ошибка инициализации: ' + e); }
   // Опрос логов запускаем всегда, даже если что-то выше упало.
-  setInterval(poll, 1200);
-  setInterval(pollStack, 900);
   poll();
   pollStack();
   pingSession();
 }
 init();
+setTimeout(enhanceSelects, 300);
 </script>
 </html>
