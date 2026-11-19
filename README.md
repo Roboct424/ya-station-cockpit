@@ -207,6 +207,63 @@ docs/ADB.md       local ADB: what works, what is missing
 docs/UI.md        web panel: how to run it
 ```
 
+<details>
+<summary><b>Отказ от ответственности и правовая рамка (нажмите, чтобы раскрыть)</b></summary>
+
+**Проект не связан с Яндексом и не одобрен им.** «Яндекс», «Станция», «Алиса»
+и другие названия — товарные знаки их владельцев; здесь они используются только
+для описания совместимости.
+
+Инструмент предназначен для работы с **устройствами, которыми вы владеете**,
+в своей сети и для их восстановления/обслуживания. Не используйте его для
+доступа к чужим устройствам, чужим сетям или обхода чужой авторизации.
+
+Что сознательно **не** распространяется в репозитории:
+
+- прошивки и любые файлы Яндекса (в git только скрипты и база хешей);
+- приватные ключи и сертификаты (в git их нет: `data/` исключён);
+- персональные данные, журналы устройств, идентификаторы.
+
+Отдельно про TLS: в исследованиях используется **публично скомпрометированный**
+промежуточный CA (инцидент Mozilla Bugzilla 2083449). Это не взлом Яндекса,
+а следствие того, что устройство доверяет системному хранилищу. Ключи в проект
+не входят, вы получаете их из публичных источников сами.
+
+**Вы используете проект на свой риск.** Автор не отвечает за потерю данных,
+потерю гарантии, блокировку аккаунта, повреждение устройства, нарушение
+законодательства или условий обслуживания. Проверяйте, что ваши действия
+законны в вашей юрисдикции.
+
+</details>
+
+<details>
+<summary><b>Disclaimer and legal scope (click to expand)</b></summary>
+
+**This project is not affiliated with or endorsed by Yandex.** “Yandex”,
+“Station”, “Alice” and other names are trademarks of their owners; they are used
+here only to describe compatibility.
+
+The tool is meant for **devices you own**, on your own network, for recovery and
+maintenance. Do not use it to access devices or networks you do not own, or to
+bypass someone else’s authorization.
+
+Deliberately **not** distributed in this repository:
+
+- Yandex firmware or any Yandex files (git holds only scripts and a hash database);
+- private keys and certificates (`data/` is excluded; nothing is committed);
+- personal data, device logs or identifiers.
+
+About TLS: the research relies on a **publicly compromised** intermediate CA
+(Mozilla Bugzilla 2083449). This is not a Yandex breach; it exists because the
+device trusts the system store. Keys are not shipped here — you obtain them from
+public sources yourself.
+
+**Use at your own risk.** The author is not liable for data loss, voided
+warranty, account bans, damaged hardware, legal issues or terms-of-service
+violations. Make sure your actions are lawful in your jurisdiction.
+
+</details>
+
 ## Лицензия / License
 
 MIT.
