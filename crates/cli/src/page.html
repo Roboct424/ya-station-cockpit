@@ -88,18 +88,24 @@ pre.term{height:calc(100vh - 210px);min-height:420px}
 
       <div class="card">
         <h2>3. Профиль устройства</h2>
-        <p class="hint">Что за колонка сейчас подключаем. Нужно, чтобы предлагать
-        только совместимые прошивки и сертификаты.</p>
+        <p class="hint">Что известно заранее. Если не знаете — выберите «—»,
+        программа предложит варианты на втором шаге.</p>
         <label>Модель</label>
         <select id="model">
+          <option value="">—</option>
           <option>Station Mini 2</option>
           <option>Station Mini</option>
           <option>Station Max</option>
           <option>Station Lite</option>
         </select>
         <label>Прошивка</label>
-        <input type="text" id="profile_fw" value="factory" list="fwlist">
-        <datalist id="fwlist"><option value="factory"></option></datalist>
+        <select id="profile_fw"><option value="">—</option></select>
+        <label>Сброшена к заводским</label>
+        <select id="reset">
+          <option value="unknown">—</option>
+          <option value="yes">да</option>
+          <option value="no">нет</option>
+        </select>
         <button class="act" onclick="saveProfile()">Сохранить профиль</button>
         <span id="r_profile" class="chip wait">не сохранён</span>
       </div>
@@ -121,6 +127,11 @@ pre.term{height:calc(100vh - 210px);min-height:420px}
     <b>ни один пакет не уходит в облако</b>.</p>
     <div id="preset" class="muted">…</div>
   </details>
+
+  <div class="card">
+    <h2>Подсказки по результатам попытки</h2>
+    <div id="hints" class="muted">пока нет данных — выполните попытку на третьем шаге</div>
+  </div>
 
   <div class="card">
     <h2>2. Регистрация</h2>
@@ -258,7 +269,7 @@ async function hotspot() {
 
 async function saveProfile() {
   const r = await (await fetch('/api/profile', {method: 'POST', body: new URLSearchParams({
-    model: $('model').value, firmware: $('profile_fw').value})})).json();
+    model: $('model').value, firmware: $('profile_fw').value, reset: $('reset').value})})).json();
   chip('r_profile', r.ok, r.text);
   loadFirmwares();
   loadDevice();
@@ -266,8 +277,17 @@ async function saveProfile() {
 
 async function loadProfile() {
   const j = await (await fetch('/api/profile')).json();
-  if (j.model) $('model').value = j.model;
-  if (j.firmware) $('profile_fw').value = j.firmware;
+  $('model').value = j.model || '';
+  $('reset').value = j.reset || 'unknown';
+  await loadFirmwareOptions(j.firmware || '');
+}
+
+async function loadFirmwareOptions(selected) {
+  const j = await (await fetch('/api/firmwares')).json();
+  const sel = $('profile_fw');
+  sel.innerHTML = '<option value="">—</option><option value="factory">factory</option>' +
+    j.items.map(f => `<option value="${f.version}">${f.version}</option>`).join('');
+  sel.value = selected;
 }
 
 async function loadFirmwares() {
@@ -293,6 +313,23 @@ async function fetchDb() {
   loadFirmwares();
 }
 
+async function loadAdvice() {
+  const j = await (await fetch('/api/advice')).json();
+  const color = { ok: '#7ee2a8', warn: '#ffce6a', err: '#ff9a9a', info: '#9fb4cc' };
+  let html = j.hints.length
+    ? j.hints.map(h => `<div style="padding:3px 0;color:${color[h.level] || '#cbd5e1'}">• ${h.text}</div>`).join('')
+    : '<span class="muted">пока нет данных — выполните попытку на третьем шаге</span>';
+  html += `<div class="hint" style="margin-top:8px">рекомендуется: сертификат <b>${j.recommend.cert}</b>,
+           регистрация <b>${j.recommend.reg === 'offline' ? 'оффлайн' : 'через облако'}</b>`;
+  if (j.recommend.firmware) html += `, прошивка <b>${j.recommend.firmware}</b>`;
+  html += '</div>';
+  $('hints').innerHTML = html;
+
+  // Подсветка рекомендаций в блоке регистрации.
+  const rec = document.querySelector(`input[name=reg][value=${j.recommend.reg}]`);
+  if (rec) rec.parentElement.style.background = '#16261c';
+}
+
 async function loadDevice() {
   const j = await (await fetch('/api/device')).json();
   const row = (k, v) => `<div style="display:flex;gap:8px;padding:3px 0"><span style="color:#8b97a8;min-width:96px">${k}</span><span>${v}</span></div>`;
@@ -307,6 +344,10 @@ async function loadDevice() {
     html += j.known.map(f =>
       `<div style="padding:2px 0">• ${f.version} ${f.local ? '<span class="ok">файл есть</span>' : '<span class="muted">нужно скачать</span>'}
        ${f.adb ? '<span class="ok">ADB открывается</span>' : '<span class="err">ADB не откроется</span>'}</div>`).join('');
+  }
+  if (j.mismatch && j.mismatch.length) {
+    html += '<div style="margin-top:8px;color:#ffce6a">не совпадает с профилем:</div>' +
+      j.mismatch.map(m => `<div style="color:#ffce6a">• ${m}</div>`).join('');
   }
   if (j.warning) html += `<p class="hint" style="margin-top:8px;color:#ff9a9a">⚠ ${j.warning}</p>`;
   if (j.recommend) html += `<p class="hint" style="margin-top:8px">${j.recommend}</p>`;
@@ -478,9 +519,11 @@ async function init() {
   loadCerts();
   loadProfile();
   loadFirmwares();
+  loadAdvice();
   loadDevice();
   state(); stackState(); loadDevice();
   setInterval(pingSession, 2000);
+  setInterval(loadAdvice, 4000);
   setInterval(state, 5000);
   setInterval(loadDevice, 3000);
   setInterval(poll, 1200);

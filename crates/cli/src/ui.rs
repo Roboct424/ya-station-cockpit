@@ -306,6 +306,7 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
         ("GET", "/api/firmwares") => (200, "application/json", firmwares_json()),
         ("POST", "/api/db") => (200, "application/json", fetch_db(body)),
         ("GET", "/api/device") => (200, "application/json", device_json()),
+        ("GET", "/api/advice") => (200, "application/json", advice_json()),
         ("POST", "/api/restart") => {
             let stop = stop_stack();
             let _ = stop;
@@ -565,6 +566,8 @@ fn session_id() -> &'static str {
 struct Profile {
     model: String,
     firmware: String,
+    /// yes / no / unknown — сброшена ли колонка к заводским.
+    reset: String,
 }
 
 fn profile_path() -> std::path::PathBuf {
@@ -574,8 +577,9 @@ fn profile_path() -> std::path::PathBuf {
 fn read_profile() -> Profile {
     let Ok(text) = std::fs::read_to_string(profile_path()) else {
         return Profile {
-            model: "Station Mini 2".to_string(),
-            firmware: "factory".to_string(),
+            model: String::new(),
+            firmware: String::new(),
+            reset: "unknown".to_string(),
         };
     };
     let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
@@ -592,23 +596,40 @@ fn read_profile() -> Profile {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
+        reset: json
+            .get("reset")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string(),
     }
 }
 
 fn profile_json() -> String {
     let p = read_profile();
-    serde_json::json!({ "model": p.model, "firmware": p.firmware }).to_string()
+    serde_json::json!({ "model": p.model, "firmware": p.firmware, "reset": p.reset }).to_string()
 }
 
 fn set_profile(body: &str) -> String {
     let profile = Profile {
         model: field(body, "model"),
         firmware: field(body, "firmware"),
+        reset: {
+            let value = field(body, "reset");
+            if value.is_empty() {
+                "unknown".to_string()
+            } else {
+                value
+            }
+        },
     };
     if let Some(dir) = profile_path().parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let json = serde_json::json!({ "model": profile.model, "firmware": profile.firmware });
+    let json = serde_json::json!({
+        "model": profile.model,
+        "firmware": profile.firmware,
+        "reset": profile.reset
+    });
     match std::fs::write(profile_path(), json.to_string()) {
         Ok(()) => {
             push_log(format!("профиль: {} / {}", profile.model, profile.firmware));
@@ -716,6 +737,95 @@ fn fetch_db(body: &str) -> String {
     }
 }
 
+/// Анализ лога и рекомендации: что подсветить на втором шаге.
+fn advice_json() -> String {
+    let log = std::fs::read_to_string("data/ota.log").unwrap_or_default();
+    let profile = read_profile();
+    let station = crate::modules::find_station();
+    let adb_open = station
+        .as_ref()
+        .map(|ip| {
+            use std::net::TcpStream;
+            use std::time::Duration;
+            TcpStream::connect_timeout(
+                &format!("{ip}:5555").parse().expect("addr"),
+                Duration::from_millis(400),
+            )
+            .is_ok()
+        })
+        .unwrap_or(false);
+
+    let mut hints: Vec<serde_json::Value> = Vec::new();
+    let mut push = |level: &str, text: String| {
+        hints.push(serde_json::json!({ "level": level, "text": text }));
+    };
+
+    if adb_open {
+        push(
+            "ok",
+            "ADB открыт — можно переходить к обслуживанию".to_string(),
+        );
+    }
+
+    let cert_problem = log.contains("UnknownCA")
+        || log.contains("CertificateUnknown")
+        || log.contains("DecodeError");
+    if cert_problem {
+        push(
+            "err",
+            "Станция не приняла сертификат: смените активный CA и перезапустите стек".to_string(),
+        );
+    }
+
+    let traffic = log.contains("[local]") || log.contains("[http]");
+    if !traffic && !adb_open {
+        push(
+            "warn",
+            "Станция не обращается к нам: проверьте точку доступа и DNS (hosts)".to_string(),
+        );
+    }
+
+    if profile.reset == "yes" && log.contains("/check_updates") {
+        push(
+            "info",
+            "Идёт обновление прошивки — дождитесь перезагрузки станции".to_string(),
+        );
+    }
+
+    if profile.firmware.is_empty() && !adb_open {
+        push(
+            "info",
+            "Укажите прошивку на первом шаге — подскажем совместимые варианты".to_string(),
+        );
+    }
+
+    // Рекомендации: сертификат и режим регистрации.
+    let cert = if profile.reset == "yes" {
+        "noroot"
+    } else if adb_open {
+        "cockpit (наш)"
+    } else {
+        "noroot"
+    };
+    let platform = platform_for_model(&profile.model);
+    let firmware = known_firmware(&platform)
+        .into_iter()
+        .find(|(_, adb, local)| *adb && *local)
+        .map(|(v, _, _)| v);
+
+    serde_json::json!({
+        "hints": hints,
+        "verdict": if adb_open { "success" } else if cert_problem { "cert" } else if !traffic { "no-traffic" } else { "in-progress" },
+        "recommend": {
+            "cert": cert,
+            "reg": "offline",
+            "firmware": firmware,
+            "reset": profile.reset
+        }
+    })
+    .to_string()
+}
+
 /// Панель собранных данных: что за станция, на чём она, можно ли ждать ADB.
 fn device_json() -> String {
     let station = crate::modules::find_station();
@@ -820,9 +930,24 @@ fn device_json() -> String {
         String::new()
     };
 
+    let mut mismatch: Vec<String> = Vec::new();
+    if !profile.model.is_empty() && profile.model != model {
+        mismatch.push(format!(
+            "модель: указано «{}», от станции «{}»",
+            profile.model, model
+        ));
+    }
+    if !profile.firmware.is_empty() && !version.is_empty() && profile.firmware != version {
+        mismatch.push(format!(
+            "прошивка: указано «{}», от станции «{}»",
+            profile.firmware, version
+        ));
+    }
+
     serde_json::json!({
         "station": station,
-        "profile": { "model": profile.model, "firmware": profile.firmware },
+        "profile": { "model": profile.model, "firmware": profile.firmware, "reset": profile.reset },
+        "mismatch": mismatch,
         "warning": warning,
         "device_id": device_id,
         "platform": platform,
