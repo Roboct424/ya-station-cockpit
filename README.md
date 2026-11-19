@@ -9,7 +9,7 @@
 проверку результата (`check`), условие пропуска (`skip_if`) и компенсацию
 (`rollback`). При ошибке выполненные шаги откатываются, всё пишется в журнал.
 
-**Статус: фаза 31.** Полный локальный проход Mini 2 (звук → регистрация →
+**Что умеет.** Полный локальный проход Mini 2 (звук → регистрация →
 OTA → root ADB) и **разблокировка Yandex Hub (saturn) полностью офлайн**:
 DNS с IPv4-только, DHCP, SNTP и локальный `quasar` с `adbd`. Мастер из четырёх
 шагов (RU/EN) с прогрессом, подсветкой готовых блоков и сведениями о сборке.
@@ -114,7 +114,7 @@ a result check (`check`), a skip condition (`skip_if`) and a compensation
 (`rollback`). On failure the completed steps are rolled back and everything goes
 to the journal.
 
-**Status: phase 31.** Full local pass for Mini 2 (sound → registration → OTA →
+**What it does.** Full local pass for Mini 2 (sound → registration → OTA →
 root ADB) and **fully offline Yandex Hub (saturn) unlock**: IPv4-only DNS, DHCP,
 SNTP and a local `quasar` serving an `adbd` config. Four-step wizard (RU/EN) with
 progress, completed-block highlighting and build info. Core with timeouts, config
@@ -142,9 +142,44 @@ cargo run -- journal tail
 | `cockpit scenario check <file.yaml>` | validate a scenario |
 | `cockpit net info` | selected network adapter |
 | `cockpit dns --bind ADDR --answer IP` | DNS interceptor (A → our address) |
-| `cockpit tls --bind ADDR --ca-out FILE` | TLS interception: own CA, SNI-based certs |
+| `cockpit tls --bind ADDR --ca-out FILE [--forward]` | TLS interception: own CA, SNI-based certs, upstream tunnel |
+| `cockpit ota check\|fetch\|list` | version check, download with CRC, storage |
+| `cockpit ota db\|verify` | firmware database by hashes, file verification |
+| `cockpit ota import` | store an archive locally (offline, verified) |
+| `cockpit ota observe\|observed` | version registry without archives (for the community) |
+| `cockpit ota fetch-all` | download every version from the manifest |
+| `cockpit device info\|list` | ADB: connection, version, root |
+| `cockpit local-ota` | local OTA/sync: firmware + config with adbd |
 | `cockpit hub serve --mode base\|sync` | Hub services: IPv4 DNS, DHCP, SNTP, local `quasar` with `adbd` |
+| `cockpit activate` | scenario: OTA → ADB → root → version → guard |
+| `cockpit ui` | local web panel: form, diagnostics, journal |
+| `cockpit telemetry status\|enable\|disable` | metadata consent |
+| `cockpit capture stats` | traffic metadata summary |
 | `cockpit version` | version |
+
+### A scenario is data
+
+```yaml
+id: demo
+title: "Device preparation"
+match:
+  model: ["YNDX-00020"]
+  firmware: ">=0.369.1.46 <0.369.1.50"
+steps:
+  - id: write-marker
+    title: "Write a marker with the SSID"
+    action: { kind: write_file, path: "device/marker.txt", content: "ssid={{ssid}}" }
+    check:  { kind: contains, path: "device/marker.txt", text: "{{ssid}}" }
+    rollback: { kind: remove_file, path: "device/marker.txt" }
+```
+
+Supported `action`: `noop`, `ensure_dir`, `write_file`, `remove_file`;
+`check`: `file_exists`, `file_absent`, `dir_exists`, `contains`.
+
+### Journal
+
+`data/journal.jsonl`, append-only: a crash never loses history. A broken line is
+skipped with a warning and does not hide the rest.
 
 ### Layout
 
@@ -152,13 +187,24 @@ cargo run -- journal tail
 crates/core       events, JSONL journal, steps, runner, errors
 crates/config     TOML config, validation, hot reload (arc-swap + notify)
 crates/doctor     environment probes with hints
-crates/net        NetAdapter, system command layer (real/dry-run), Windows/Linux
-crates/intercept  DNS and TLS: own CA, SNI parsing, certificate substitution
+crates/net        adapters, system commands, Wi-Fi/BLE, WinRT hotspot
+crates/intercept  DNS and TLS: own CA, SNI, cert pool, OTA routing
+crates/ota        firmware manifests, version checks, CRC downloads
+crates/capture    traffic metadata journal (no bodies)
+crates/device     ADB and device state
+crates/pairing    sound pairing codec
 crates/scenarios  YAML scenarios: model, loading, validation, execution
-crates/cli        cockpit commands
+crates/cli        cockpit commands, Hub services and the web UI
 examples/demo.yaml
 docs/DEVLOG.md    development diary
 docs/GOTCHAS.md   library gotchas: symptom → cause → fix
+docs/HUB-UNLOCK.md  the Hub unlock path, letter by letter
+docs/OTA.md       firmware: manifest, verification, download
+docs/CAPTURE.md   metadata collection: what is stored and what is not
+docs/TELEMETRY.md consent: first-run prompt, revocation
+docs/FIRMWARE_DB.md firmware database: hashes, compatibility, contributions
+docs/ADB.md       local ADB: what works, what is missing
+docs/UI.md        web panel: how to run it
 ```
 
 ## Лицензия / License
