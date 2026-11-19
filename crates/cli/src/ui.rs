@@ -142,7 +142,47 @@ pub fn ensure_admin() -> bool {
     true
 }
 
+/// Гасит стек, оставшийся от прошлой сессии мастера.
+///
+/// GOTCHA: G-042 — иначе станция обновляется и открывает ADB «сама», без
+/// подтверждения: старый стек продолжает отдавать /check_updates и
+/// /get_sync_info. Мастер при старте обязан всё остановить.
+fn stop_leftover_stack() {
+    let out = std::process::Command::new("netstat")
+        .args(["-ano", "-p", "TCP"])
+        .output();
+    let Ok(out) = out else { return };
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    for line in text.lines() {
+        if !line.contains("LISTENING") {
+            continue;
+        }
+        if !(line.contains(":443 ") || line.contains(":80 ")) {
+            continue;
+        }
+        let Some(pid) = line.split_whitespace().last() else {
+            continue;
+        };
+        if pid == "0" {
+            continue;
+        }
+        let name = std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .unwrap_or_default();
+        if !name.to_lowercase().contains("cockpit") {
+            continue;
+        }
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", pid, "/F"])
+            .output();
+        push_log(format!("остановлен стек прошлой сессии (pid {pid})"));
+    }
+}
+
 pub fn serve(port: u16) -> std::io::Result<()> {
+    stop_leftover_stack();
     let listener = TcpListener::bind(("127.0.0.1", port))?;
     println!("мастер: http://127.0.0.1:{port}");
     open_window(port);
@@ -343,7 +383,7 @@ fn state_json() -> String {
     let station = crate::modules::find_station();
     let checks = vec![
         serde_json::json!({ "ok": admin, "text": if admin { "права администратора" } else { "нужны права администратора" } }),
-        serde_json::json!({ "ok": hosts_clean(), "text": if hosts_clean() { "hosts ноутбука чистый" } else { "в hosts остались записи старых прокси" } }),
+        serde_json::json!({ "ok": hosts_status().0, "text": hosts_status().1 }),
         serde_json::json!({ "ok": station.is_some(), "text": match &station { Some(ip) => format!("станция в сети: {ip}"), None => "станция пока не найдена (это нормально до сопряжения)".to_string() } }),
     ];
     let modules: Vec<_> = MODULES
@@ -940,15 +980,48 @@ fn is_admin() -> bool {
     }
 }
 
-fn hosts_clean() -> bool {
+/// Состояние hosts: наш блок — это норма, чужие записи — нет.
+fn hosts_status() -> (bool, String) {
     let path =
         std::path::PathBuf::from(std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".into()))
             .join("System32\\drivers\\etc\\hosts");
-    match std::fs::read_to_string(path) {
-        Ok(text) => !text
-            .lines()
-            .any(|l| l.contains("192.168.137.1") && l.contains("yandex")),
-        Err(_) => true,
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return (true, "hosts: не прочитан (нужны права)".to_string());
+    };
+
+    let mut ours = false;
+    let mut in_block = false;
+    let mut foreign = 0;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("# cockpit-names") {
+            ours = true;
+            in_block = true;
+            continue;
+        }
+        if in_block {
+            if trimmed.starts_with("192.168.137.1") {
+                continue;
+            }
+            in_block = false;
+        }
+        let looks_like_redirect = (trimmed.contains("192.168.137.1")
+            || trimmed.contains("127.0.0.1"))
+            && (trimmed.contains("yandex") || trimmed.contains("ya.ru"));
+        if looks_like_redirect {
+            foreign += 1;
+        }
+    }
+
+    if foreign > 0 {
+        (
+            false,
+            format!("hosts: {foreign} чужих записей — нажмите «Очистить»"),
+        )
+    } else if ours {
+        (true, "hosts: наш блок имён на месте".to_string())
+    } else {
+        (true, "hosts: чисто".to_string())
     }
 }
 

@@ -48,6 +48,7 @@ pre.term{height:calc(100vh - 210px);min-height:420px}
   <span id="b_admin" class="badge">права: ?</span>
   <span id="b_hosts" class="badge">hosts: ?</span>
   <span id="b_station" class="badge">станция: ?</span>
+  <span id="b_stack" class="badge">стек: остановлен</span>
   <nav>
     <button class="on" data-tab="s1">1 · Окружение</button>
     <button data-tab="s2">2 · Перехват</button>
@@ -369,14 +370,10 @@ async function pollStack() {
 
 async function stackState() {
   const j = await (await fetch('/api/stack')).json();
-  const bar = $('bar'), prog = $('prog');
-  if (j.running) {
-    bar.style.width = '100%';
-    prog.innerHTML = `стек работает · pid ${j.pid} · маршрутов ${j.routes}` +
-      (j.log ? `<pre style="height:150px;margin-top:8px">${j.log}</pre>` : '');
-  } else {
-    bar.style.width = '0';
-    prog.textContent = 'стек не запущен';
+  const el = $('b_stack');
+  if (el) {
+    el.className = 'badge ' + (j.running ? 'ok' : '');
+    el.textContent = j.running ? `стек: работает · ${j.routes} маршрутов` : 'стек: остановлен';
   }
 }
 
@@ -415,6 +412,7 @@ async function state() {
 }
 
 async function init() {
+  try {
   ITEMS = (await (await fetch('/api/items')).json()).items;
   renderPreset();
   loadCerts();
@@ -425,6 +423,10 @@ async function init() {
   setInterval(poll, 1200);
   setInterval(pollStack, 900);
   setInterval(stackState, 3000);
+  } catch (e) { append('ошибка инициализации: ' + e); }
+  // Опрос логов запускаем всегда, даже если что-то выше упало.
+  setInterval(poll, 1200);
+  setInterval(pollStack, 900);
   poll();
   pollStack();
 }
