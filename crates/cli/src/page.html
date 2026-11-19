@@ -41,11 +41,12 @@ button:disabled{opacity:.55;cursor:default}
 .ansgrid .nm{font-size:12px;color:#c7d2e0}
 pre{background:#0b0e12;border:1px solid #1e242c;border-radius:10px;padding:11px;margin:0;
  white-space:pre-wrap;font:12px/1.45 ui-monospace,Consolas,monospace;height:340px;overflow:auto;color:#cbd5e1}
-.split{display:grid;grid-template-columns:1fr 1fr;gap:10px;height:calc(100vh - 150px);min-height:420px}
+.split{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;height:calc(100vh - 150px);min-height:420px}
+.split>*{min-width:0}
 .stackL{display:grid;grid-template-rows:1fr 1fr;gap:10px;min-height:0}
 .split .card{margin:0;min-height:0;display:flex;flex-direction:column}
 .split .card pre, .split .card .box{flex:1;min-height:0;overflow:auto}
-pre.term{height:100%;min-height:0}
+pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
 .muted{color:#7f8ea3;font-size:12px}
 .bar{height:6px;background:#1d2430;border-radius:99px;overflow:hidden;margin:8px 0}
 .bar i{display:block;height:100%;background:#3d7eff;width:0;transition:width .4s}
