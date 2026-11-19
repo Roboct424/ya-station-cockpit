@@ -898,6 +898,8 @@ fn run_local_ota(
         check_updates: None,
         sync_info: None,
         firmware: None,
+        ota_gate: Some(std::path::PathBuf::from("data").join("allow_update")),
+        no_update: br#"{"hasUpdate":false}"#.to_vec(),
         forward: if forward {
             Some(cockpit_intercept::tls::ForwardOptions::default())
         } else {
@@ -1028,6 +1030,8 @@ fn run_activate(
             check_updates: None,
             sync_info: None,
             firmware: None,
+            ota_gate: Some(std::path::PathBuf::from("data").join("allow_update")),
+            no_update: br#"{"hasUpdate":false}"#.to_vec(),
             forward: Some(cockpit_intercept::tls::ForwardOptions::default()),
             local_auth: true,
         };

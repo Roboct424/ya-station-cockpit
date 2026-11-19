@@ -182,6 +182,8 @@ fn stop_leftover_stack() {
 }
 
 pub fn serve(port: u16) -> std::io::Result<()> {
+    // G-046: по умолчанию обновление запрещено — разрешает только пользователь.
+    let _ = std::fs::write("data/allow_update", "0");
     stop_leftover_stack();
     let listener = TcpListener::bind(("127.0.0.1", port))?;
     println!("мастер: http://127.0.0.1:{port}");
@@ -307,6 +309,34 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
         ("POST", "/api/db") => (200, "application/json", fetch_db(body)),
         ("GET", "/api/device") => (200, "application/json", device_json()),
         ("GET", "/api/advice") => (200, "application/json", advice_json()),
+        ("GET", "/api/adapters") => (200, "application/json", adapters_json()),
+        ("POST", "/api/ethernet") => (200, "application/json", set_ethernet(body)),
+        ("POST", "/api/allow") => {
+            let value = if field(body, "value") == "1" {
+                "1"
+            } else {
+                "0"
+            };
+            let _ = std::fs::write("data/allow_update", value);
+            push_log(format!(
+                "обновление: {}",
+                if value == "1" {
+                    "разрешено"
+                } else {
+                    "запрещено"
+                }
+            ));
+            let text = if value == "1" {
+                "обновление разрешено"
+            } else {
+                "обновление запрещено"
+            };
+            (
+                200,
+                "application/json",
+                serde_json::json!({ "ok": true, "text": text }).to_string(),
+            )
+        }
         ("POST", "/api/restart") => {
             let stop = stop_stack();
             let _ = stop;
@@ -730,6 +760,8 @@ struct Profile {
     firmware: String,
     /// yes / no / unknown — сброшена ли колонка к заводским.
     reset: String,
+    /// wifi / ethernet — как станция подключена к ноутбуку.
+    link: String,
 }
 
 fn profile_path() -> std::path::PathBuf {
@@ -742,6 +774,7 @@ fn read_profile() -> Profile {
             model: String::new(),
             firmware: String::new(),
             reset: "unknown".to_string(),
+            link: "wifi".to_string(),
         };
     };
     let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
@@ -763,12 +796,23 @@ fn read_profile() -> Profile {
             .and_then(|v| v.as_str())
             .unwrap_or("unknown")
             .to_string(),
+        link: json
+            .get("link")
+            .and_then(|v| v.as_str())
+            .unwrap_or("wifi")
+            .to_string(),
     }
 }
 
 fn profile_json() -> String {
     let p = read_profile();
-    serde_json::json!({ "model": p.model, "firmware": p.firmware, "reset": p.reset }).to_string()
+    serde_json::json!({
+        "model": p.model,
+        "firmware": p.firmware,
+        "reset": p.reset,
+        "link": p.link
+    })
+    .to_string()
 }
 
 fn set_profile(body: &str) -> String {
@@ -783,6 +827,14 @@ fn set_profile(body: &str) -> String {
                 value
             }
         },
+        link: {
+            let value = field(body, "link");
+            if value.is_empty() {
+                "wifi".to_string()
+            } else {
+                value
+            }
+        },
     };
     if let Some(dir) = profile_path().parent() {
         let _ = std::fs::create_dir_all(dir);
@@ -790,7 +842,8 @@ fn set_profile(body: &str) -> String {
     let json = serde_json::json!({
         "model": profile.model,
         "firmware": profile.firmware,
-        "reset": profile.reset
+        "reset": profile.reset,
+        "link": profile.link
     });
     match std::fs::write(profile_path(), json.to_string()) {
         Ok(()) => {
@@ -896,6 +949,60 @@ fn fetch_db(body: &str) -> String {
             Err(e) => serde_json::json!({ "ok": false, "text": format!("файл: {e}") }).to_string(),
         },
         _ => serde_json::json!({ "ok": false, "text": "не удалось скачать" }).to_string(),
+    }
+}
+
+/// Сетевые адаптеры ноутбука.
+fn adapters_json() -> String {
+    let out = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-Command",
+            "Get-NetAdapter | Where-Object Status -eq 'Up' | ForEach-Object { $_.Name + '|' + $_.InterfaceDescription }",
+        ])
+        .output();
+    let mut items = Vec::new();
+    if let Ok(out) = out {
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+            if let Some((name, desc)) = line.split_once('|') {
+                items.push(serde_json::json!({ "name": name.trim(), "desc": desc.trim() }));
+            }
+        }
+    }
+    serde_json::json!({ "items": items }).to_string()
+}
+
+/// Назначает статический адрес на выбранный адаптер (проводной вариант).
+fn set_ethernet(body: &str) -> String {
+    let adapter = field(body, "adapter");
+    let ip = {
+        let value = field(body, "ip");
+        if value.is_empty() {
+            "192.168.137.1".to_string()
+        } else {
+            value
+        }
+    };
+    if adapter.is_empty() {
+        return serde_json::json!({ "ok": false, "text": "выберите адаптер" }).to_string();
+    }
+    let script =
+        format!("netsh interface ip set address name=\"{adapter}\" static {ip} 255.255.255.0");
+    let out = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-Command", &script])
+        .output();
+    match out {
+        Ok(res) if res.status.success() => {
+            push_log(format!("ethernet: {adapter} → {ip}"));
+            serde_json::json!({ "ok": true, "text": format!("{adapter}: адрес {ip} назначен") })
+                .to_string()
+        }
+        Ok(res) => serde_json::json!({
+            "ok": false,
+            "text": format!("{}", String::from_utf8_lossy(&res.stderr).trim())
+        })
+        .to_string(),
+        Err(e) => serde_json::json!({ "ok": false, "text": format!("{e}") }).to_string(),
     }
 }
 
@@ -1308,6 +1415,7 @@ fn start_stack(body: &str) -> String {
     }
 
     let update_enabled = field(body, "update") == "1";
+    let _ = std::fs::write("data/allow_update", if update_enabled { "1" } else { "0" });
     rotate_attempt(&version, update_enabled);
     let routes = build_routes(
         allow,

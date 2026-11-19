@@ -73,24 +73,11 @@ pre.term{height:calc(100vh - 210px);min-height:420px}
         <div class="check"><input type="checkbox" checked disabled><span>Занятые порты 80 и 443</span></div>
         <button class="act" id="btnClean" onclick="cleanup()">Очистить</button>
         <span id="r_clean" class="chip wait">не выполнялось</span>
-        <pre id="o_clean" style="height:120px;margin-top:10px">—</pre>
-      </div>
-    </div>
-
-    <div class="col">
-      <div class="card">
-        <h2>2. Точка доступа для станции</h2>
-        <p class="hint">Станция подключится к этой сети после звукового кода.
-        Адрес выдаётся автоматически, вводить ничего не нужно.</p>
-        <label>SSID</label><input type="text" id="ssid" value="YaRig">
-        <label>Пароль (не короче 8 символов)</label><input type="text" id="pass" value="11111111">
-        <button class="act" id="btnAp" onclick="hotspot()">Поднять точку доступа</button>
-        <span id="r_ap" class="chip wait">не выполнялось</span>
-        <p class="hint" id="ap_hint"></p>
+        <pre id="o_clean" style="height:110px;margin-top:10px">—</pre>
       </div>
 
       <div class="card">
-        <h2>3. Профиль устройства</h2>
+        <h2>2. Профиль устройства</h2>
         <p class="hint">Что известно заранее. Если не знаете — выберите «—»,
         программа предложит варианты на втором шаге.</p>
         <label>Модель</label>
@@ -109,8 +96,39 @@ pre.term{height:calc(100vh - 210px);min-height:420px}
           <option value="yes">да</option>
           <option value="no">нет</option>
         </select>
+        <label>Тип подключения</label>
+        <select id="link" onchange="toggleLink()">
+          <option value="wifi">Wi-Fi (точка доступа)</option>
+          <option value="ethernet">Проводное (Ethernet)</option>
+        </select>
         <button class="act" onclick="saveProfile()">Сохранить профиль</button>
         <span id="r_profile" class="chip wait">не сохранён</span>
+      </div>
+    </div>
+
+    <div class="col">
+      <div class="card" id="ap_card">
+        <h2>3. Точка доступа для станции</h2>
+        <p class="hint">Станция подключится к этой сети после звукового кода.
+        Адрес выдаётся автоматически, вводить ничего не нужно.</p>
+        <label>SSID</label><input type="text" id="ssid" value="YaRig">
+        <label>Пароль (не короче 8 символов)</label><input type="text" id="pass" value="11111111">
+        <button class="act" id="btnAp" onclick="hotspot()">Поднять точку доступа</button>
+        <span id="r_ap" class="chip wait">не выполнялось</span>
+        <p class="hint" id="ap_hint"></p>
+      </div>
+
+      <div class="card" id="eth_card" style="display:none">
+        <h2>3. Проводное подключение</h2>
+        <p class="hint">Станция подключается кабелем к сетевой карте ноутбука.
+        Назначаем карте адрес — станция получит его как шлюз.</p>
+        <label>Сетевой адаптер</label>
+        <select id="adapter"><option value="">загружаю…</option></select>
+        <label>Адрес для станции</label>
+        <input type="text" id="eth_ip" value="192.168.137.1">
+        <button class="act" id="btnEth" onclick="setEthernet()">Назначить адрес</button>
+        <span id="r_eth" class="chip wait">не выполнялось</span>
+        <p class="hint" id="eth_hint"></p>
       </div>
     </div>
   </div>
@@ -152,7 +170,7 @@ pre.term{height:calc(100vh - 210px);min-height:420px}
 
   <div class="card">
     <h2>4. Обновление</h2>
-    <div class="check" style="margin-bottom:8px"><input type="checkbox" id="ex_update">
+    <div class="check" style="margin-bottom:8px"><input type="checkbox" id="ex_update" onchange="allowUpdate(this.checked)">
       <span><b>Разрешить обновление</b> на выбранную прошивку</span></div>
     <p class="hint">По умолчанию выключено: без разрешения станция получает
     «обновлений нет». «Проверена» — есть в базе и открывает ADB.</p>
@@ -269,9 +287,33 @@ async function hotspot() {
   state();
 }
 
+function toggleLink() {
+  const wifi = $('link').value !== 'ethernet';
+  $('ap_card').style.display = wifi ? 'block' : 'none';
+  $('eth_card').style.display = wifi ? 'none' : 'block';
+  if (!wifi) loadAdapters();
+}
+
+async function loadAdapters() {
+  const j = await (await fetch('/api/adapters')).json();
+  const sel = $('adapter');
+  if (!j.items.length) { sel.innerHTML = '<option value="">адаптеры не найдены</option>'; return; }
+  sel.innerHTML = j.items.map(a => `<option value="${a.name}">${a.name} — ${a.desc}</option>`).join('');
+}
+
+async function setEthernet() {
+  $('btnEth').disabled = true; chip('r_eth', false, 'назначаю…');
+  const r = await (await fetch('/api/ethernet', {method: 'POST', body: new URLSearchParams({
+    adapter: $('adapter').value, ip: $('eth_ip').value})})).json();
+  $('btnEth').disabled = false;
+  chip('r_eth', r.ok, r.ok ? 'адрес назначен' : 'ошибка');
+  $('eth_hint').textContent = r.text || '';
+}
+
 async function saveProfile() {
   const r = await (await fetch('/api/profile', {method: 'POST', body: new URLSearchParams({
-    model: $('model').value, firmware: $('profile_fw').value, reset: $('reset').value})})).json();
+    model: $('model').value, firmware: $('profile_fw').value,
+    reset: $('reset').value, link: $('link').value})})).json();
   chip('r_profile', r.ok, r.text);
   loadFirmwares();
   loadDevice();
@@ -281,6 +323,8 @@ async function loadProfile() {
   const j = await (await fetch('/api/profile')).json();
   $('model').value = j.model || '';
   $('reset').value = j.reset || 'unknown';
+  $('link').value = j.link || 'wifi';
+  toggleLink();
   await loadFirmwareOptions(j.firmware || '');
 }
 
@@ -306,6 +350,11 @@ async function loadFirmwares() {
   const dl = $('fwlist');
   if (dl) dl.innerHTML = '<option value="factory"></option>' +
     j.items.map(f => `<option value="${f.version}">`).join('');
+}
+
+async function allowUpdate(on) {
+  const r = await (await fetch('/api/allow', {method: 'POST', body: new URLSearchParams({value: on ? '1' : '0'})})).json();
+  append('обновление: ' + r.text);
 }
 
 async function fetchDb() {

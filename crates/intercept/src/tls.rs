@@ -627,6 +627,10 @@ pub struct LocalRoutes {
     pub forward: Option<ForwardOptions>,
     /// Подменять ответ `/token` локальным (регистрация без облака).
     pub local_auth: bool,
+    /// Файл-разрешение на обновление: «1» — можно, иначе отдаём «нет обновлений».
+    pub ota_gate: Option<PathBuf>,
+    /// Что отдавать, если обновление не разрешено.
+    pub no_update: Vec<u8>,
 }
 
 enum Mode {
@@ -1160,7 +1164,26 @@ fn serve_local(
                 return write_response(&mut tls, 204, "text/plain", b"", None)
             }
             RouteAction::Json(body) => {
-                return write_response(&mut tls, 200, "application/json", body, None)
+                // G-046: разрешение на обновление читается на каждом запросе.
+                // Снятая галочка в мастере действует сразу, даже если стек
+                // запущен давно и с другими параметрами.
+                if rule.pattern.contains("check_updates") {
+                    if let Some(gate) = &routes.ota_gate {
+                        let allowed = std::fs::read_to_string(gate)
+                            .map(|t| t.trim() == "1")
+                            .unwrap_or(false);
+                        if !allowed {
+                            return write_response(
+                                &mut tls,
+                                200,
+                                "application/json",
+                                &routes.no_update,
+                                None,
+                            );
+                        }
+                    }
+                }
+                return write_response(&mut tls, 200, "application/json", body, None);
             }
             RouteAction::Firmware { file, name } => {
                 if path.contains(name.as_str()) || path.contains("/firmware/") {

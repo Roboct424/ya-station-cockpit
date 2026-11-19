@@ -80,6 +80,8 @@ fn serves_check_updates_and_sync() {
             firmware: None,
             forward: None,
             local_auth: true,
+            ota_gate: None,
+            no_update: Vec::new(),
         },
     )
     .unwrap();
