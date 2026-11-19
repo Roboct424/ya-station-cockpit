@@ -999,9 +999,8 @@ fn ble_json() -> String {
 fn adapters_json() -> String {
     let path = std::env::temp_dir().join("cockpit_adapters.json");
     let script = format!(
-        "Get-NetAdapter | Where-Object Status -eq 'Up' | \
-         Select-Object Name,InterfaceDescription | ConvertTo-Json -Compress | \
-         Out-File -Encoding utf8 '{}'",
+        "$json = Get-NetAdapter | Where-Object Status -eq 'Up' | Select-Object Name,InterfaceDescription | ConvertTo-Json -Compress; \
+         [IO.File]::WriteAllText('{}', $json, (New-Object Text.UTF8Encoding $false))",
         path.display()
     );
     let _ = std::process::Command::new("powershell")
