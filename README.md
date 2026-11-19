@@ -50,6 +50,7 @@ cargo run -- journal tail           # что произошло
 | `cockpit ui` | локальная веб-панель: форма, диагностика, журнал |
 | `cockpit telemetry status\|enable\|disable` | согласие на метаданные |
 | `cockpit capture stats` | сводка метаданных обмена |
+| `cockpit certs fetch --url URL` | загрузить набор сертификатов по ссылке в `data/certs` |
 | `cockpit version` | версия |
 
 ### Сценарий — это данные
@@ -155,6 +156,7 @@ cargo run -- journal tail
 | `cockpit ui` | local web panel: form, diagnostics, journal |
 | `cockpit telemetry status\|enable\|disable` | metadata consent |
 | `cockpit capture stats` | traffic metadata summary |
+| `cockpit certs fetch --url URL` | download a certificate bundle by link into `data/certs` |
 | `cockpit version` | version |
 
 ### A scenario is data
@@ -228,6 +230,8 @@ docs/UI.md        web panel: how to run it
 промежуточный CA (инцидент Mozilla Bugzilla 2083449). Это не взлом Яндекса,
 а следствие того, что устройство доверяет системному хранилищу. Ключи в проект
 не входят, вы получаете их из публичных источников сами.
+Готовый набор лежит рядом с программой (`cockpit-data.zip`); если его уберут,
+`cockpit certs fetch --url URL` скачает набор по вашей ссылке.
 
 **Вы используете проект на свой риск.** Автор не отвечает за потерю данных,
 потерю гарантии, блокировку аккаунта, повреждение устройства, нарушение
@@ -256,7 +260,9 @@ Deliberately **not** distributed in this repository:
 About TLS: the research relies on a **publicly compromised** intermediate CA
 (Mozilla Bugzilla 2083449). This is not a Yandex breach; it exists because the
 device trusts the system store. Keys are not shipped here — you obtain them from
-public sources yourself.
+public sources yourself. A ready bundle ships next to the program
+(`cockpit-data.zip`); if it goes away, `cockpit certs fetch --url URL`
+downloads a bundle from a link you provide.
 
 **Use at your own risk.** The author is not liable for data loss, voided
 warranty, account bans, damaged hardware, legal issues or terms-of-service

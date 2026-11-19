@@ -10,6 +10,7 @@ use cockpit_config::{Config, LiveConfig};
 use cockpit_core::{CockpitError, Context, Journal, JsonlJournal, Record, Runner, Step};
 use cockpit_scenarios::Scenario;
 
+mod certs;
 mod fake_hub;
 mod hub;
 mod modules;
@@ -131,6 +132,11 @@ enum Cmd {
         #[command(subcommand)]
         cmd: BleCmd,
     },
+    /// Сертификаты: загрузка набора по ссылке
+    Certs {
+        #[command(subcommand)]
+        cmd: CertsCmd,
+    },
     /// Модули мастера: список и запуск
     Module {
         #[command(subcommand)]
@@ -227,6 +233,19 @@ enum HubCmd {
         /// Адрес, который вешаем на Ethernet в режиме sync
         #[arg(long, default_value = "213.180.193.78")]
         alias: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum CertsCmd {
+    /// Скачать zip с набором сертификатов и распаковать в data/certs
+    Fetch {
+        /// Ссылка на архив (http/https)
+        #[arg(long)]
+        url: String,
+        /// Куда распаковать
+        #[arg(long, default_value = "data/certs")]
+        dir: String,
     },
 }
 
@@ -662,6 +681,18 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
         Cmd::Pair { cmd } => run_pair(cmd),
         Cmd::Module { cmd } => run_module_cmd(cmd),
         Cmd::Ble { cmd } => run_ble(cmd),
+        Cmd::Certs { cmd } => match cmd {
+            CertsCmd::Fetch { url, dir } => match certs::fetch(&url, &dir) {
+                Ok(text) => {
+                    println!("{text}");
+                    Ok(ExitCode::SUCCESS)
+                }
+                Err(e) => {
+                    eprintln!("не удалось: {e}");
+                    Ok(ExitCode::FAILURE)
+                }
+            },
+        },
         Cmd::Hub { cmd } => match cmd {
             HubCmd::Fake { bind } => {
                 fake_hub::serve(&bind)

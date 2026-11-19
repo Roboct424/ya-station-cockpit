@@ -234,6 +234,12 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
     <button class="act" id="btnCerts" onclick="saveCerts()">Применить выбор</button>
     <span id="r_certs" class="chip wait">не выполнялось</span>
     <p class="hint" id="cert_hint"></p>
+    <div class="row" style="margin-top:8px">
+      <input type="text" id="certs_url" placeholder="https://…/cockpit-data.zip" style="flex:1;min-width:220px">
+      <button class="act" id="btnCertsFetch" onclick="fetchCerts()">Загрузить по ссылке</button>
+    </div>
+    <p class="hint">Набор обычно уже лежит рядом с программой. Ссылка нужна, если его нет:
+    скачается zip и распакуется в <code>data/certs/</code>.</p>
   </div>
 
   <div class="card">
@@ -458,6 +464,8 @@ const DICT_EN = {
   'Назначить адрес': 'Assign address',
   'Применить и перезапустить стек': 'Apply and restart stack',
   'Применить выбор': 'Apply selection',
+  'Загрузить по ссылке': 'Download by link',
+  'Набор обычно уже лежит рядом с программой. Ссылка нужна, если его нет: скачается zip и распакуется в': 'The bundle usually sits next to the program. The link is only needed if it is missing: the zip is downloaded and unpacked into',
   'Скачать базу': 'Download database',
   'Проиграть код': 'Play pairing code',
   'Перезапустить стек': 'Restart stack',
@@ -1000,6 +1008,17 @@ async function saveCerts() {
   $('btnCerts').disabled = false;
   chip('r_certs', r.ok, r.text);
   $('cert_hint').textContent = r.ok ? 'выбор сохранён в data/certs/active.txt' : '';
+}
+
+async function fetchCerts() {
+  const f = new URLSearchParams();
+  f.append('url', $('certs_url').value.trim());
+  $('btnCertsFetch').disabled = true; chip('r_certs', false, 'Загрузка:');
+  const r = await (await fetch('/api/certs/fetch', {method: 'POST', body: f})).json();
+  $('btnCertsFetch').disabled = false;
+  chip('r_certs', r.ok, r.text);
+  if (r.ok) { $('cert_hint').textContent = 'Набор обновлён: выберите цепочку и перезапустите стек'; }
+  await loadCerts();
 }
 
 let SESSION = null;

@@ -452,6 +452,7 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
         }
         ("GET", "/api/certs") => (200, "application/json", certs_json()),
         ("POST", "/api/certs") => (200, "application/json", set_certs(body)),
+        ("POST", "/api/certs/fetch") => (200, "application/json", fetch_certs(body)),
         ("POST", "/api/cleanup") => {
             let ctx = ctx_from(body);
             let result = run_module("env.cleanup", ctx);
@@ -658,6 +659,18 @@ fn set_certs(body: &str) -> String {
         }
     })
     .to_string()
+}
+
+/// Загрузка набора сертификатов по ссылке (запасной путь, если архива нет).
+fn fetch_certs(body: &str) -> String {
+    let url = field(body, "url");
+    match crate::certs::fetch(&url, "data/certs") {
+        Ok(text) => {
+            push_log(format!("сертификаты: {text}"));
+            serde_json::json!({ "ok": true, "text": text }).to_string()
+        }
+        Err(e) => serde_json::json!({ "ok": false, "text": e }).to_string(),
+    }
 }
 
 /// Пары (путь, выбран) из тела запроса `cert_<index>=1`.
