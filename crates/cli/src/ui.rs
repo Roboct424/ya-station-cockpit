@@ -394,9 +394,9 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
             let ssid = field(body, "ssid");
             let password = field(body, "password");
             let gain = field(body, "gain").parse::<f32>().unwrap_or(0.5);
-            let repeat = field(body, "repeat").parse::<u32>().unwrap_or(2);
+            let repeat = field(body, "repeat").parse::<u32>().unwrap_or(1);
             let tones = field(body, "tones");
-            let preroll = field(body, "preroll").parse::<u32>().unwrap_or(0);
+            let preroll = field(body, "preroll").parse::<u32>().unwrap_or(1);
             push_log(format!("▶ звук: SSID={ssid} громкость={gain}"));
             std::thread::spawn(move || {
                 play_pairing(&ssid, &password, gain, repeat, &tones, preroll)
