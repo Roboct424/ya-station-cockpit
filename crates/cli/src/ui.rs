@@ -639,16 +639,6 @@ fn known_firmware(platform: &str) -> Vec<(String, bool, bool)> {
     out
 }
 
-fn adb_shell(station: &Option<String>, cmd: &str) -> Option<String> {
-    let ip = station.as_ref()?;
-    let adb = crate::modules::find_adb().unwrap_or_else(|| std::path::PathBuf::from("adb"));
-    let out = std::process::Command::new(adb)
-        .args(["-s", &format!("{ip}:5555"), "shell", cmd])
-        .output()
-        .ok()?;
-    Some(String::from_utf8_lossy(&out.stdout).to_string())
-}
-
 fn stack_json() -> String {
     let mut state = stack_state().lock().map(|s| s.clone()).unwrap_or_default();
     if state.running && !process_alive(state.pid) {
