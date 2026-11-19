@@ -311,6 +311,7 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
         ("GET", "/api/advice") => (200, "application/json", advice_json()),
         ("GET", "/api/adapters") => (200, "application/json", adapters_json()),
         ("GET", "/api/ble") => (200, "application/json", ble_json()),
+        ("POST", "/api/device-map") => (200, "application/json", set_device_map(body)),
         ("POST", "/api/ethernet") => (200, "application/json", set_ethernet(body)),
         ("POST", "/api/allow") => {
             let value = if field(body, "value") == "1" {
@@ -960,21 +961,65 @@ fn fetch_db(body: &str) -> String {
     }
 }
 
+/// Известные устройства: MAC → модель (чтобы узнавать колонку в следующий раз).
+fn devices_map_path() -> std::path::PathBuf {
+    std::path::PathBuf::from("data").join("devices.json")
+}
+
+fn read_devices_map() -> serde_json::Map<String, serde_json::Value> {
+    let Ok(text) = std::fs::read_to_string(devices_map_path()) else {
+        return serde_json::Map::new();
+    };
+    serde_json::from_str::<serde_json::Value>(&text)
+        .ok()
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default()
+}
+
+fn set_device_map(body: &str) -> String {
+    let address = field(body, "address");
+    let model = field(body, "model");
+    if address.is_empty() || model.is_empty() {
+        return serde_json::json!({ "ok": false, "text": "нужны адрес и модель" }).to_string();
+    }
+    let mut map = read_devices_map();
+    map.insert(address.clone(), serde_json::json!({ "model": model }));
+    let json = serde_json::Value::Object(map);
+    if let Some(dir) = devices_map_path().parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    match std::fs::write(devices_map_path(), json.to_string()) {
+        Ok(()) => {
+            push_log(format!("устройство {address} запомнено как «{model}»"));
+            serde_json::json!({ "ok": true, "text": "запомнено" }).to_string()
+        }
+        Err(e) => serde_json::json!({ "ok": false, "text": format!("{e}") }).to_string(),
+    }
+}
+
 /// Поиск станций по Bluetooth (6 секунд, синхронно).
 fn ble_json() -> String {
     #[cfg(windows)]
     {
         match cockpit_net::ble::scan(6) {
             Ok(devices) => {
+                let known = read_devices_map();
                 let items: Vec<_> = devices
                     .iter()
                     .filter(|d| d.station || !d.name.is_empty())
                     .map(|d| {
+                        let model = known
+                            .get(&d.address)
+                            .and_then(|v| v.get("model"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
                         serde_json::json!({
                             "name": d.name,
                             "address": d.address,
                             "rssi": d.rssi,
-                            "station": d.station
+                            "station": d.station,
+                            "known_model": model,
+                            "manufacturer": d.manufacturer,
                         })
                     })
                     .collect();

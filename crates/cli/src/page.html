@@ -345,9 +345,29 @@ async function bleScan() {
   $('btnBle').disabled = false;
   if (!j.ok) { $('blelist').textContent = j.text || 'не удалось'; return; }
   if (!j.items.length) { $('blelist').innerHTML = '<span class="muted">рядом ничего не видно</span>'; return; }
-  $('blelist').innerHTML = j.items.map(d =>
-    `<div class="check"><span>${d.station ? '📻' : '•'} ${d.name || '(без имени)'}
-      <span class="muted">${d.address} · ${d.rssi} dBm</span></span></div>`).join('');
+  $('blelist').innerHTML = j.items.map(d => {
+    const model = d.known_model ? `<span class="ok">${d.known_model}</span>` : '<span class="muted">модель неизвестна</span>';
+    const remember = d.station
+      ? `<button class="act ghost" style="margin:4px 0 0" onclick="rememberDevice('${d.address}')">Запомнить модель из профиля</button>`
+      : '';
+    return `<div class="check" style="align-items:flex-start"><span>${d.station ? '📻' : '•'} ${d.name || '(без имени)'}
+      <span class="muted">${d.address} · ${d.rssi} dBm</span> — ${model}</span></div>${remember}`;
+  }).join('');
+
+  // Если станция уже была замечена — подставляем модель в профиль.
+  const station = j.items.find(d => d.station && d.known_model);
+  if (station) {
+    $('model').value = station.known_model;
+    append('bluetooth: узнал станцию ' + station.address + ' → ' + station.known_model);
+  }
+}
+
+async function rememberDevice(address) {
+  const model = $('model').value;
+  if (!model) { $('blelist').innerHTML += '<div class="hint">сначала выберите модель в профиле</div>'; return; }
+  const r = await (await fetch('/api/device-map', {method: 'POST', body: new URLSearchParams({address, model})})).json();
+  append('bluetooth: ' + (r.text || ''));
+  bleScan();
 }
 
 async function saveProfile() {

@@ -21,8 +21,12 @@ pub struct BleDevice {
     pub address: String,
     pub name: String,
     pub rssi: i16,
-    /// Похоже на Яндекс.Станцию (по имени или производителю).
+    /// Похоже на Яндекс.Станцию (по имени, OUI или данным производителя).
     pub station: bool,
+    /// Данные производителя в hex: "(компания) hex".
+    pub manufacturer: Vec<String>,
+    /// Сервисы из рекламы.
+    pub services: Vec<String>,
 }
 
 impl BleDevice {
@@ -72,7 +76,36 @@ pub fn scan(seconds: u64) -> Result<Vec<BleDevice>, NetError> {
 
         // Пустые имена тоже интересны: у станций имя может появляться
         // в manufacturer data, поэтому такие записи не выбрасываем.
-        let station = looks_like_station(&name);
+        // Yandex OUI: b8:87:6e. Станция в режиме сопряжения рекламируется
+        // без имени, поэтому узнаём её по префиксу MAC.
+        let station = looks_like_station(&name) || address.starts_with("b8:87:6e");
+
+        // Разбираем секции рекламы: имя может лежать в 0x08/0x09,
+        // данные производителя — в 0xFF, сервисы — в 0x16.
+        let mut manufacturer = Vec::new();
+        let mut services = Vec::new();
+        let mut section_name = String::new();
+        if let Ok(adv) = args.Advertisement() {
+            if let Ok(sections) = adv.DataSections() {
+                for section in sections {
+                    let kind = section.DataType().unwrap_or(0);
+                    let bytes = section.Data().map(|d| buffer_bytes(&d)).unwrap_or_default();
+                    let hex = bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
+                    match kind {
+                        0x08 | 0x09 => {
+                            if section_name.is_empty() {
+                                section_name = String::from_utf8_lossy(&bytes).to_string();
+                            }
+                        }
+                        0x16 => services.push(hex),
+                        0xFF => manufacturer.push(hex),
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        let name = if name.is_empty() { section_name } else { name };
 
         if let Ok(mut list) = sink.lock() {
             if let Some(existing) = list
@@ -90,6 +123,8 @@ pub fn scan(seconds: u64) -> Result<Vec<BleDevice>, NetError> {
                     name,
                     rssi,
                     station,
+                    manufacturer,
+                    services,
                 });
             }
         }
@@ -118,6 +153,16 @@ pub fn scan(seconds: u64) -> Result<Vec<BleDevice>, NetError> {
     // Станции — первыми, затем по силе сигнала.
     out.sort_by(|a, b| b.station.cmp(&a.station).then(b.rssi.cmp(&a.rssi)));
     Ok(out)
+}
+
+/// Читает байты из WinRT-буфера.
+fn buffer_bytes(buffer: &windows::Storage::Streams::IBuffer) -> Vec<u8> {
+    let len = buffer.Length().unwrap_or(0) as usize;
+    let mut out = vec![0u8; len];
+    if let Ok(reader) = windows::Storage::Streams::DataReader::FromBuffer(buffer) {
+        let _ = reader.ReadBytes(&mut out);
+    }
+    out
 }
 
 fn format_address(address: u64) -> String {

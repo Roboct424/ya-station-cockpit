@@ -8,4 +8,4 @@ license.workspace = true
 thiserror.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.58", features = ["Foundation", "Networking_Connectivity", "Networking_NetworkOperators", "Devices_Bluetooth_Advertisement"] }
+windows = { version = "0.58", features = ["Foundation", "Networking_Connectivity", "Networking_NetworkOperators", "Devices_Bluetooth_Advertisement", "Devices_Bluetooth", "Foundation_Collections", "Storage_Streams"] }
