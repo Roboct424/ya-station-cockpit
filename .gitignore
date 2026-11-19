@@ -10,3 +10,8 @@ cockpit.toml
 firmware/*.zip
 firmware/*.off
 target_check/
+# временные файлы отладки
+ui*.xml
+ui_text*.txt
+sniff.*
+*.done
