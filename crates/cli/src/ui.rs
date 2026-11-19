@@ -932,7 +932,7 @@ fn local_file(version: &str) -> bool {
 
 fn platform_for_model(model: &str) -> String {
     match model {
-        m if m.contains("Hub") || m.contains("Хаб") => "yandexhub".to_string(),
+        m if m.contains("Hub") || m.contains("Хаб") => "saturn".to_string(),
         m if m.contains("Midi") || m.contains("Миди") => "yandexmidi".to_string(),
         m if m.contains("Mini 3") || m.contains("00027") => "yandexmini_3".to_string(),
         m if m.contains("Mini 2") || m.contains("00020") => "yandexmini_2".to_string(),
@@ -1171,7 +1171,7 @@ fn set_ethernet(body: &str) -> String {
 fn advice_json() -> String {
     let log = std::fs::read_to_string("data/ota.log").unwrap_or_default();
     let profile = read_profile();
-    let station = crate::modules::find_station();
+    let station = station_ip();
     let adb_open = station
         .as_ref()
         .map(|ip| {
@@ -1265,8 +1265,21 @@ fn advice_json() -> String {
 }
 
 /// Панель собранных данных: что за станция, на чём она, можно ли ждать ADB.
+/// Последний адрес, с которого приходил запрос (из строк `[peer] …`).
+fn last_peer_ip() -> Option<String> {
+    let log = std::fs::read_to_string("data/ota.log").ok()?;
+    log.lines()
+        .rev()
+        .find_map(|l| l.strip_prefix("[peer] "))
+        .map(|ip| ip.trim().to_string())
+}
+
+fn station_ip() -> Option<String> {
+    last_peer_ip().or_else(crate::modules::find_station)
+}
+
 fn device_json() -> String {
-    let station = crate::modules::find_station();
+    let station = station_ip();
     let adb_open = station
         .as_ref()
         .map(|ip| {
@@ -1329,7 +1342,9 @@ fn device_json() -> String {
         format!("неизвестно — проверенная рабочая: {}", good.join(", "))
     };
 
-    let model = if device_id.starts_with("M00GDW") {
+    let model = if device_id.starts_with("S006NQ") {
+        "Station Hub (Yandex Saturn)".to_string()
+    } else if device_id.starts_with("M00GDW") {
         "Station Mini 2 (YNDX-00020)".to_string()
     } else if device_id.is_empty() {
         "не определена".to_string()
