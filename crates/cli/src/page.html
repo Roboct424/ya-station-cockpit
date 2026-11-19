@@ -210,6 +210,12 @@ pre.term{height:calc(100vh - 170px);min-height:360px}
         <label>Пароль</label><input type="text" id="ppass" value="11111111">
         <label>Громкость (рабочая 0.5)</label><input type="text" id="gain" value="0.5">
         <label>Повторов</label><input type="text" id="repeat" value="2">
+        <label>Профиль тонов</label>
+        <select id="tones">
+          <option value="standard">стандарт (1024)</option>
+          <option value="high">выше (2048)</option>
+        </select>
+        <label>Предстарт (0–4)</label><input type="text" id="preroll" value="0">
         <button class="act" id="btnPair" onclick="pair()">Проиграть код</button>
         <span id="r_pair" class="chip wait">не выполнялось</span>
       </div>
@@ -522,7 +528,8 @@ async function pair() {
   $('btnPair').disabled = true; chip('r_pair', false, 'играю…');
   const r = await (await fetch('/api/pair', {method: 'POST', body: new URLSearchParams({
     ssid: $('pssid').value, password: $('ppass').value,
-    gain: $('gain').value, repeat: $('repeat').value
+    gain: $('gain').value, repeat: $('repeat').value,
+    tones: $('tones').value, preroll: $('preroll').value
   })})).json();
   $('btnPair').disabled = false;
   chip('r_pair', r.ok, r.text);

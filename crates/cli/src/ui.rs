@@ -394,8 +394,12 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
             let password = field(body, "password");
             let gain = field(body, "gain").parse::<f32>().unwrap_or(0.5);
             let repeat = field(body, "repeat").parse::<u32>().unwrap_or(2);
+            let tones = field(body, "tones");
+            let preroll = field(body, "preroll").parse::<u32>().unwrap_or(0);
             push_log(format!("▶ звук: SSID={ssid} громкость={gain}"));
-            std::thread::spawn(move || play_pairing(&ssid, &password, gain, repeat));
+            std::thread::spawn(move || {
+                play_pairing(&ssid, &password, gain, repeat, &tones, preroll)
+            });
             (
                 200,
                 "application/json",
@@ -1636,12 +1640,27 @@ fn run_module(id: &str, ctx: ModuleCtx) -> String {
     }
 }
 
-fn play_pairing(ssid: &str, password: &str, gain: f32, repeat: u32) {
+fn play_pairing(ssid: &str, password: &str, gain: f32, repeat: u32, tones: &str, preroll: u32) {
     use cockpit_pairing::{Credentials, PairingError};
 
     let creds = Credentials::new(ssid, password);
     let path = std::path::PathBuf::from("data").join("pair_sound.wav");
-    match cockpit_pairing::save_wav(&path, &creds, gain, 0, 0) {
+    let tone_params = if tones.eq_ignore_ascii_case("high") {
+        cockpit_pairing::ToneParams::high()
+    } else {
+        cockpit_pairing::ToneParams::default()
+    };
+    push_log(format!(
+        "  профиль тонов: {} ({}/{})",
+        if tones.eq_ignore_ascii_case("high") {
+            "высокий"
+        } else {
+            "стандарт"
+        },
+        tone_params.base,
+        tone_params.step
+    ));
+    match cockpit_pairing::save_wav(&path, &creds, gain, 0, 0, tone_params, preroll) {
         Ok(()) => push_log(format!("  файл: {}", path.display())),
         Err(e) => {
             push_log(format!("✗ звук: {e}"));

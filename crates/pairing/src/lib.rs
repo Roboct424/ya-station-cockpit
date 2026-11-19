@@ -20,8 +20,36 @@ pub const SYMBOL_SAMPLES: usize = 640;
 
 const START: [u32; 4] = [6192, 6192, 5120, 5120];
 const END: [u32; 8] = [5632; 8];
-const BASE: u32 = 1024;
-const STEP: u32 = 256;
+
+/// Параметры тонов: базовая частота и шаг между нибблами.
+///
+/// GOTCHA: G-048 — станция декодирует по своей формуле `base + nibble*step`.
+/// Менять их можно только если декодер это допускает; по умолчанию 1024/256
+/// (проверено на Mini 2).
+#[derive(Debug, Clone, Copy)]
+pub struct ToneParams {
+    pub base: u32,
+    pub step: u32,
+}
+
+impl Default for ToneParams {
+    fn default() -> Self {
+        Self {
+            base: 1024,
+            step: 256,
+        }
+    }
+}
+
+impl ToneParams {
+    /// «Высокий» профиль: те же нибблы, но выше по частоте.
+    pub fn high() -> Self {
+        Self {
+            base: 2048,
+            step: 256,
+        }
+    }
+}
 
 /// Тип сети в кадре.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -232,15 +260,20 @@ pub fn to_nibbles(data: &[u8]) -> Vec<u8> {
 }
 
 /// Последовательность частот для передачи кадра.
-pub fn tone_sequence(c: &Credentials, version: u8, checksum: u8) -> Result<Vec<u32>, PairingError> {
+pub fn tone_sequence(
+    c: &Credentials,
+    version: u8,
+    checksum: u8,
+    tones: ToneParams,
+) -> Result<Vec<u32>, PairingError> {
     let frame = build_frame(c)?;
     let encoded = rs_encode_nibbles(&to_nibbles(&frame));
     let mut seq = Vec::with_capacity(START.len() + 2 + encoded.len() + END.len());
     seq.extend_from_slice(&START);
-    seq.push(BASE + version as u32 * STEP);
-    seq.push(BASE + checksum as u32 * STEP);
+    seq.push(tones.base + version as u32 * tones.step);
+    seq.push(tones.base + checksum as u32 * tones.step);
     for n in encoded {
-        seq.push(BASE + n as u32 * STEP);
+        seq.push(tones.base + n as u32 * tones.step);
     }
     seq.extend_from_slice(&END);
     Ok(seq)
@@ -252,8 +285,16 @@ pub fn make_wav(
     gain: f32,
     version: u8,
     checksum: u8,
+    tones: ToneParams,
+    preroll: u32,
 ) -> Result<Vec<u8>, PairingError> {
-    let seq = tone_sequence(c, version, checksum)?;
+    let mut seq = tone_sequence(c, version, checksum, tones)?;
+    // Предстарт: повторяем стартовый рисунок, чтобы «разбудить» декодер.
+    for _ in 0..preroll.min(4) {
+        let mut head = START.to_vec();
+        head.extend_from_slice(&seq);
+        seq = head;
+    }
 
     let total = seq.len() * SYMBOL_SAMPLES;
     let data_len = total * 2;
@@ -291,8 +332,10 @@ pub fn save_wav(
     gain: f32,
     version: u8,
     checksum: u8,
+    tones: ToneParams,
+    preroll: u32,
 ) -> Result<(), PairingError> {
-    let wav = make_wav(c, gain, version, checksum)?;
+    let wav = make_wav(c, gain, version, checksum, tones, preroll)?;
     if let Some(dir) = path.parent() {
         if !dir.as_os_str().is_empty() {
             std::fs::create_dir_all(dir)?;
@@ -372,8 +415,8 @@ mod tests {
     #[test]
     fn wav_has_expected_size_and_header() {
         let creds = demo();
-        let seq = tone_sequence(&creds, 0, 0).unwrap();
-        let wav = make_wav(&creds, 0.5, 0, 0).unwrap();
+        let seq = tone_sequence(&creds, 0, 0, ToneParams::default()).unwrap();
+        let wav = make_wav(&creds, 0.5, 0, 0, ToneParams::default(), 0).unwrap();
         assert_eq!(&wav[..4], b"RIFF");
         assert_eq!(&wav[8..12], b"WAVE");
         assert_eq!(wav.len(), 44 + seq.len() * SYMBOL_SAMPLES * 2);

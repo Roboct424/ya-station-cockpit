@@ -403,6 +403,12 @@ enum PairCmd {
         gap: f64,
         #[arg(long, default_value = "data/pair_sound.wav")]
         out: PathBuf,
+        /// Профиль тонов: standard (1024) или high (2048)
+        #[arg(long, default_value = "standard")]
+        tones: String,
+        /// Предстарт: сколько раз повторить стартовый рисунок (0..4)
+        #[arg(long, default_value_t = 0)]
+        preroll: u32,
         /// Только собрать файл, не играть
         #[arg(long)]
         no_play: bool,
@@ -1307,16 +1313,27 @@ fn run_pair(cmd: PairCmd) -> cockpit_core::Result<ExitCode> {
             repeat,
             gap,
             out,
+            tones,
+            preroll,
             no_play,
         } => {
+            let tone_params = if tones.eq_ignore_ascii_case("high") {
+                cockpit_pairing::ToneParams::high()
+            } else {
+                cockpit_pairing::ToneParams::default()
+            };
             let creds = Credentials {
                 token,
                 ..Credentials::new(ssid, password)
             };
-            cockpit_pairing::save_wav(&out, &creds, gain, 0, 0).map_err(fail)?;
+            cockpit_pairing::save_wav(&out, &creds, gain, 0, 0, tone_params, preroll)
+                .map_err(fail)?;
             let size = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
             println!("файл: {} ({size} Б)", out.display());
-            println!("громкость: {gain}");
+            println!(
+                "громкость: {gain}, профиль: {} ({}/{}), предстарт: {preroll}",
+                tones, tone_params.base, tone_params.step
+            );
 
             if no_play {
                 return Ok(ExitCode::SUCCESS);
