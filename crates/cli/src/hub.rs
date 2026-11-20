@@ -57,6 +57,8 @@ pub fn serve(mode: Mode, alias: Ipv4Addr) -> Result<(), String> {
             String::new()
         }
     ));
+    // Честно про интернет: чужие имена уходят на публичный DNS.
+    log("DNS: наши имена — локально, остальные — на 8.8.8.8 (это интернет)");
 
     spawn("dns", move || dns_loop(mode, alias));
     spawn("dhcp", dhcp_loop);
