@@ -35,8 +35,18 @@ pub fn fetch(url: &str, dir: &str) -> Result<String, String> {
     let unpack_text = unpack.to_string_lossy().to_string();
     expand(&tmp_text, &unpack_text)?;
 
-    let source = find_certs(&unpack)
-        .ok_or_else(|| format!("в архиве нет файлов сертификатов (.pem/.key/.chain): {url}"))?;
+    let source = find_certs(&unpack).ok_or_else(|| {
+        // Частая ошибка: скачали zip репозитория с CA, а не готовый набор.
+        let hints = find_pem_dirs(&unpack, 3);
+        if hints.is_empty() {
+            format!("в архиве нет файлов сертификатов (.pem/.key/.chain): {url}")
+        } else {
+            format!(
+                "в архиве нет готового набора data/certs, но сертификаты есть в: {}. Это исходники CA, а не набор для станции: нужен zip с папкой data/certs.",
+                hints.join(", ")
+            )
+        }
+    })?;
 
     std::fs::create_dir_all(dir).map_err(|e| format!("{dir}: {e}"))?;
     let mut copied = 0usize;
@@ -169,4 +179,38 @@ fn has_certs(dir: &Path) -> bool {
         let path = e.path();
         path.is_file() && path.extension().is_some_and(|ext| ext == "pem")
     })
+}
+
+/// Ищет каталоги с сертификатами глубже (для понятной ошибки).
+fn find_pem_dirs(root: &Path, depth: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    collect_pem_dirs(root, root, depth, &mut out);
+    out.sort();
+    out.dedup();
+    out.truncate(3);
+    out
+}
+
+fn collect_pem_dirs(root: &Path, dir: &Path, depth: usize, out: &mut Vec<String>) {
+    if depth == 0 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        if has_certs(&path) {
+            let name = path
+                .strip_prefix(root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            out.push(name);
+        }
+        collect_pem_dirs(root, &path, depth - 1, out);
+    }
 }

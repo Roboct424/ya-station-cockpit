@@ -714,7 +714,8 @@
     "✗ звук: {0}": "✗ sound: {0}",
     "✗ проигрыватель: {0}": "✗ player: {0}",
     "✗ стек не запустился: {0}": "✗ the stack did not start: {0}",
-    "✗ стек: {0}": "✗ stack: {0}"
+    "✗ стек: {0}": "✗ stack: {0}",
+    "в архиве нет готового набора data/certs, но сертификаты есть в: {0}. Это исходники CA, а не набор для станции: нужен zip с папкой data/certs.": "the archive has no ready data/certs set, but certificates are in: {0}. Those are CA sources, not a station bundle: a zip with a data/certs folder is needed."
   },
   "manual": {
     "права: {0}": "rights: {0}",

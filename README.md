@@ -331,6 +331,40 @@ Russian and translated on the way out. Completeness check:
 python tools/i18n_check.py   # fails if any message has no translation
 ```
 
+#### Внешние источники (это не наш набор)
+
+Готовый набор — только `cockpit-data.zip`. Если его уберут, материалы той же
+уязвимости лежат в публичных исследованиях:
+
+| Источник | Что внутри |
+|---|---|
+| [Mozilla Bugzilla 2083449](https://bugzilla.mozilla.org/show_bug.cgi?id=2083449) | исходный инцидент: цепочка eMudhra и публично восстановимый ключ |
+| [christarcher/emudhra-ca-mitm](https://github.com/christarcher/emudhra-ca-mitm) | CA-сертификаты и ключи, подготовленные для mitmproxy |
+| [Knight1/emudhra](https://github.com/Knight1/emudhra), [ShotokanZH/eMudhra-pwn](https://github.com/ShotokanZH/eMudhra-pwn) | генераторы сертификатов на том же публичном ключе |
+| [miilv/ya-station-root-shell](https://github.com/miilv/ya-station-root-shell) | разбор цепочки на станции Mini 2, методика |
+| [otomir23/quasar-unlock](https://github.com/otomir23/quasar-unlock) | разблокировка станции через локальный `quasar` |
+
+Это **не** наш формат: там CA и генераторы, а не готовые листовые цепочки
+`data/certs/*.pem`. `cockpit certs fetch` такой архив не примет и честно
+скажет, в какой папке лежат сертификаты.
+
+#### External sources (not our bundle)
+
+The ready bundle is only `cockpit-data.zip`. If it goes away, the material for
+the same vulnerability lives in public research:
+
+| Source | What is inside |
+|---|---|
+| [Mozilla Bugzilla 2083449](https://bugzilla.mozilla.org/show_bug.cgi?id=2083449) | the original incident: the eMudhra chain and the publicly recoverable key |
+| [christarcher/emudhra-ca-mitm](https://github.com/christarcher/emudhra-ca-mitm) | CA certificates and keys prepared for mitmproxy |
+| [Knight1/emudhra](https://github.com/Knight1/emudhra), [ShotokanZH/eMudhra-pwn](https://github.com/ShotokanZH/eMudhra-pwn) | certificate generators on the same public key |
+| [miilv/ya-station-root-shell](https://github.com/miilv/ya-station-root-shell) | the Mini 2 chain write-up and method |
+| [otomir23/quasar-unlock](https://github.com/otomir23/quasar-unlock) | unlocking a station via a local `quasar` |
+
+This is **not** our format: those are CAs and generators, not ready leaf chains
+in `data/certs/*.pem`. `cockpit certs fetch` will refuse such an archive and
+say which folder actually holds the certificates.
+
 ## Лицензия / License
 
 MIT.
