@@ -370,26 +370,24 @@ say which folder actually holds the certificates.
 | Режим | Что покидает ноутбук |
 |---|---|
 | Оффлайн (Mini 2 и остальные станции) | **ничего**: правило `*` = `block`, DNS отвечает локально, AAAA пустой |
-| Хаб (sync) | наши имена — локально; DNS прочих имён → `8.8.8.8`; остальной трафик Хаба — прокси в реальное облако |
+| Хаб (sync) | **ничего**: наши имена — локально, прочие не разрешаются, quasar отвечает сам |
 | «Через облако» | только то, что отмечено галочками (регистрация, голос, метрики, остальное) |
 
-Хаб — исключение по своей природе: он принимает конфиг только от настоящего
-`quasar`, поэтому `/get_sync_info` отдаём мы, а остальное он сверяет с облаком.
-В журнале это видно явно: «режим: облако — часть запросов уходит в интернет»
-и «ПРОКСИ В ОБЛАКО — это не оффлайн».
+Хаб обслуживается локально: DNS, DHCP, SNTP и `quasar` на 443 — свои.
+Внешний DNS включается только явным `hub serve --online`
+(и тогда в журнале пишется «чужие имена → 8.8.8.8»).
 
 ### What leaves the machine
 
 | Mode | What leaves the laptop |
 |---|---|
 | Offline (Mini 2 and the rest) | **nothing**: rule `*` = `block`, DNS answers locally, AAAA is empty |
-| Hub (sync) | our names are local; DNS for other names → `8.8.8.8`; the rest of the Hub traffic is proxied to the real cloud |
+| Hub (sync) | **nothing**: our names are local, the rest do not resolve, quasar answers itself |
 | “Via the cloud” | only what is ticked (registration, voice, metrics, the rest) |
 
-The Hub is an exception by nature: it accepts a config only from the real
-`quasar`, so we serve `/get_sync_info` and it checks everything else against the
-cloud. The journal says it plainly: “mode: cloud — some requests leave for the
-internet” and “PROXY TO THE CLOUD — this is not offline”.
+The Hub is served locally: DNS, DHCP, SNTP and `quasar` on 443 are ours.
+External DNS is enabled only by an explicit `hub serve --online`
+(and then the journal says “foreign names → 8.8.8.8”).
 
 ## Лицензия / License
 

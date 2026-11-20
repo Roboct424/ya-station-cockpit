@@ -164,11 +164,11 @@ enum Cmd {
         firmware: PathBuf,
         #[arg(long, default_value_t = 0)]
         seconds: u64,
-        /// Всё, что не наш маршрут, отдавать в настоящее облако.
+        /// Отдавать незахваченные запросы в реальное облако.
         ///
-        /// Без этого станция видит 404 на проверки связи и говорит
-        /// «нет доступа к интернету» (G-023).
-        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        /// По умолчанию выключено: оффлайн-активатор не выпускает пакеты
+        /// наружу. Включайте только осознанно (G-063).
+        #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
         forward: bool,
         /// Где отвечать 204 на проверку связи (порт 80).
         #[arg(long, default_value = "0.0.0.0:80")]
@@ -234,6 +234,9 @@ enum HubCmd {
         /// Адрес, который вешаем на Ethernet в режиме sync
         #[arg(long, default_value = "213.180.193.78")]
         alias: String,
+        /// Разрешить внешние DNS-запросы (по умолчанию — полный оффлайн)
+        #[arg(long)]
+        online: bool,
     },
 }
 
@@ -710,14 +713,18 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
                     .map_err(|e| CockpitError::Internal(format!("fake hub {bind}: {e}")))?;
                 Ok(ExitCode::SUCCESS)
             }
-            HubCmd::Serve { mode, alias } => {
+            HubCmd::Serve {
+                mode,
+                alias,
+                online,
+            } => {
                 let mode = hub::Mode::parse(&mode).ok_or_else(|| {
                     CockpitError::Config("режим должен быть setup или sync".into())
                 })?;
                 let alias = alias
                     .parse::<std::net::Ipv4Addr>()
                     .map_err(|_| CockpitError::Config(format!("неверный адрес: {alias}")))?;
-                hub::serve(mode, alias).map_err(CockpitError::Internal)?;
+                hub::serve(mode, alias, online).map_err(CockpitError::Internal)?;
                 Ok(ExitCode::SUCCESS)
             }
         },
@@ -1185,7 +1192,7 @@ fn run_activate(
             firmware: None,
             ota_gate: Some(std::path::PathBuf::from("data").join("allow_update")),
             no_update: br#"{"hasUpdate":false}"#.to_vec(),
-            forward: Some(cockpit_intercept::tls::ForwardOptions::default()),
+            forward: None,
             local_auth: true,
         };
         let server = cockpit_intercept::tls::TlsInterceptor::start_local(bind, ca, routes)

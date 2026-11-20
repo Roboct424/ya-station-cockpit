@@ -41,7 +41,7 @@ impl Mode {
 }
 
 /// Запускает все службы и блокируется навсегда.
-pub fn serve(mode: Mode, alias: Ipv4Addr) -> Result<(), String> {
+pub fn serve(mode: Mode, alias: Ipv4Addr, online: bool) -> Result<(), String> {
     if mode == Mode::Sync {
         if let Err(error) = add_alias(alias) {
             // без прав администратора адрес не повесить — службы всё равно поднимаем
@@ -57,10 +57,14 @@ pub fn serve(mode: Mode, alias: Ipv4Addr) -> Result<(), String> {
             String::new()
         }
     ));
-    // Честно про интернет: чужие имена уходят на публичный DNS.
-    log("DNS: наши имена — локально, остальные — на 8.8.8.8 (это интернет)");
+    // Оффлайн по умолчанию: наружу не уходит ни один DNS-запрос.
+    if online {
+        log("DNS: чужие имена → 8.8.8.8 (интернет, режим --online)");
+    } else {
+        log("DNS: внешние имена не разрешаются — оффлайн, наружу ничего не уходит");
+    }
 
-    spawn("dns", move || dns_loop(mode, alias));
+    spawn("dns", move || dns_loop(mode, alias, online));
     spawn("dhcp", dhcp_loop);
     spawn("sntp", sntp_loop);
     if mode == Mode::Sync {
@@ -121,7 +125,7 @@ fn add_alias(ip: Ipv4Addr) -> Result<(), String> {
 
 // ---------------------------------------------------------------- DNS ------
 
-fn dns_loop(mode: Mode, alias: Ipv4Addr) {
+fn dns_loop(mode: Mode, alias: Ipv4Addr, online: bool) {
     let Ok(sock) = UdpSocket::bind((SERVER_IP, 53)) else {
         log("DNS: порт 53 занят");
         return;
@@ -145,6 +149,11 @@ fn dns_loop(mode: Mode, alias: Ipv4Addr) {
         }
         if yandex && qtype == 1 && mode == Mode::Sync {
             let _ = sock.send_to(&a_answer(query, q_end, alias), peer);
+            continue;
+        }
+        if !online {
+            // Пустой ответ: имя не разрешается, но и наружу запрос не уходит.
+            let _ = sock.send_to(&empty_answer(query, q_end), peer);
             continue;
         }
         match forward(query) {

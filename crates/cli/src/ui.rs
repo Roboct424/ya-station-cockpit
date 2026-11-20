@@ -1806,6 +1806,9 @@ fn start_stack(body: &str) -> String {
         &firmware,
         "--http-bind",
         "0.0.0.0:80",
+        // Оффлайн-активатор наружу не выпускает ничего: форвард только в облаке.
+        "--forward",
+        if cloud { "true" } else { "false" },
     ]);
     let certs = active_certs()
         .iter()
@@ -2222,6 +2225,9 @@ fn hub_serve(body: &str) -> String {
     let alias = field(body, "alias");
     let mut cmd = std::process::Command::new(exe);
     cmd.args(["hub", "serve", "--mode", mode]);
+    if field(body, "online") == "1" {
+        cmd.arg("--online");
+    }
     if !alias.is_empty() {
         cmd.args(["--alias", &alias]);
     }
