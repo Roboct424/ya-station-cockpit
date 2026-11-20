@@ -19,10 +19,14 @@ import i18n_extract as ex  # noqa: E402
 def main():
     # Сравниваем по сути: отступы и переводы строк вокруг — форматирование.
     keys = {k.strip() for k in ex.collect()}
-    doc = json.loads(io.open(ex.OUT, encoding="utf-8").read())["en"]
+    data = json.loads(io.open(ex.OUT, encoding="utf-8").read())
+    doc = dict(data.get("en", {}))
+    # Ручные шаблоны — тоже часть словаря, их не считаем лишними.
+    doc.update(data.get("manual", {}))
+    manual = {k.strip() for k in data.get("manual", {})}
     filled = {k.strip() for k, v in doc.items() if v.strip()}
     missing = sorted(k for k in keys if k not in filled)
-    extra = sorted(k for k in filled if k not in keys)
+    extra = sorted(k for k in filled if k not in keys and k not in manual)
     for key in missing:
         print("без перевода:", repr(key[:100]))
     for key in extra:

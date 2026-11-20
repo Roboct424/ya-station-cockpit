@@ -1,7 +1,14 @@
 {
+  "manual": {
+    "права: {0}": "rights: {0}",
+    "станция: {0}": "station: {0}",
+    "платформа: {0}": "platform: {0}",
+    "ADB: {0}": "ADB: {0}",
+    "службы: {0}": "services: {0}",
+    "станция: {0} · ADB: {1} · службы: {2}": "station: {0} · ADB: {1} · services: {2}"
+  },
   "_comment": "Все системные сообщения. Ключ — русский текст из кода (динамические части: {0}, {1}), значение — английский. Проверка: python tools/i18n_check.py",
   "en": {
-    "\n  итог: провалов {0}, предупреждений {1}\n": "  total: {0} failures, {1} warnings",
     "  -> sync info с adbd": "  -> sync info with adbd",
     "  match: модели {0}, прошивка {1}": "  match: models {0}, firmware {1}",
     "  включить: cockpit telemetry enable": "  enable: cockpit telemetry enable",
@@ -206,6 +213,7 @@
     "Оффлайн": "Offline",
     "Очистить": "Clean up",
     "ПРОБА": "PROBE",
+    "ПРОКСИ В ОБЛАКО — трафик уходит в интернет, это не оффлайн": "PROXY TO THE CLOUD — traffic leaves for the internet, this is not offline",
     "Пароль": "Password",
     "Пароль (не короче 8 символов)": "Password (at least 8 characters)",
     "Перезапустить стек": "Restart stack",
@@ -313,6 +321,7 @@
     "в {0} нет ключа": "{0} has no key",
     "в {0} нет сертификатов": "{0} has no certificates",
     "в архиве не нашёлся adb.exe": "adb.exe was not found in the archive",
+    "в архиве нет готового набора data/certs, но сертификаты есть в: {0}. Это исходники CA, а не набор для станции: нужен zip с папкой data/certs.": "the archive has no ready data/certs set, but certificates are in: {0}. Those are CA sources, not a station bundle: a zip with a data/certs folder is needed.",
     "в архиве нет файлов сертификатов (.pem/.key/.chain): {0}": "the archive has no certificate files (.pem/.key/.chain): {0}",
     "в базе нет {0} {1}": "the database has no {0} {1}",
     "в базе нет записей": "the database has no entries",
@@ -380,6 +389,7 @@
     "играю…": "playing…",
     "импорт отклонён: {0}": "import rejected: {0}",
     "импортировано: {0}": "imported: {0}",
+    "итог: провалов {0}, предупреждений {1}": "total: {0} failures, {1} warnings",
     "итого: скачано {0}, ошибок {1}": "total: downloaded {0}, errors {1}",
     "кадр ({0} Б): {1}": "frame ({0} B): {1}",
     "каталог": "directory",
@@ -432,7 +442,6 @@
     "наблюдение: {0}": "observation: {0}",
     "наблюдений нет: {0}": "no observations: {0}",
     "назначаю…": "assigning…",
-    "настоящее облако": "the real cloud",
     "настройка точки: {0}": "configuring the access point: {0}",
     "наш блок имён убран из hosts": "our name block was removed from hosts",
     "наша прошивка": "our firmware",
@@ -595,6 +604,8 @@
     "реестр заблокирован": "the registry is locked",
     "режим {0}: DNS на {1}:53, DHCP :67, SNTP :123{2}": "mode {0}: DNS on {1}:53, DHCP :67, SNTP :123{2}",
     "режим должен быть setup или sync": "the mode must be setup or sync",
+    "режим: облако — часть запросов уходит в интернет": "mode: cloud — some requests leave for the internet",
+    "режим: оффлайн — в облако не уходит ни один пакет": "mode: offline — not a single packet leaves for the cloud",
     "резолвер": "resolver",
     "рядом ничего не видно": "nothing in sight around",
     "сбор метаданных выключен.": "metadata collection is off.",
@@ -715,9 +726,6 @@
     "✗ проигрыватель: {0}": "✗ player: {0}",
     "✗ стек не запустился: {0}": "✗ the stack did not start: {0}",
     "✗ стек: {0}": "✗ stack: {0}",
-    "в архиве нет готового набора data/certs, но сертификаты есть в: {0}. Это исходники CA, а не набор для станции: нужен zip с папкой data/certs.": "the archive has no ready data/certs set, but certificates are in: {0}. Those are CA sources, not a station bundle: a zip with a data/certs folder is needed."
-  },
-  "manual": {
     "права: {0}": "rights: {0}",
     "станция: {0}": "station: {0}",
     "платформа: {0}": "platform: {0}",

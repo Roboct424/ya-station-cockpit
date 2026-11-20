@@ -1760,6 +1760,12 @@ fn start_stack(body: &str) -> String {
             enabled: update_enabled,
         },
     );
+    // Режим — в журнал явно: оффлайн не должен читаться как «в облако».
+    if cloud {
+        push_log("режим: облако — часть запросов уходит в интернет");
+    } else {
+        push_log("режим: оффлайн — в облако не уходит ни один пакет");
+    }
     if let Some(dir) = std::path::Path::new("data/routes.toml").parent() {
         let _ = std::fs::create_dir_all(dir);
     }
