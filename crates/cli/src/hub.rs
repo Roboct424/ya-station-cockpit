@@ -87,7 +87,7 @@ where
 }
 
 fn log(text: &str) {
-    println!("[hub] {text}");
+    println!("[hub] {}", crate::i18n::tr(text));
 }
 
 /// Вешает адрес облака на Ethernet (нужны права администратора).

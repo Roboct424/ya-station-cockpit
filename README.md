@@ -96,6 +96,8 @@ docs/COMMUNITY.md что можно делить, а что нельзя
 docs/COLLECT.md   как собрать прошивки со своих устройств
 docs/ADB.md       локальный ADB: что готово, чего не хватает
 docs/UI.md        веб-панель: запуск и принципы
+crates/cli/i18n.json  все системные сообщения (ru → en)
+tools/i18n_check.py   проверка полноты перевода
 ```
 
 ### Журнал
@@ -207,6 +209,8 @@ docs/TELEMETRY.md consent: first-run prompt, revocation
 docs/FIRMWARE_DB.md firmware database: hashes, compatibility, contributions
 docs/ADB.md       local ADB: what works, what is missing
 docs/UI.md        web panel: how to run it
+crates/cli/i18n.json  every system message (ru → en)
+tools/i18n_check.py   translation completeness check
 ```
 
 <details>
@@ -269,6 +273,63 @@ warranty, account bans, damaged hardware, legal issues or terms-of-service
 violations. Make sure your actions are lawful in your jurisdiction.
 
 </details>
+
+### Ссылки
+
+| Что | Ссылка |
+|---|---|
+| Набор данных (сертификаты, манифест, adb, база) | `https://github.com/Roboct424/ya-station-cockpit/releases/latest/download/cockpit-data.zip` |
+| Сборка для Windows | `…/releases/latest/download/cockpit-windows-x86_64.zip` |
+| Сборка для Linux | `…/releases/latest/download/cockpit-linux-x86_64.tar.gz` |
+
+Ссылка на набор уже подставлена в мастере (шаг 3 → «Загрузить по ссылке»);
+её же понимает `cockpit certs fetch --url`.
+
+**Прошивки Яндекса здесь нет и ссылки на неё тоже нет.** Это файл вендора,
+публичного стабильного адреса у него не бывает, а раздавать его мы не вправе.
+Своя прошивка кладётся рядом (`firmware/*.zip`) или импортируется командой
+`cockpit ota import`; база прошивок скачивается по вашей ссылке в шаге 2.
+
+### Язык сообщений
+
+Все системные сообщения — и Rust, и текст мастера — лежат в одном файле
+`crates/cli/i18n.json` (ключ — русский текст, значение — английский).
+Страница получает этот же словарь по `/api/i18n`, поэтому кнопка RU/EN
+переключает и интерфейс, и уже написанные строки в терминале: в буфере они
+хранятся по-русски и переводятся при выдаче. Проверка полноты:
+
+```bash
+python tools/i18n_check.py   # падает, если сообщение осталось без перевода
+```
+
+### Links
+
+| What | Link |
+|---|---|
+| Data bundle (certificates, manifest, adb, database) | `https://github.com/Roboct424/ya-station-cockpit/releases/latest/download/cockpit-data.zip` |
+| Windows build | `…/releases/latest/download/cockpit-windows-x86_64.zip` |
+| Linux build | `…/releases/latest/download/cockpit-linux-x86_64.tar.gz` |
+
+The bundle link is already in the wizard (step 3 → “Download by link”);
+`cockpit certs fetch --url` accepts the same address.
+
+**Yandex firmware is not here, and there is no link to it either.** It is the
+vendor's file, it has no stable public address, and we may not redistribute it.
+Put your own archive next to the program (`firmware/*.zip`) or import it with
+`cockpit ota import`; the firmware database is downloaded from your own link on
+step 2.
+
+### Message language
+
+Every system message — Rust code and the wizard alike — lives in one file,
+`crates/cli/i18n.json` (key: Russian text, value: English). The page fetches the
+same dictionary from `/api/i18n`, so the RU/EN button switches both the
+interface and the lines already written to the terminal: they are stored in
+Russian and translated on the way out. Completeness check:
+
+```bash
+python tools/i18n_check.py   # fails if any message has no translation
+```
 
 ## Лицензия / License
 

@@ -77,10 +77,16 @@ impl Report {
     }
 
     pub fn render(&self) -> String {
-        let width = self
-            .probes
+        self.render_with(|text| text.to_string())
+    }
+
+    /// Рисует отчёт, пропуская тексты через переводчик: так CLI говорит
+    /// на выбранном языке, не таща локализацию в эту библиотеку.
+    pub fn render_with<F: Fn(&str) -> String>(&self, tr: F) -> String {
+        let names: Vec<String> = self.probes.iter().map(|p| tr(&p.name)).collect();
+        let width = names
             .iter()
-            .map(|p| p.name.chars().count())
+            .map(|name| name.chars().count())
             .max()
             .unwrap_or(10)
             .max(10);
@@ -88,28 +94,31 @@ impl Report {
         let mut out = String::new();
         out.push_str(&format!(
             "  {:<6} {:<width$}  {}\n",
-            "СТАТУС",
-            "ПРОБА",
-            "ДЕТАЛИ",
+            tr("СТАТУС"),
+            tr("ПРОБА"),
+            tr("ДЕТАЛИ"),
             width = width
         ));
         out.push_str(&format!("  {}\n", "-".repeat(width + 40)));
-        for p in &self.probes {
+        for (probe, name) in self.probes.iter().zip(&names) {
             out.push_str(&format!(
                 "  {:<6} {:<width$}  {}\n",
-                p.status.label(),
-                p.name,
-                p.details,
+                probe.status.label(),
+                name,
+                tr(&probe.details),
                 width = width
             ));
-            if let Some(hint) = &p.hint {
-                out.push_str(&format!("         ↳ {hint}\n"));
+            if let Some(hint) = &probe.hint {
+                out.push_str(&format!("         ? {}\n", tr(hint)));
             }
         }
         out.push_str(&format!(
-            "\n  итог: провалов {}, предупреждений {}\n",
-            self.failures(),
-            self.warnings()
+            "\n  {}\n",
+            tr(&format!(
+                "итог: провалов {}, предупреждений {}",
+                self.failures(),
+                self.warnings()
+            ))
         ));
         out
     }

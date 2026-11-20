@@ -80,19 +80,20 @@ const ITEMS: &[InterceptItem] = &[
 
 const PAGE: &str = include_str!("page.html");
 
-/// Буфер терминала мастера.
-static LOG: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+/// Буфер терминала мастера: (метка времени, сообщение как есть).
+/// Сообщение хранится по-русски и переводится при выдаче, поэтому
+/// переключение языка переводит и уже написанные строки.
+static LOG: OnceLock<Mutex<Vec<(String, String)>>> = OnceLock::new();
 static CURSOR: AtomicU64 = AtomicU64::new(0);
 
-fn log_buffer() -> &'static Mutex<Vec<String>> {
+fn log_buffer() -> &'static Mutex<Vec<(String, String)>> {
     LOG.get_or_init(|| Mutex::new(Vec::new()))
 }
 
 fn push_log(line: impl Into<String>) {
-    let stamp = chrono::Local::now().format("%H:%M:%S");
-    let text = format!("[{stamp}] {}", line.into());
+    let stamp = chrono::Local::now().format("%H:%M:%S").to_string();
     if let Ok(mut log) = log_buffer().lock() {
-        log.push(text);
+        log.push((stamp, line.into()));
         if log.len() > 4000 {
             log.drain(..1000);
         }
@@ -134,10 +135,10 @@ pub fn ensure_admin() -> bool {
             .map(|s| s.success())
             .unwrap_or(false);
         if launched {
-            println!("мастер запущен с правами администратора в новом окне");
+            crate::i18n::say("мастер запущен с правами администратора в новом окне");
             return false;
         }
-        println!("права администратора не выданы — часть действий будет недоступна");
+        crate::i18n::say("права администратора не выданы — часть действий будет недоступна");
     }
     true
 }
@@ -233,7 +234,7 @@ pub fn serve(port: u16) -> std::io::Result<()> {
     stop_leftover_stack();
     ensure_firewall();
     let listener = TcpListener::bind(("127.0.0.1", port))?;
-    println!("мастер: http://127.0.0.1:{port}");
+    crate::i18n::say(format!("мастер: http://127.0.0.1:{port}"));
     open_window(port);
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
@@ -318,6 +319,19 @@ fn handle(mut stream: TcpStream) -> std::io::Result<()> {
 
     let (status, content_type, text) = route(&method, &path, &body);
 
+    // Все ответы панели проходят здесь: сообщения переводятся на текущий язык.
+    let text = if content_type.starts_with("application/json") {
+        match serde_json::from_str::<serde_json::Value>(&text) {
+            Ok(mut value) => {
+                crate::i18n::tr_json(&mut value);
+                value.to_string()
+            }
+            Err(_) => text,
+        }
+    } else {
+        text
+    };
+
     let response = format!(
         "HTTP/1.1 {status} OK\r\nContent-Type: {content_type}\r\nCache-Control: no-store, no-cache, must-revalidate\r\nPragma: no-cache\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
         text.len(),
@@ -341,7 +355,10 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
             // GOTCHA: G-051 — после перезапуска буфер короче курсора, и без
             // зажима терминал навсегда оставался пустым.
             let start = after.min(all.len());
-            let lines: Vec<String> = all[start..].to_vec();
+            let lines: Vec<String> = all[start..]
+                .iter()
+                .map(|(stamp, text)| format!("[{stamp}] {}", crate::i18n::tr(text)))
+                .collect();
             let next = start + lines.len();
             let json = serde_json::json!({ "next": next, "lines": lines });
             (200, "application/json", json.to_string())
@@ -431,6 +448,8 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
             (200, "application/json", result)
         }
         ("GET", "/api/about") => (200, "application/json", about_json()),
+        ("GET", "/api/i18n") => (200, "application/json", crate::i18n::dictionary_json()),
+        ("POST", "/api/lang") => (200, "application/json", set_lang(body)),
         ("GET", "/api/hub/status") => (200, "application/json", hub_status()),
         ("POST", "/api/hub/serve") => (200, "application/json", hub_serve(body)),
         ("POST", "/api/hub/grab") => (200, "application/json", hub_grab(body)),
@@ -446,7 +465,7 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
             let text = std::fs::read_to_string("data/ota.log").unwrap_or_default();
             let all: Vec<&str> = text.lines().collect();
             let start = after.min(all.len());
-            let slice: Vec<String> = all[start..].iter().map(|l| l.to_string()).collect();
+            let slice: Vec<String> = all[start..].iter().map(|l| crate::i18n::tr(l)).collect();
             let json = serde_json::json!({ "next": start + slice.len(), "lines": slice });
             (200, "application/json", json.to_string())
         }
@@ -2102,8 +2121,19 @@ fn cleanup_all(body: &str) -> String {
         Err(e) => report.push(format!("hosts: {e}")),
     }
 
-    push_log(format!("уборка: {}", report.join("; ")));
-    serde_json::json!({ "ok": true, "text": report.join("\n") }).to_string()
+    // Каждый пункт — отдельной строкой: так он переводится независимо.
+    for item in &report {
+        push_log(item.clone());
+    }
+    serde_json::json!({
+        "ok": true,
+        "text": report
+            .iter()
+            .map(|item| crate::i18n::tr(item))
+            .collect::<Vec<_>>()
+            .join("\n")
+    })
+    .to_string()
 }
 
 fn ctx_from(body: &str) -> ModuleCtx {
@@ -2234,9 +2264,18 @@ fn about_json() -> String {
         "arch": std::env::consts::ARCH,
         "routes": routes,
         "certs": active_certs().len(),
+        "lang": crate::i18n::lang().code(),
         "station": crate::modules::find_station()
     })
     .to_string()
+}
+
+/// Переключение языка: `lang=ru|en`. Дальше все ответы идут на нём.
+fn set_lang(body: &str) -> String {
+    let lang = crate::i18n::Lang::parse(&field(body, "lang"));
+    crate::i18n::set_lang(lang);
+    push_log(format!("язык: {}", lang.code()));
+    serde_json::json!({ "ok": true, "lang": lang.code() }).to_string()
 }
 
 fn tcp_open(ip: &str, port: u16) -> bool {

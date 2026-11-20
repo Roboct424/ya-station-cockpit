@@ -2,8 +2,10 @@
 <title>cockpit — получение ADB</title>
 <style>
 :root{color-scheme:dark}
+html,body{height:100%}
 *{box-sizing:border-box}
-body{margin:0;background:#0f1216;color:#e8ecf1;font:13px/1.38 system-ui,Segoe UI,sans-serif}
+body{margin:0;background:#0f1216;color:#e8ecf1;font:13px/1.38 system-ui,Segoe UI,sans-serif;
+ display:flex;flex-direction:column;overflow:hidden}
 header{display:flex;align-items:center;gap:10px;padding:8px 16px;background:#151a21;border-bottom:1px solid #232a34;flex-wrap:nowrap}
 header h1{font-size:14px;margin:0;font-weight:600;white-space:nowrap}
 .badge{padding:3px 9px;border-radius:999px;font-size:11px;background:#23303f;color:#9fb4cc;white-space:nowrap}
@@ -18,8 +20,9 @@ header h1{font-size:14px;margin:0;font-weight:600;white-space:nowrap}
 .tabs button.on{background:#22303f;color:#e8ecf1;border-color:#33465c}
 .apply{width:100%;padding:14px;font-size:15px;border-radius:12px;margin-top:4px}
 .tabs button.on{background:#22303f;color:#e8ecf1}
-main{padding:12px 16px;max-width:1320px;margin:0 auto}
-section{display:none}section.on{display:block}
+main{padding:12px 16px;width:100%;max-width:1320px;margin:0 auto;flex:1 1 auto;min-height:0;overflow:auto;display:flex;flex-direction:column}
+section{display:none}
+section.on{display:flex;flex-direction:column;flex:1 1 auto;min-height:0}
 .row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start}
 .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;align-items:start}
 .rec{background:#14211a;border-left:4px solid #3aa0ff;padding:8px 10px;border-radius:8px;margin-top:10px;font-size:13px;color:#dfe7f2;line-height:1.35}
@@ -42,9 +45,7 @@ section{display:none}section.on{display:block}
 #s2 .check{margin:3px 0;font-size:12px}
 #s2 button.act,#s3 button.act{margin-top:4px}
 #s2 details{margin:0}
-#s3 .split{height:calc(100vh - 170px);min-height:380px}
-body{overflow:hidden}
-main{overflow:auto}
+#s3 .split{flex:1 1 auto;height:auto;min-height:320px}
 #progress{height:6px;background:#1d2430;margin:0 16px 8px;border-radius:99px;overflow:hidden}
 #progress i{display:block;height:100%;width:0;background:#3aa0ff;transition:width .3s}
 
@@ -77,6 +78,47 @@ pre{background:#0b0e12;border:1px solid #1e242c;border-radius:10px;padding:11px;
 .split .card pre, .split .card .box{flex:1;min-height:0;overflow:auto}
 pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
 .muted{color:#7f8ea3;font-size:12px}
+/* ---- компактный режим и узкие окна ---- */
+/* Содержимое колонок шага 3 прокручивается внутри, кнопки всегда достижимы. */
+#s3 .stackL{overflow:auto}
+#s3 .stackL .card{overflow:auto}
+#s3 .split>.card{overflow:auto}
+
+@media (max-height:820px){
+  main{padding:8px 12px}
+  header{padding:6px 12px}
+  .tabs{padding:6px 12px}
+  #s3 .card{padding:7px 9px}
+  #s3 .card h2{font-size:12px}
+  #s3 label{margin:3px 0 1px}
+  #s3 input[type=text],#s3 input[type=number]{height:26px;padding:2px 6px}
+  #s3 button.act{padding:6px 10px;margin-top:3px}
+}
+
+/* Маленький экран: страница прокручивается целиком, как обычный документ.
+   Никаких вложенных скроллов — колесо мыши всегда двигает страницу. */
+@media (max-width:900px),(max-height:760px){
+  html,body{height:auto;overflow:visible}
+  body{display:block}
+  main{display:block;overflow:visible;flex:none}
+  section.on{display:block;min-height:0}
+  #s3 .split{grid-template-columns:1fr;height:auto;min-height:0}
+  #s3 .stackL{grid-template-rows:auto auto;overflow:visible}
+  #s3 .stackL .card,#s3 .split>.card{overflow:visible}
+  pre.term{height:300px}
+}
+@media (max-width:900px){
+  header{flex-wrap:wrap;row-gap:4px}
+  .badge{font-size:10px}
+  .tabs button{font-size:12px;padding:7px 6px;white-space:normal}
+  .cols{grid-template-columns:1fr}
+}
+
+@media (max-width:760px){
+  .ansgrid{grid-template-columns:1fr}
+  .tabs{grid-template-columns:repeat(2,1fr)}
+}
+
 .bar{height:6px;background:#1d2430;border-radius:99px;overflow:hidden;margin:8px 0}
 .bar i{display:block;height:100%;background:#3d7eff;width:0;transition:width .4s}
 </style>
@@ -235,11 +277,12 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
     <span id="r_certs" class="chip wait">не выполнялось</span>
     <p class="hint" id="cert_hint"></p>
     <div class="row" style="margin-top:8px">
-      <input type="text" id="certs_url" placeholder="https://…/cockpit-data.zip" style="flex:1;min-width:220px">
+      <input type="text" id="certs_url" style="flex:1;min-width:220px"
+        value="https://github.com/Roboct424/ya-station-cockpit/releases/latest/download/cockpit-data.zip">
       <button class="act" id="btnCertsFetch" onclick="fetchCerts()">Загрузить по ссылке</button>
     </div>
-    <p class="hint">Набор обычно уже лежит рядом с программой. Ссылка нужна, если его нет:
-    скачается zip и распакуется в <code>data/certs/</code>.</p>
+    <p class="hint">Набор обычно уже лежит рядом с программой. Ссылка по умолчанию —
+    последний релиз; если архив уберут или он изменится, подставьте свою.</p>
   </div>
 
   <div class="card">
@@ -440,94 +483,183 @@ function goTab(id) {
 
 
 
-const DICT_EN = {
-  '1 · Окружение': '1 · Environment',
-  '2 · Настройка': '2 · Setup',
-  '3 · Попытка': '3 · Attempt',
-  '4 · Обслуживание': '4 · Maintenance',
-  '1. Чистка системы — обязательно': '1. System cleanup — required',
-  '2. Профиль устройства': '2. Device profile',
-  '3. Точка доступа для станции': '3. Access point for the station',
-  '3. Проводное подключение': '3. Wired connection',
-  'Подсказки по результатам попытки': 'Hints from the attempt',
-  '2. Регистрация': '2. Registration',
-  '3. Сертификаты': '3. Certificates',
-  '4. Обновление': '4. Update',
-  'Звук сопряжения': 'Pairing sound',
-  'Станция': 'Station',
-  'Терминал': 'Terminal',
-  'Очистить': 'Clean up',
-  'Подготовить сеть': 'Prepare network',
-  'Сохранить профиль': 'Save profile',
-  'Определить модель по Bluetooth': 'Detect model via Bluetooth',
-  'Включить общий доступ (DHCP)': 'Enable internet sharing (DHCP)',
-  'Назначить адрес': 'Assign address',
-  'Применить и перезапустить стек': 'Apply and restart stack',
-  'Применить выбор': 'Apply selection',
-  'Загрузить по ссылке': 'Download by link',
-  'Набор обычно уже лежит рядом с программой. Ссылка нужна, если его нет: скачается zip и распакуется в': 'The bundle usually sits next to the program. The link is only needed if it is missing: the zip is downloaded and unpacked into',
-  'Скачать базу': 'Download database',
-  'Проиграть код': 'Play pairing code',
-  'Перезапустить стек': 'Restart stack',
-  'Остановить': 'Stop',
-  'Модель': 'Model',
-  'Прошивка': 'Firmware',
-  'Тип подключения': 'Connection type',
-  'Сетевой адаптер': 'Network adapter',
-  'Своя прошивка (если нет в списке)': 'Custom firmware (if not listed)',
-  'Адрес станции — определяется сам': 'Station address — detected automatically',
-  'Адрес порта (шлюз для станции)': 'Port address (gateway for the station)',
-  'Громкость (рабочая 0.5)': 'Volume (0.5 works)',
-  'Повторов': 'Repeats',
-  'Предстарт (0–4)': 'Pre-roll (0–4)',
-  'Разрешить обновление': 'Allow update',
-  'Далее: настройка →': 'Next: setup →',
-  'Далее: попытка →': 'Next: attempt →',
-  'Далее: обслуживание →': 'Next: maintenance →',
-  'Пока в системе остаются чужие записи и старые прокси, станция получает неверные ответы и сбрасывается. Чистим до начала работы.':
-    'Old proxy entries and hosts records make the station get wrong answers and reset. Clean up before we start.',
-  'Что известно заранее. Если не знаете — выберите «—», программа предложит варианты на втором шаге.':
-    'What is known in advance. If unsure, pick “—”; the app will offer options on the second step.',
-  'Станция подключается кабелем к сетевой карте ноутбука. Назначаем карте адрес — станция получит его как шлюз.':
-    'The station is connected by cable to the laptop network card. We assign an address, and the station uses it as a gateway.',
-  'Станция подключится к этой сети после звукового кода. Адрес выдаётся автоматически, вводить ничего не нужно.':
-    'The station will join this network after the sound code. The address is assigned automatically, nothing to type.',
-  'Станция принимает только те цепочки, которым доверяет. Отметьте активные: если выбрано несколько — сервер будет перебирать их при отказе, пока станция не согласится.':
-    'The station only accepts certificate chains it trusts. Tick the active ones: if several are chosen, the server rotates them until the station agrees.',
-  'По умолчанию выключено: без разрешения станция получает «обновлений нет». «Проверена» — есть в базе и открывает ADB.':
-    'Off by default: without consent the station gets “no updates”. “Verified” means it is in the database and opens ADB.',
-  'Скачать базу прошивок по ссылке (JSON)': 'Download the firmware database by URL (JSON)',
-  'У этой модели нет микрофона — звуковой код не сработает. Подключайте по Ethernet или Bluetooth.':
-    'This model has no microphone, so the sound code will not work. Use Ethernet or Bluetooth.',
-  'Всё, что делается через ADB, живёт здесь: снять бэкап, закрепить ADB и поставить наш сертификат.':
-    'Everything done over ADB lives here: back up, pin ADB, install our certificate.'
-};
+// Словарь приходит с сервера: crates/cli/i18n.json — единственный файл,
+// где лежат все сообщения. Дублировать переводы в странице больше не нужно.
+let DICT = {};
+let PATTERNS = [];
+let LANG = localStorage.getItem('lang') === 'en' ? 'en' : 'ru';
 
-const _origText = new WeakMap();
+function keyOf(text) {
+  return text.replace(/\s+/g, ' ').trim();
+}
 
-function applyLang(lang) {
-  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-  let node;
-  while ((node = walker.nextNode())) {
-    const raw = node.nodeValue;
-    const key = raw.replace(/\s+/g, ' ').trim();
-    if (!key) continue;
-    if (!_origText.has(node)) _origText.set(node, raw);
-    const original = _origText.get(node);
-    if (lang === 'en' && DICT_EN[key]) {
-      node.nodeValue = original.replace(raw.trim(), DICT_EN[key]);
+function buildPatterns() {
+  PATTERNS = Object.keys(DICT)
+    .filter((k) => k.includes('{'))
+    .map((ru) => {
+      const parts = [];
+      let rest = ru;
+      let lit = '';
+      while (rest.length) {
+        const open = rest.indexOf('{');
+        if (open < 0) { lit += rest; rest = ''; break; }
+        const close = rest.indexOf('}', open);
+        if (close < 0) { lit += rest; rest = ''; break; }
+        lit += rest.slice(0, open);
+        if (lit) { parts.push(lit); lit = ''; }
+        parts.push(null); // место подстановки
+        rest = rest.slice(close + 1);
+      }
+      if (lit) parts.push(lit);
+      const weight = parts.reduce((n, p) => n + (p ? p.length : 0), 0);
+      return { key: ru, parts, en: DICT[ru], weight };
+    })
+    .sort((a, b) => b.weight - a.weight);
+}
+
+// Сопоставление с шаблоном: литералы по порядку, между ними — подстановки.
+function matchPattern(pat, text) {
+  const caps = [];
+  let pos = 0;
+  for (let i = 0; i < pat.parts.length; i++) {
+    const part = pat.parts[i];
+    if (part === null) {
+      const next = pat.parts[i + 1];
+      let end;
+      if (next === undefined) {
+        end = text.length;
+      } else {
+        end = text.indexOf(next, pos);
+        if (end < 0) return null;
+      }
+      caps.push(text.slice(pos, end));
+      pos = end;
     } else {
-      node.nodeValue = original;
+      if (!text.startsWith(part, pos)) return null;
+      pos += part.length;
     }
   }
+  return pos === text.length ? caps : null;
+}
+
+function fillTemplate(tpl, caps) {
+  return tpl.replace(/\{(\d+)\}/g, (_, n) => (caps[Number(n)] !== undefined ? caps[Number(n)] : ''));
+}
+
+function translateKey(key, depth = 2) {
+  if (LANG !== 'en') return key;
+  const exact = DICT[key];
+  if (exact) return exact;
+  if (!key.includes(' ') && !key.includes(':')) return key;
+  for (const pat of PATTERNS) {
+    const caps = matchPattern(pat, key);
+    if (caps) {
+      // Подстановка тоже может быть сообщением: «станция: не найдена».
+      const fixed = caps.map((c) => {
+        if (depth <= 0) return c;
+        const trimmed = c.replace(/\s+/g, ' ').trim();
+        return trimmed ? translateKey(trimmed, depth - 1) : c;
+      });
+      return fillTemplate(pat.en, fixed);
+    }
+  }
+  return key;
+}
+
+// Оригинальный русский текст узла: переключение языка обратимо.
+const _ru = new WeakMap();
+
+function translateNode(node) {
+  const parent = node.parentNode;
+  if (parent && (parent.nodeName === 'SCRIPT' || parent.nodeName === 'STYLE')) return;
+  const current = node.nodeValue;
+  const ru = _ru.has(node) ? _ru.get(node) : current;
+  if (!_ru.has(node)) _ru.set(node, ru);
+  const key = keyOf(ru);
+  if (!key) return;
+  const out = translateKey(key);
+  const next = out === key ? ru : ru.replace(ru.trim(), out);
+  if (node.nodeValue !== next) node.nodeValue = next;
+}
+
+function translateTree() {
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+  let node;
+  while ((node = walker.nextNode())) translateNode(node);
+  if (!_ruTitle) _ruTitle = document.title;
+  const title = translateKey(keyOf(_ruTitle));
+  if (document.title !== title && LANG === 'en') document.title = title;
+  if (LANG !== 'en' && document.title !== _ruTitle) document.title = _ruTitle;
+}
+
+let _ruTitle = '';
+
+function applyLang(lang, save = true) {
+  LANG = lang;
   localStorage.setItem('lang', lang);
   document.querySelectorAll('.lang button').forEach((b) => b.classList.toggle('on', b.dataset.lang === lang));
   document.querySelectorAll('select').forEach((sel) => sel.dispatchEvent(new Event('change')));
+  translateTree();
+  if (save) switchServerLang(lang);
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-  const saved = localStorage.getItem('lang');
-  if (saved === 'en') applyLang('en');
+async function loadDict() {
+  try {
+    const j = await (await fetch('/api/i18n')).json();
+    DICT = j.en || {};
+  } catch (e) {
+    DICT = {};
+  }
+  buildPatterns();
+}
+
+// Новые узлы (после ответов сервера) переводим на лету.
+const observer = new MutationObserver((records) => {
+  if (LANG !== 'en') return;
+  for (const record of records) {
+    if (record.type === 'characterData') {
+      translateNode(record.target);
+      continue;
+    }
+    record.addedNodes.forEach((node) => {
+      if (node.nodeType === 3) {
+        translateNode(node);
+      } else if (node.nodeType === 1) {
+        const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+        let text;
+        while ((text = walker.nextNode())) translateNode(text);
+      }
+    });
+  }
+});
+
+// Переключает язык сообщений на сервере и перерисовывает терминал:
+// строки в буфере хранятся по-русски и переводятся при выдаче.
+async function switchServerLang(lang) {
+  try {
+    const f = new URLSearchParams();
+    f.append('lang', lang);
+    await fetch('/api/lang', {method: 'POST', body: f});
+  } catch (e) { /* панель могла перезапускаться */ }
+  cursor = 0;
+  tailCursor = 0;
+  const el = $('log');
+  if (el) el.textContent = '';
+  poll();
+  pollStack();
+  // Подтягиваем тексты, которые пришли с сервера уже на старом языке.
+  // Формы не трогаем: язык не должен сбрасывать введённое.
+  state();
+  stackState();
+  loadDevice();
+  loadAdvice();
+  loadAbout();
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+  await loadDict();
+  observer.observe(document.body, {childList: true, subtree: true, characterData: true});
+  applyLang(LANG, false);
 });
 
 function enhanceSelects() {

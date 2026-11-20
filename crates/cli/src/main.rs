@@ -13,6 +13,7 @@ use cockpit_scenarios::Scenario;
 mod certs;
 mod fake_hub;
 mod hub;
+mod i18n;
 mod modules;
 mod selfcheck;
 mod ui;
@@ -514,13 +515,20 @@ enum NetCmd {
 }
 
 fn main() -> ExitCode {
+    // Язык сообщений: переменная окружения важнее сохранённого выбора.
+    let lang = match std::env::var("COCKPIT_LANG") {
+        Ok(value) => i18n::Lang::parse(&value),
+        Err(_) => i18n::load_saved(),
+    };
+    i18n::set_lang(lang);
+
     let cli = Cli::parse();
     match dispatch(cli) {
         Ok(code) => code,
         Err(e) => {
-            eprintln!("ошибка [{}]: {e}", e.code());
+            i18n::say_err(format!("ошибка [{}]: {e}", e.code()));
             if let Some(hint) = e.hint() {
-                eprintln!("  подсказка: {hint}");
+                i18n::say_err(format!("  подсказка: {hint}"));
             }
             ExitCode::FAILURE
         }
@@ -538,13 +546,13 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
         Cmd::Config { cmd } => match cmd {
             ConfigCmd::Init => {
                 Config::write_default(&cfg_path)?;
-                println!("создан {}", cfg_path.display());
+                i18n::say(format!("создан {}", cfg_path.display()));
                 Ok(ExitCode::SUCCESS)
             }
             ConfigCmd::Check => {
                 let problems = cfg.validate();
                 if problems.is_empty() {
-                    println!("конфигурация в порядке: {}", cfg_path.display());
+                    i18n::say(format!("конфигурация в порядке: {}", cfg_path.display()));
                     Ok(ExitCode::SUCCESS)
                 } else {
                     for p in &problems {
@@ -576,10 +584,13 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
                 let scenario = Scenario::load(&path).map_err(|e| {
                     CockpitError::Config(format!("{}: {} [{}]", path.display(), e, e.code()))
                 })?;
-                println!("сценарий: {} — {}", scenario.id, scenario.title);
-                println!("  шагов: {}", scenario.steps.len());
+                i18n::say(format!("сценарий: {} — {}", scenario.id, scenario.title));
+                i18n::say(format!("  шагов: {}", scenario.steps.len()));
                 if let Some(m) = &scenario.matching {
-                    println!("  match: модели {:?}, прошивка {:?}", m.model, m.firmware);
+                    i18n::say(format!(
+                        "  match: модели {:?}, прошивка {:?}",
+                        m.model, m.firmware
+                    ));
                 }
                 Ok(ExitCode::SUCCESS)
             }
@@ -589,11 +600,11 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
             NetCmd::Hotspot { ssid, password } => {
                 let adapter = cockpit_net::default_adapter();
                 match adapter.start_hotspot(&cockpit_net::ApConfig::new(ssid, password)) {
-                    Ok(h) => println!("точка доступа: SSID задан, состояние {}", h.iface),
+                    Ok(h) => i18n::say(format!("точка доступа: SSID задан, состояние {}", h.iface)),
                     Err(e) => {
-                        println!("не удалось: {e}");
+                        i18n::say(format!("не удалось: {e}"));
                         if let Some(hint) = e.hint() {
-                            println!("  подсказка: {hint}");
+                            i18n::say(format!("  подсказка: {hint}"));
                         }
                     }
                 }
@@ -604,20 +615,20 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
                 match adapter.stop_hotspot(&cockpit_net::ApHandle {
                     iface: "mobile-hotspot".into(),
                 }) {
-                    Ok(()) => println!("точка доступа остановлена"),
-                    Err(e) => println!("не удалось: {e}"),
+                    Ok(()) => i18n::say("точка доступа остановлена"),
+                    Err(e) => i18n::say(format!("не удалось: {e}")),
                 }
                 Ok(ExitCode::SUCCESS)
             }
             NetCmd::Info => {
                 let adapter = cockpit_net::default_adapter();
-                println!("адаптер: {}", adapter.name());
-                println!(
+                i18n::say(format!("адаптер: {}", adapter.name()));
+                i18n::say(format!(
                     "  платформа: {} / {}",
                     std::env::consts::OS,
                     std::env::consts::ARCH
-                );
-                println!("  статус: контракт готов, реализация — фаза 2");
+                ));
+                i18n::say("  статус: контракт готов, реализация — фаза 2");
                 Ok(ExitCode::SUCCESS)
             }
         },
@@ -688,7 +699,7 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
                     Ok(ExitCode::SUCCESS)
                 }
                 Err(e) => {
-                    eprintln!("не удалось: {e}");
+                    i18n::say_err(format!("не удалось: {e}"));
                     Ok(ExitCode::FAILURE)
                 }
             },
@@ -721,7 +732,7 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
         }
         Cmd::Version => {
             println!("cockpit {}", env!("CARGO_PKG_VERSION"));
-            println!("  сценариев: selfcheck, YAML");
+            i18n::say("  сценариев: selfcheck, YAML");
             Ok(ExitCode::SUCCESS)
         }
     }
@@ -735,7 +746,7 @@ fn run_doctor(cfg: &Config, json: bool) -> cockpit_core::Result<ExitCode> {
             serde_json::to_string_pretty(&report).unwrap_or_default()
         );
     } else {
-        print!("{}", report.render());
+        print!("{}", report.render_with(i18n::tr));
     }
     Ok(if report.is_ok() {
         ExitCode::SUCCESS
@@ -748,7 +759,7 @@ fn run_journal(cfg: &Config, cmd: JournalCmd) -> cockpit_core::Result<ExitCode> 
     let journal = JsonlJournal::open(cfg.journal_path())?;
     let read = journal.read_all()?;
     for warning in &read.skipped {
-        eprintln!("предупреждение: {warning}");
+        i18n::say_err(format!("предупреждение: {warning}"));
     }
     let all = read.records;
 
@@ -764,7 +775,7 @@ fn run_journal(cfg: &Config, cmd: JournalCmd) -> cockpit_core::Result<ExitCode> 
                 );
             }
             if all.is_empty() {
-                println!("журнал пуст: {}", journal.path().display());
+                i18n::say(format!("журнал пуст: {}", journal.path().display()));
             }
         }
         JournalCmd::Stats => {
@@ -784,10 +795,10 @@ fn run_journal(cfg: &Config, cmd: JournalCmd) -> cockpit_core::Result<ExitCode> 
                 .iter()
                 .filter(|r| matches!(r, Record::StepFinished { ok: false, .. }))
                 .count();
-            println!("журнал: {}", journal.path().display());
-            println!("  записей: {}", all.len());
-            println!("  запусков: {runs} (провалов: {failed})");
-            println!("  шагов: {steps} (провалов: {bad_steps})");
+            i18n::say(format!("журнал: {}", journal.path().display()));
+            i18n::say(format!("  записей: {}", all.len()));
+            i18n::say(format!("  запусков: {runs} (провалов: {failed})"));
+            i18n::say(format!("  шагов: {steps} (провалов: {bad_steps})"));
         }
     }
     Ok(ExitCode::SUCCESS)
@@ -817,7 +828,7 @@ fn run_target(
                 CockpitError::Config(format!("{}: {} [{}]", path.display(), e, e.code()))
             })?;
         }
-        println!("сценарий: {} — {}", scenario.id, scenario.title);
+        i18n::say(format!("сценарий: {} — {}", scenario.id, scenario.title));
         let name = scenario.id.clone();
         (name, scenario.into_steps(cfg.data_dir()))
     } else if target == "selfcheck" {
@@ -832,21 +843,21 @@ fn run_target(
 
     match runner.run(&ctx) {
         Ok(report) => {
-            println!(
+            i18n::say(format!(
                 "сценарий {} завершён{} (шагов: {})",
                 report.name,
                 if dry_run { " (dry-run)" } else { "" },
                 report.executed.len()
-            );
-            println!("журнал: {}", journal.path().display());
+            ));
+            i18n::say(format!("журнал: {}", journal.path().display()));
             Ok(ExitCode::SUCCESS)
         }
         Err(e) => {
-            println!("сценарий прерван: {e}");
+            i18n::say(format!("сценарий прерван: {e}"));
             if let Some(hint) = e.hint() {
-                println!("  подсказка: {hint}");
+                i18n::say(format!("  подсказка: {hint}"));
             }
-            println!("журнал: {}", journal.path().display());
+            i18n::say(format!("журнал: {}", journal.path().display()));
             Ok(ExitCode::FAILURE)
         }
     }
@@ -885,13 +896,16 @@ fn watch_config(path: &Path) -> cockpit_core::Result<ExitCode> {
         let _ = tx.send(());
     })?;
 
-    println!("наблюдаю за {} (Ctrl+C для выхода)", path.display());
+    i18n::say(format!(
+        "наблюдаю за {} (Ctrl+C для выхода)",
+        path.display()
+    ));
     while rx.recv().is_ok() {
         std::thread::sleep(Duration::from_millis(200));
         match live.reload() {
-            Ok(true) => println!("конфиг обновлён"),
+            Ok(true) => i18n::say("конфиг обновлён"),
             Ok(false) => {}
-            Err(e) => eprintln!("ошибка конфига: {e}; старый остаётся в силе"),
+            Err(e) => i18n::say_err(format!("ошибка конфига: {e}; старый остаётся в силе")),
         }
     }
     Ok(ExitCode::SUCCESS)
@@ -910,11 +924,11 @@ fn maybe_prompt_consent(cfg: &Config) {
     }
 
     println!();
-    println!("Помочь проекту? Можно включить сбор метаданных обмена с облаком.");
-    println!("  пишем: время, хост, метод, путь без query, размеры, SHA-256 тел");
-    println!("  не пишем: тела, токены, device_id, SSID, пароли");
-    println!("  куда: локальный файл data/capture.jsonl, никуда не отправляется");
-    print!("Включить сбор? [y/N]: ");
+    i18n::say("Помочь проекту? Можно включить сбор метаданных обмена с облаком.");
+    i18n::say("  пишем: время, хост, метод, путь без query, размеры, SHA-256 тел");
+    i18n::say("  не пишем: тела, токены, device_id, SSID, пароли");
+    i18n::say("  куда: локальный файл data/capture.jsonl, никуда не отправляется");
+    i18n::say_inline("Включить сбор? [y/N]: ");
     let _ = std::io::stdout().flush();
 
     let mut answer = String::new();
@@ -931,10 +945,10 @@ fn maybe_prompt_consent(cfg: &Config) {
     let mut consent = Consent::load(cfg.data_dir());
     if enabled {
         consent.enable(&now_stamp());
-        println!("спасибо: сбор включён, отключить можно в любой момент");
+        i18n::say("спасибо: сбор включён, отключить можно в любой момент");
     } else {
         consent.disable();
-        println!("ок, сбор выключен (включить: cockpit telemetry enable)");
+        i18n::say("ок, сбор выключен (включить: cockpit telemetry enable)");
     }
     let _ = consent.save(cfg.data_dir());
     println!();
@@ -992,7 +1006,7 @@ fn run_local_ota(
         }
         std::fs::write(path, ca.ca_pem())
             .map_err(|e| CockpitError::Internal(format!("{}: {e}", path.display())))?;
-        println!("корневой CA: {}", path.display());
+        i18n::say(format!("корневой CA: {}", path.display()));
     }
 
     let download_url = format!("https://quasar.yandex.net/firmware/{name}");
@@ -1003,11 +1017,11 @@ fn run_local_ota(
         Some((firmware.to_path_buf(), name.clone())),
     ) {
         Ok(rules) => {
-            println!(
+            i18n::say(format!(
                 "маршруты: {} ({} правил)",
                 routes_file.display(),
                 rules.len()
-            );
+            ));
             rules
         }
         Err(_) => cockpit_intercept::tls::standard_rules(
@@ -1034,7 +1048,7 @@ fn run_local_ota(
 
     let server = TlsInterceptor::start_local(addr, ca, routes)
         .map_err(|e| CockpitError::Internal(format!("local-ota {addr}: {e}")))?;
-    println!("локальный OTA/sync на {}", server.addr());
+    i18n::say(format!("локальный OTA/sync на {}", server.addr()));
     println!(
         "  /check_updates → {} ({})",
         entry.version,
@@ -1053,7 +1067,7 @@ fn run_local_ota(
             Some(tail[a..a + b].to_string())
         })
         .unwrap_or_default();
-    println!(
+    i18n::say(format!(
         "  остальное → {}",
         match rest_action.as_str() {
             "block" => "блокируется (полный оффлайн, в сеть ничего не уходит)",
@@ -1061,14 +1075,14 @@ fn run_local_ota(
             "-" => "молчит",
             _ => "404 (станция решит, что интернета нет)",
         }
-    );
+    ));
     let _ = forward;
     // Проверка связи: станция просит http://scbh.yandex.net/generate_204
     // и берёт время из заголовка Date.
     let http = match http_bind.parse::<std::net::SocketAddr>() {
         Ok(addr) => match cockpit_intercept::http::HttpResponder::start(addr) {
             Ok(r) => {
-                println!("проверка связи (204) на {}", r.addr());
+                i18n::say(format!("проверка связи (204) на {}", r.addr()));
                 Ok(r)
             }
             Err(e) => Err(e),
@@ -1076,7 +1090,9 @@ fn run_local_ota(
         Err(e) => Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, e)),
     };
     if let Err(e) = &http {
-        println!("проверка связи не поднялась: {e} (нужны права на порт 80)");
+        i18n::say(format!(
+            "проверка связи не поднялась: {e} (нужны права на порт 80)"
+        ));
     }
 
     if seconds == 0 {
@@ -1195,20 +1211,20 @@ fn run_activate(
 
     match report {
         Ok(r) => {
-            println!(
+            i18n::say(format!(
                 "активация завершена{} (шагов: {})",
                 if dry_run { " (dry-run)" } else { "" },
                 r.executed.len()
-            );
-            println!("журнал: {}", journal.path().display());
+            ));
+            i18n::say(format!("журнал: {}", journal.path().display()));
             Ok(ExitCode::SUCCESS)
         }
         Err(e) => {
-            println!("активация прервана: {e}");
+            i18n::say(format!("активация прервана: {e}"));
             if let Some(hint) = e.hint() {
-                println!("  подсказка: {hint}");
+                i18n::say(format!("  подсказка: {hint}"));
             }
-            println!("журнал: {}", journal.path().display());
+            i18n::say(format!("журнал: {}", journal.path().display()));
             Ok(ExitCode::FAILURE)
         }
     }
@@ -1224,22 +1240,22 @@ fn run_device(cmd: DeviceCmd) -> cockpit_core::Result<ExitCode> {
             let client = Adb::new(runner, addr.clone());
             println!("adb: {adb}");
             match client.connect(&addr) {
-                Ok(()) => println!("подключение: ok"),
-                Err(e) => println!("подключение: ошибка ({e})"),
+                Ok(()) => i18n::say("подключение: ok"),
+                Err(e) => i18n::say(format!("подключение: ошибка ({e})")),
             }
             match client.devices() {
-                Ok(list) if list.is_empty() => println!("устройств не видно"),
-                Ok(list) => println!("устройства: {}", list.join(", ")),
+                Ok(list) if list.is_empty() => i18n::say("устройств не видно"),
+                Ok(list) => i18n::say(format!("устройства: {}", list.join(", "))),
                 Err(e) => println!("adb devices: {e}"),
             }
             match client.kernel() {
-                Ok(k) => println!("ядро: {k}"),
-                Err(e) => println!("ядро: {e}"),
+                Ok(k) => i18n::say(format!("ядро: {k}")),
+                Err(e) => i18n::say(format!("ядро: {e}")),
             }
             match client.is_root() {
-                Ok(true) => println!("доступ: root"),
-                Ok(false) => println!("доступ: без root"),
-                Err(e) => println!("доступ: {e}"),
+                Ok(true) => i18n::say("доступ: root"),
+                Ok(false) => i18n::say("доступ: без root"),
+                Err(e) => i18n::say(format!("доступ: {e}")),
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -1248,7 +1264,7 @@ fn run_device(cmd: DeviceCmd) -> cockpit_core::Result<ExitCode> {
             match client.devices() {
                 Ok(list) => {
                     if list.is_empty() {
-                        println!("устройств не видно");
+                        i18n::say("устройств не видно");
                     }
                     for d in list {
                         println!("{d}");
@@ -1267,7 +1283,7 @@ fn run_telemetry(cfg: &Config, cmd: TelemetryCmd) -> cockpit_core::Result<ExitCo
     let mut consent = Consent::load(cfg.data_dir());
     match cmd {
         TelemetryCmd::Status => {
-            println!(
+            i18n::say(format!(
                 "телеметрия: {} (политика v{})",
                 if consent.enabled {
                     "включена"
@@ -1275,26 +1291,26 @@ fn run_telemetry(cfg: &Config, cmd: TelemetryCmd) -> cockpit_core::Result<ExitCo
                     "выключена"
                 },
                 consent.policy_version
-            );
+            ));
             if let Some(at) = &consent.granted_at {
-                println!("  согласие дано: {at}");
+                i18n::say(format!("  согласие дано: {at}"));
             }
-            println!("  пишем: время, хост, метод, путь без query, размеры, SHA-256 тел");
-            println!("  не пишем: тела, токены, device_id, SSID, пароли");
+            i18n::say("  пишем: время, хост, метод, путь без query, размеры, SHA-256 тел");
+            i18n::say("  не пишем: тела, токены, device_id, SSID, пароли");
         }
         TelemetryCmd::Enable => {
             consent.enable(&now_stamp());
             consent
                 .save(cfg.data_dir())
                 .map_err(|e| CockpitError::Internal(e.to_string()))?;
-            println!("телеметрия включена; отключить: cockpit telemetry disable");
+            i18n::say("телеметрия включена; отключить: cockpit telemetry disable");
         }
         TelemetryCmd::Disable => {
             consent.disable();
             consent
                 .save(cfg.data_dir())
                 .map_err(|e| CockpitError::Internal(e.to_string()))?;
-            println!("телеметрия выключена");
+            i18n::say("телеметрия выключена");
         }
     }
     Ok(ExitCode::SUCCESS)
@@ -1304,8 +1320,8 @@ fn run_capture(cfg: &Config, cmd: CaptureCmd) -> cockpit_core::Result<ExitCode> 
     use cockpit_capture::consent::Consent;
 
     if !Consent::load(cfg.data_dir()).enabled {
-        println!("сбор метаданных выключен.");
-        println!("  включить: cockpit telemetry enable");
+        i18n::say("сбор метаданных выключен.");
+        i18n::say("  включить: cockpit telemetry enable");
         return Ok(ExitCode::SUCCESS);
     }
 
@@ -1316,7 +1332,7 @@ fn run_capture(cfg: &Config, cmd: CaptureCmd) -> cockpit_core::Result<ExitCode> 
             let samples = cap
                 .read_all()
                 .map_err(|e| CockpitError::Internal(e.to_string()))?;
-            println!("записей: {}", samples.len());
+            i18n::say(format!("записей: {}", samples.len()));
             for (host, count) in cockpit_capture::summary_by_host(&samples) {
                 println!("  {host}: {count}");
             }
@@ -1338,7 +1354,7 @@ fn run_ble(cmd: BleCmd) -> cockpit_core::Result<ExitCode> {
                 match cockpit_net::ble_gatt::describe(&address) {
                     Ok(list) => {
                         for service in list {
-                            println!("сервис {}", service.uuid);
+                            i18n::say(format!("сервис {}", service.uuid));
                             for c in service.characteristics {
                                 let mut props = Vec::new();
                                 if c.readable {
@@ -1354,13 +1370,13 @@ fn run_ble(cmd: BleCmd) -> cockpit_core::Result<ExitCode> {
                             }
                         }
                     }
-                    Err(e) => println!("не удалось: {e}"),
+                    Err(e) => i18n::say(format!("не удалось: {e}")),
                 }
             }
             #[cfg(not(windows))]
             {
                 let _ = address;
-                println!("GATT реализован для Windows");
+                i18n::say("GATT реализован для Windows");
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -1377,15 +1393,15 @@ fn run_ble(cmd: BleCmd) -> cockpit_core::Result<ExitCode> {
                             "hex: {}",
                             bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
                         );
-                        println!("текст: {}", String::from_utf8_lossy(&bytes));
+                        i18n::say(format!("текст: {}", String::from_utf8_lossy(&bytes)));
                     }
-                    Err(e) => println!("не удалось: {e}"),
+                    Err(e) => i18n::say(format!("не удалось: {e}")),
                 }
             }
             #[cfg(not(windows))]
             {
                 let _ = (address, service, char);
-                println!("GATT реализован для Windows");
+                i18n::say("GATT реализован для Windows");
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -1402,14 +1418,14 @@ fn run_ble(cmd: BleCmd) -> cockpit_core::Result<ExitCode> {
                     .filter_map(|i| u8::from_str_radix(&hex[i..(i + 2).min(hex.len())], 16).ok())
                     .collect();
                 match cockpit_net::ble_gatt::write(&address, &service, &char, &data) {
-                    Ok(()) => println!("записано {} байт", data.len()),
-                    Err(e) => println!("не удалось: {e}"),
+                    Ok(()) => i18n::say(format!("записано {} байт", data.len())),
+                    Err(e) => i18n::say(format!("не удалось: {e}")),
                 }
             }
             #[cfg(not(windows))]
             {
                 let _ = (address, service, char, hex);
-                println!("GATT реализован для Windows");
+                i18n::say("GATT реализован для Windows");
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -1424,7 +1440,7 @@ fn run_ble(cmd: BleCmd) -> cockpit_core::Result<ExitCode> {
                 match cockpit_net::ble_gatt::notify(&address, &service, &char, seconds) {
                     Ok(list) => {
                         if list.is_empty() {
-                            println!("уведомлений не было");
+                            i18n::say("уведомлений не было");
                         }
                         for bytes in list {
                             println!(
@@ -1433,13 +1449,13 @@ fn run_ble(cmd: BleCmd) -> cockpit_core::Result<ExitCode> {
                             );
                         }
                     }
-                    Err(e) => println!("не удалось: {e}"),
+                    Err(e) => i18n::say(format!("не удалось: {e}")),
                 }
             }
             #[cfg(not(windows))]
             {
                 let _ = (address, service, char, seconds);
-                println!("GATT реализован для Windows");
+                i18n::say("GATT реализован для Windows");
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -1449,19 +1465,19 @@ fn run_ble(cmd: BleCmd) -> cockpit_core::Result<ExitCode> {
                 match cockpit_net::ble::scan(seconds) {
                     Ok(devices) => {
                         if devices.is_empty() {
-                            println!("ничего не найдено");
+                            i18n::say("ничего не найдено");
                         }
                         for device in devices {
                             println!("{}", device.describe());
                         }
                     }
-                    Err(e) => println!("не удалось: {e}"),
+                    Err(e) => i18n::say(format!("не удалось: {e}")),
                 }
             }
             #[cfg(not(windows))]
             {
                 let _ = seconds;
-                println!("поиск по Bluetooth реализован для Windows");
+                i18n::say("поиск по Bluetooth реализован для Windows");
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -1500,7 +1516,7 @@ fn run_module_cmd(cmd: ModuleCmd) -> cockpit_core::Result<ExitCode> {
                     Ok(ExitCode::SUCCESS)
                 }
                 Err(e) => {
-                    println!("ошибка: {e}");
+                    i18n::say(format!("ошибка: {e}"));
                     Ok(ExitCode::FAILURE)
                 }
             }
@@ -1525,11 +1541,11 @@ fn run_pair(cmd: PairCmd) -> cockpit_core::Result<ExitCode> {
                 ..Credentials::new(ssid, password)
             };
             let frame = cockpit_pairing::build_frame(&creds).map_err(fail)?;
-            println!(
+            i18n::say(format!(
                 "кадр ({} Б): {}",
                 frame.len(),
                 frame.iter().map(|b| format!("{b:02x}")).collect::<String>()
-            );
+            ));
             Ok(ExitCode::SUCCESS)
         }
         PairCmd::Sound {
@@ -1556,24 +1572,24 @@ fn run_pair(cmd: PairCmd) -> cockpit_core::Result<ExitCode> {
             cockpit_pairing::save_wav(&out, &creds, gain, 0, 0, tone_params, preroll)
                 .map_err(fail)?;
             let size = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
-            println!("файл: {} ({size} Б)", out.display());
-            println!(
+            i18n::say(format!("файл: {} ({size} Б)", out.display()));
+            i18n::say(format!(
                 "громкость: {gain}, профиль: {} ({}/{}), предстарт: {preroll}",
                 tones, tone_params.base, tone_params.step
-            );
+            ));
 
             if no_play {
                 return Ok(ExitCode::SUCCESS);
             }
 
             for i in 1..=repeat.max(1) {
-                println!("проигрывание {i}/{repeat}");
+                i18n::say(format!("проигрывание {i}/{repeat}"));
                 cockpit_pairing::play(&out).map_err(fail)?;
                 if i < repeat {
                     std::thread::sleep(Duration::from_secs_f64(gap.max(0.0)));
                 }
             }
-            println!("готово");
+            i18n::say("готово");
             Ok(ExitCode::SUCCESS)
         }
     }
@@ -1599,10 +1615,10 @@ fn load_cert_pool(
         if chain.exists() && key.exists() {
             match FixedCert::load(&chain, &key) {
                 Ok(fixed) => {
-                    println!("готовый сертификат: {}", fixed.name);
+                    i18n::say(format!("готовый сертификат: {}", fixed.name));
                     cas.push(PoolEntry::Fixed(fixed));
                 }
-                Err(e) => println!("{} пропущен: {e}", chain.display()),
+                Err(e) => i18n::say(format!("{} пропущен: {e}", chain.display())),
             }
             continue;
         }
@@ -1612,14 +1628,14 @@ fn load_cert_pool(
                 Ok(ca) => cas.push(PoolEntry::Dynamic(
                     ca.with_name(path.file_stem().and_then(|s| s.to_str()).unwrap_or("ca")),
                 )),
-                Err(e) => println!("CA {} пропущен: {e}", path.display()),
+                Err(e) => i18n::say(format!("CA {} пропущен: {e}", path.display())),
             }
             continue;
         }
 
         match CertAuthority::load_or_create(&ca_key_path()) {
             Ok(ca) => cas.push(PoolEntry::Dynamic(ca)),
-            Err(e) => println!("CA наш не загрузился: {e}"),
+            Err(e) => i18n::say(format!("CA наш не загрузился: {e}")),
         }
     }
 
@@ -1630,7 +1646,10 @@ fn load_cert_pool(
         ));
     }
     if cas.len() > 1 {
-        println!("сертификатов в пуле: {} (перебор при отказе)", cas.len());
+        i18n::say(format!(
+            "сертификатов в пуле: {} (перебор при отказе)",
+            cas.len()
+        ));
     }
     Ok(CertPool::new(cas))
 }
@@ -1653,20 +1672,20 @@ fn run_ota(cmd: OtaCmd) -> cockpit_core::Result<ExitCode> {
                 .map_err(|e| CockpitError::Config(format!("{}: {e}", manifest.display())))?;
             match check(&m, &platform, &current).map_err(|e| CockpitError::Config(e.to_string()))? {
                 cockpit_ota::Verdict::UpToDate { current } => {
-                    println!("актуально: {current}");
+                    i18n::say(format!("актуально: {current}"));
                 }
                 cockpit_ota::Verdict::Update {
                     current,
                     entry,
                     newer,
                 } => {
-                    println!("текущая: {current}");
-                    println!(
+                    i18n::say(format!("текущая: {current}"));
+                    i18n::say(format!(
                         "в манифесте: {} (critical={}, updateId={:?})",
                         entry.version, entry.critical, entry.update_id
-                    );
+                    ));
                     if !newer {
-                        println!("внимание: манифест не новее текущей версии");
+                        i18n::say("внимание: манифест не новее текущей версии");
                     }
                 }
             }
@@ -1689,11 +1708,11 @@ fn run_ota(cmd: OtaCmd) -> cockpit_core::Result<ExitCode> {
 
             let prov = fetch(entry, &platform, &store, &CurlFetcher)
                 .map_err(|e| CockpitError::Config(e.to_string()))?;
-            println!("скачано: {}", prov.file);
-            println!(
+            i18n::say(format!("скачано: {}", prov.file));
+            i18n::say(format!(
                 "  размер {}, crc32 {:08x}, sha256 {}",
                 prov.size, prov.crc32, prov.sha256
-            );
+            ));
             Ok(ExitCode::SUCCESS)
         }
         OtaCmd::Import {
@@ -1716,12 +1735,12 @@ fn run_ota(cmd: OtaCmd) -> cockpit_core::Result<ExitCode> {
 
             match cockpit_ota::import_file(&platform, &version, &file, &store, known.as_ref()) {
                 Ok(p) => {
-                    println!("импортировано: {}", p.file);
+                    i18n::say(format!("импортировано: {}", p.file));
                     println!("  crc32 {:08x}, sha256 {}", p.crc32, p.sha256);
                     Ok(ExitCode::SUCCESS)
                 }
                 Err(e) => {
-                    println!("импорт отклонён: {e}");
+                    i18n::say(format!("импорт отклонён: {e}"));
                     Ok(ExitCode::FAILURE)
                 }
             }
@@ -1743,10 +1762,10 @@ fn run_ota(cmd: OtaCmd) -> cockpit_core::Result<ExitCode> {
                 match cockpit_ota::fetch(entry, &platform, &store, &cockpit_ota::CurlFetcher) {
                     Ok(p) => {
                         ok += 1;
-                        println!(
+                        i18n::say(format!(
                             "ok   {} · {} байт · crc32 {:08x}",
                             p.version, p.size, p.crc32
-                        );
+                        ));
                     }
                     Err(e) => {
                         failed += 1;
@@ -1754,7 +1773,7 @@ fn run_ota(cmd: OtaCmd) -> cockpit_core::Result<ExitCode> {
                     }
                 }
             }
-            println!("итого: скачано {ok}, ошибок {failed}");
+            i18n::say(format!("итого: скачано {ok}, ошибок {failed}"));
             Ok(if failed == 0 {
                 ExitCode::SUCCESS
             } else {
@@ -1783,7 +1802,9 @@ fn run_ota(cmd: OtaCmd) -> cockpit_core::Result<ExitCode> {
             };
             reg.add(&obs)
                 .map_err(|e| CockpitError::Config(e.to_string()))?;
-            println!("наблюдение записано: {platform} {version} (crc32 {crc32:08x})");
+            i18n::say(format!(
+                "наблюдение записано: {platform} {version} (crc32 {crc32:08x})"
+            ));
             Ok(ExitCode::SUCCESS)
         }
         OtaCmd::Observed { registry } => {
@@ -1793,13 +1814,13 @@ fn run_ota(cmd: OtaCmd) -> cockpit_core::Result<ExitCode> {
                 .read_all()
                 .map_err(|e| CockpitError::Config(e.to_string()))?;
             if all.is_empty() {
-                println!("наблюдений нет: {}", registry.display());
+                i18n::say(format!("наблюдений нет: {}", registry.display()));
             }
             for o in all {
-                println!(
+                i18n::say(format!(
                     "{} {} · {} байт · crc32 {:08x} · adb={} · {}",
                     o.platform, o.version, o.size, o.crc32, o.adb, o.seen_at
-                );
+                ));
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -1811,17 +1832,17 @@ fn run_ota(cmd: OtaCmd) -> cockpit_core::Result<ExitCode> {
                 None => base.firmwares.iter().collect(),
             };
             if items.is_empty() {
-                println!("в базе нет записей");
+                i18n::say("в базе нет записей");
             }
             for f in items {
-                println!(
+                i18n::say(format!(
                     "{} {} · {} МБ · adb={} · {}",
                     f.platform,
                     f.version,
                     f.size / 1_048_576,
                     f.adb,
                     f.sha256.get(..12).unwrap_or("")
-                );
+                ));
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -1838,11 +1859,11 @@ fn run_ota(cmd: OtaCmd) -> cockpit_core::Result<ExitCode> {
                 .ok_or_else(|| CockpitError::Config(format!("в базе нет {platform} {version}")))?;
             match cockpit_ota::verify_file(&file, entry) {
                 Ok(()) => {
-                    println!("файл совпадает с базой: {}", file.display());
+                    i18n::say(format!("файл совпадает с базой: {}", file.display()));
                     Ok(ExitCode::SUCCESS)
                 }
                 Err(e) => {
-                    println!("файл НЕ совпадает: {e}");
+                    i18n::say(format!("файл НЕ совпадает: {e}"));
                     Ok(ExitCode::FAILURE)
                 }
             }
@@ -1850,13 +1871,13 @@ fn run_ota(cmd: OtaCmd) -> cockpit_core::Result<ExitCode> {
         OtaCmd::List { store } => {
             let items = list_store(&store).map_err(|e| CockpitError::Config(e.to_string()))?;
             if items.is_empty() {
-                println!("хранилище пусто: {}", store.display());
+                i18n::say(format!("хранилище пусто: {}", store.display()));
             }
             for p in items {
-                println!(
+                i18n::say(format!(
                     "{} {} · {} байт · crc32 {:08x} · {}",
                     p.platform, p.version, p.size, p.crc32, p.fetched_at
-                );
+                ));
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -1888,7 +1909,7 @@ fn run_tls(
         }
         std::fs::write(path, ca.ca_pem())
             .map_err(|e| CockpitError::Internal(format!("{}: {e}", path.display())))?;
-        println!("корневой CA: {}", path.display());
+        i18n::say(format!("корневой CA: {}", path.display()));
     }
 
     let server = if forward {
@@ -1898,7 +1919,7 @@ fn run_tls(
         TlsInterceptor::start(addr, ca)
     }
     .map_err(|e| CockpitError::Internal(format!("TLS {addr}: {e}")))?;
-    println!(
+    i18n::say(format!(
         "TLS слушает {} ({})",
         server.addr(),
         if forward {
@@ -1906,7 +1927,7 @@ fn run_tls(
         } else {
             "сертификат по SNI, заглушка"
         }
-    );
+    ));
     println!(
         "проверка: curl --cacert <CA.pem> https://example.com:{}/",
         server.addr().port()
@@ -1935,8 +1956,8 @@ fn run_dns(bind: &str, answer: &str, seconds: u64) -> cockpit_core::Result<ExitC
 
     let server = cockpit_intercept::DnsServer::start(cockpit_intercept::DnsConfig::new(addr, ip))
         .map_err(|e| CockpitError::Internal(format!("DNS {addr}: {e}")))?;
-    println!("DNS слушает {} → A {ip}", server.addr());
-    println!("проверка: nslookup example.com {}", server.addr());
+    i18n::say(format!("DNS слушает {} → A {ip}", server.addr()));
+    i18n::say(format!("проверка: nslookup example.com {}", server.addr()));
 
     if seconds == 0 {
         loop {
