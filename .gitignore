@@ -15,3 +15,6 @@ ui*.xml
 ui_text*.txt
 sniff.*
 *.done
+
+__pycache__/
+*.pyc
