@@ -318,10 +318,16 @@ def collect_page():
 def main():
     found = collect()
     old = {}
+    old_doc = {}
     if OUT.exists():
-        old = json.loads(io.open(OUT, encoding="utf-8").read()).get("en", {})
+        old_doc = json.loads(io.open(OUT, encoding="utf-8").read())
+        old = old_doc.get("en", {})
     merged = {k: old.get(k, "") for k in sorted(found)}
+    # Ручные шаблоны (то, что страница склеивает из кусков) не теряем.
+    manual = old_doc.get("manual", {}) if old_doc else {}
+    merged.update(manual)
     data = {
+        "manual": old_doc.get("manual", {}),
         "_comment": (
             "Все системные сообщения. Ключ — русский текст из кода "
             "(динамические части: {0}, {1}), значение — английский. "

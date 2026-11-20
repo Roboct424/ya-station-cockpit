@@ -104,7 +104,12 @@ fn dict() -> &'static Dict {
         let mut exact = std::collections::HashMap::new();
         let mut patterns = Vec::new();
         if let Ok(root) = serde_json::from_str::<serde_json::Value>(FILE) {
-            if let Some(map) = root.get("en").and_then(|v| v.as_object()) {
+            // "en" — сообщения из кода, "manual" — шаблоны, которые страница
+            // склеивает из кусков (их сборщик не находит).
+            for table in ["en", "manual"] {
+                let Some(map) = root.get(table).and_then(|v| v.as_object()) else {
+                    continue;
+                };
                 for (ru, value) in map {
                     let Some(en) = value.as_str() else { continue };
                     // Отступы — форматирование, а не текст: сравниваем по сути.
