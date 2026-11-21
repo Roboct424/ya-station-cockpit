@@ -815,3 +815,68 @@ http=200 size=577
   `quasar` отвечает локально, наружу не уходит ни один запрос.
   Для прежнего поведения — `hub serve --online`.
 * Сценарий `activate` больше не форвардит незахваченные запросы.
+
+
+## 2026-11-21 - Реверс локального протокола настройки Хаба (AP HTTP)
+
+* Найден и проверен протокол `firstrund`:
+  `GET /info` -> `crypto_key` (RSA-2048), `mac`, `uuid`, `version`;
+  `GET /get_last_error`, `GET /ssid`, `POST /pause_access_point`;
+  `POST /connect` = `ssid` + `password` + `xtoken_code`.
+* `password` и `xtoken_code` - base64 от RSA/PKCS1 (ключ из `/info`).
+  OAEP Хаб не принимает.
+* Токен Яндекса не нужен: `xtoken_code` можно зашифровать из произвольной
+  строки; Хаб расшифровал `probe` и перешёл к подключению Wi-Fi.
+* Проверено на Хабе: запрос принят, пароль расшифрован, состояние
+  `connecting_to_network`; не хватило только 2.4-ГГц точки (телефонный
+  хот-спот был 5 ГГц -> `WIFI_SSID_NOT_FOUND`).
+* Инструменты: `tools/hubsniff` (pcap), `tools/hubhttp` (ловушка 8080),
+  `tools/hubpost` (шифрование + POST), `tools/kmrelay` (перехват Keymaster).
+* Побочное: `kill -9` в момент тона подвешивает PWM-пищалку - лечится
+  перезагрузкой; не убивать `maind` во время звука.
+
+
+## 2026-11-21 - BLE/звук и границы оффлайн-разблокировки
+
+* Попытка достать x-token из приложения: `run-as` и backup заблокированы,
+  приложение не debuggable.
+* Запись звукового сопряжения: сигнал есть (старт 6192/5120 на ~9.2 с),
+  но это многоголосый протокол, отличный от `cockpit-pairing`; декодер
+  не подошёл (G-065).
+* BLE-креды шифруются отдельно (`M != M2`), ключ не равен `/info` RSA.
+* Проводной режим в прошивке есть: `ConnectionType.ETHERNET`,
+  `EthernetStatus`, `SetupEndpoint.MissingWifiCredentials`,
+  `activation_no_network_in_ethernet.wav`.
+* Итог: оффлайн-настройка Wi-Fi - через AP HTTP (G-064); оффлайн-рут -
+  через свой backend (проверено ранее); BLE/звук - отдельная задача.
+
+## 2026-11-21 - Полный оффлайн-рут (без телефона и интернета)
+
+* Исправлен DHCP: один сокет :67 вместо двух (G-066).
+* Хаб перезагружен, получил 192.168.137.234 от нашего DHCP, DNS оффлайн,
+  TLS до локального quasar, `/get_sync_info` -> adbd.
+* В логе Хаба: `Set network flag for adb` и `Activate adb by quasmodrom
+  config`, `uid=0(root)`; маркер создан заново.
+* Изоляция: `unreachable` маршруты на Хабе + forwarding Disabled на
+  ноутбуке; `8.8.8.8` -> No route, `quasar.yandex.ru` -> alias.
+* USB: устройство `VID_18D1&PID_4E40` видно, но драйвера нет; не нужно.
+* BLE/звук по-прежнему отдельные схемы (G-065).
+
+## 2026-11-21 - station_pairing 1.2.0: предстарт, Linux без portaudio, Android с Wi-Fi AP
+
+* «Предстарт (0–4)» во всех версиях: `build_tones/make_wav`, CLI
+  (`pair_by_sound`, `provision`, `station_pairing sound`), обе Tkinter-вьюхи,
+  веб-версия и Android. N повторов преамбулы = +160 мс каждый, лишние
+  безвредны.
+* Звук больше не требует `sounddevice`: Windows - `winsound`, Linux -
+  `paplay/aplay/ffplay`, macOS - `afplay`; `sounddevice` остался запасным
+  путём и для выбора устройства. Из `.deb` убран `python3-sounddevice`,
+  CI больше не ставит PortAudio.
+* Linux-бинарники пересобраны в WSL (33 МБ, Python 3.14), проверены:
+  `version` -> 1.2.0, `sound --dry-run --preroll 3` -> 122 тона.
+* Android: вкладка «Wi-Fi (AP)» + разрешение `INTERNET`; мост JSONP,
+  RSA/PKCS#1 на `BigInt` в JS (G-068). APK 21 КБ, подпись v1+v2,
+  `versionCode 3 / 1.2`.
+* Пакеты: `ya-station-wifi-pairing_1.2.0_all.deb`,
+  `ya-station-wifi-pairing-1.2.0.tar.gz` (`packaging/build_tar.py`),
+  Windows exe пересобраны.

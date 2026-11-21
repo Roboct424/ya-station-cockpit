@@ -658,3 +658,144 @@ ICS-DNS возвращает первым IPv6-адрес (`2a02:6b8::…`), а 
 «через облако»; `hub serve` без `--online` отвечает пустым DNS-ответом и не
 делает ни одного внешнего запроса. Проверка: в журнале «оффлайн, наружу
 ничего не уходит».
+
+
+## G-064 - Протокол локальной настройки Хаба: токен Яндекса не нужен
+
+**Симптом.** `POST /connect` на `192.168.43.1:8080` отвечает
+`Keymaster error: KEYMASTER_ERROR. Text: Keymaster TA error -1000`
+на любые значения `xtoken_code`.
+
+**Причина.** В `/connect` приходят два независимых поля, и **оба**
+шифруются RSA/PKCS1 публичным ключом из `GET /info` (`crypto_key`)
+и кодируются в base64:
+- `password` - пароль Wi-Fi;
+- `xtoken_code` - код x-token из Паспорта.
+Хаб base64-декодирует каждое поле и отдаёт байты в Keymaster (RSA decrypt).
+Если отправить пароль открытым текстом, он декодируется как base64
+(`hubtest123` -> 7 байт `86 e6 ed 7a cb 75 db`) и Keymaster отвергает.
+OAEP не поддерживается - только PKCS1 v1.5.
+
+**Решение/обход.** Токен Яндекса не обязателен: содержимое `xtoken_code`
+не проверяется на этапе Wi-Fi. Достаточно зашифровать любую строку
+(например, `probe`) ключом из `/info`, а пароль зашифровать по-настоящему.
+Запрос:
+
+```json
+{"ssid":"<2.4 ГГц SSID>","password":"<base64(RSA_PKCS1(пароль))>","xtoken_code":"<base64(RSA_PKCS1(любая строка))>"}
+```
+
+Хаб расшифровывает, переходит в `connecting_to_network` и подключается
+к Wi-Fi. Ограничение: радио Хаба только 2.4 ГГц; на 5 ГГц ответ
+`WIFI_SSID_NOT_FOUND` (error_code 1).
+
+**Как поймать окно.** `StartSetup`...`FinishSetup` живёт ~10 с (иногда ~2 с),
+порт 8080 слушает уже через ~1.5 с. Службы поднимать так:
+
+```
+setsid /system/vendor/quasar/quasar_launcher2 /system/vendor/quasar/launch.json
+```
+
+Без `setsid` процесс умирает вместе с adb-сессией. После `FinishSetup`
+launcher завершается - это нормально для незарегистрированного Хаба.
+
+**Формат Keymaster (для отладки).** unix-сокет `/dev/keymaster_svc`:
+`42 fa 85 1f` + длина BE + protobuf `Request`.
+- `1a 00` - ExportKey (show-key), ответ - публичный ключ;
+- `12 <len> 0a <len> <ciphertext>` - DecryptRequest,
+  ответ `1a <len> 0a <len> <plaintext>`;
+- `0a <len> 0a <len> <payload>` - SignRequest (Хаб подписывает
+  `device_id=...&version=...&platform=saturn`).
+
+Для перехвата сокет переименовывается в `/dev/keymaster_svc.real`, а на
+исходный путь встаёт релей. **Не удалять `.real`**: без него Keymaster
+недоступен и службы Хаба падают; лечится перезапуском `keymaster_svc`.
+
+
+## G-065 - BLE и звук: отдельные схемы, не RSA из /info
+
+**Симптом.** Хочется обойти настройку через BLE/звук так же, как через AP HTTP.
+
+**Что выяснено.**
+- BLE-креды шифруются отдельно: `decryptBleCredentials`,
+  `BleEndpoint.IncompleteEncryptedSetupCredentials`,
+  `Cannot decrypt ble credentials. M != M2`. Это не RSA-ключ из `/info`;
+  проверяется MAC зашифрованного блоба. Ключ/секрет не выводится из
+  публичного ключа устройства.
+- Приложение 26.18.0 играет звук по **другому** протоколу, чем
+  `cockpit-pairing`: в записи видны несколько одновременных тонов
+  (спектр 9-12 с), а не один тон на символ. Декодер из `crates/pairing`
+  к нему не подходит.
+- Данные приложения на телефоне недоступны без рута:
+  `run-as` -> "package not debuggable", `adb backup` -> 0 байт,
+  флага ALLOW_BACKUP нет.
+- `SetupSource` в прошивке: SOUND, BLE. Проводной режим (Ethernet) -
+  это отсутствие Wi-Fi-кредов в setup-сообщении, а не отдельный транспорт
+  (`SetupEndpoint.MissingWifiCredentials`, `ConnectionType.ETHERNET`).
+
+**Вывод.** Для оффлайн-настройки практичен только AP HTTP путь (G-064).
+BLE/звук требуют либо эмуляции периферии и разбора их шифрования, либо
+рута на телефоне. Для рутованного Хаба проще писать конфиги напрямую.
+
+## G-066 - Windows DHCP: два bind на :67 ломают приём broadcast
+
+**Симптом.** После перезагрузки Хаб не получает адрес по DHCP, уходит в
+`169.254.x.x`; в логе стека нет ни одной строки `DHCP:`.
+
+**Причина.** `dhcp_loop` биндил два сокета на порт 67: `0.0.0.0:67` и
+`192.168.137.1:67` (оба с `SO_REUSEADDR`). На Windows второй bind
+перехватывает broadcast, и сервер не видит DISCOVER. Локальный тест
+DISCOVER тоже не получал ответа.
+
+**Решение.** Один сокет `0.0.0.0:67`; ответы уходят с него же (источник
+выбирается маршрутом — 192.168.137.1). Локальный DISCOVER сразу получает
+`yiaddr 192.168.137.234`.
+
+**Проверено.** Полный оффлайн-рут: DHCP -> оффлайн-DNS (A -> alias,
+AAAA пустой) -> SNTP -> TLS `/get_sync_info` (adbd) -> маркер
+`/data/quasar_activate_network_adb` -> `adbd`, `uid=0(root)`.
+Изоляция: на Хабе `unreachable 0.0.0.0/1` и `128.0.0.0/1`, на ноутбуке
+Ethernet forwarding = Disabled; `ping 8.8.8.8` -> `No route to host`,
+`quasar.yandex.ru` -> 213.180.193.78.
+
+**USB.** Windows видит `Yandex-Hub` `VID_18D1&PID_4E40` (похоже на
+ADB-гаджет), но без драйвера/интерфейса; сетевой ADB работает без него.
+
+## G-067 - rustls-quasar получает от Хаба DecodeError; рабочий путь - OpenSSL
+
+**Симптом.** Хаб подключается к встроенному `quasar` стека (rustls) на 443,
+но в логе: `received fatal alert: DecodeError`, `/get_sync_info` не проходит.
+
+**Причина.** Рукопожатие rustls не устраивает TLS-стек Хаба (TLS 1.2,
+p384-цепочка); точная причина не локализована.
+
+**Обход.** Запускать `cockpit hub serve --no-quasar` (DNS/DHCP/SNTP), а на
+443 - проверенный `data/probe/quasar/fake-quasar.py` (OpenSSL, TLS 1.2,
+`quasar-chain.pem` + `quasar-leaf.key`). С ним `/get_sync_info` отдаётся,
+маркер ADB создаётся, `adbd` поднимается.
+
+**Проверено.** Полный оффлайн-рут 21.11.2026: DHCP -> DNS -> OpenSSL
+quasar -> `adbd`, `uid=0(root)`.
+
+## G-068 - android.jar из Maven = stub API 16: нет org.json, javax.crypto, @JavascriptInterface
+
+**Симптом.** `ecj` падает на `The import org.json cannot be resolved`,
+`javax.crypto cannot be resolved`, `JavascriptInterface cannot be resolved`;
+`aapt2` не знает `android:usesCleartextTraffic` (атрибут API 23).
+
+**Причина.** `com.google.android:android:4.1.1.4` (то, что тянет
+`android/fetch_tools.py`) - урезанный stub, а не полный framework.
+Скачивать полный `android-all` с Maven не обязательно.
+
+**Решение (APK без SDK/Gradle).**
+* Java-мост умеет только HTTP (`HttpURLConnection`) и отдаёт сырой текст;
+* RSA/PKCS#1 v1.5 и JSON считает сам HTML на `BigInt` (`rsaEncrypt()`);
+* передача из `file://` в WebView - JSONP:
+  `<script src="https://local.yandex/http?...&cb=...">`, перехват в
+  `WebViewClient.shouldInterceptRequest` (у `<script>` нет CORS);
+* `minSdk 17`, `targetSdkVersion 27` (cleartext разрешён, v2-подпись есть);
+* `android.jar` остаётся только для `aapt2` и как classpath-заглушка.
+
+**Проверено.** APK 1.2 (`com.rig.soundcode`, 21 КБ): вкладка «Wi-Fi (AP)»,
+`/info` + RSA/PKCS#1, подпись v1+v2; RSA сверен с Python
+(`PKCS1v15` -> исходный UTF-8).
