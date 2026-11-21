@@ -26,6 +26,18 @@ cargo run -- run examples/demo.yaml --var ssid=MyWiFi
 cargo run -- journal tail           # что произошло
 ```
 
+### Запуск панели
+
+Двойной клик по **`cockpit.cmd`** в папке проекта:
+
+- запросит права администратора (UAC);
+- запустит `bin\cockpit.exe ui --port 8790`;
+- откроет <http://127.0.0.1:8790>.
+
+Если панель уже работает, скрипт просто откроет вкладку. Журналы и данные —
+в `data/` рядом. `bin/cockpit.exe` — текущая сборка (пересобрать:
+`cargo build --release --bin cockpit`, затем скопировать в `bin/`).
+
 ### Команды
 
 | Команда | Назначение |
@@ -135,6 +147,18 @@ cargo run -- run selfcheck
 cargo run -- run examples/demo.yaml --var ssid=MyWiFi
 cargo run -- journal tail
 ```
+
+### Running the panel
+
+Double-click **`cockpit.cmd`** in the project folder:
+
+- it asks for administrator rights (UAC);
+- starts `bin\cockpit.exe ui --port 8790`;
+- opens <http://127.0.0.1:8790>.
+
+If the panel is already running, the script just opens the tab. Logs and data
+live in `data/`. `bin/cockpit.exe` is the current build (rebuild with
+`cargo build --release --bin cockpit`, then copy it to `bin/`).
 
 ### Commands
 

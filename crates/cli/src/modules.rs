@@ -164,11 +164,32 @@ pub fn find_station() -> Option<String> {
             .or_insert_with(|| ip.to_string());
     }
 
-    // 1) Устройство Яндекса по OUI — самый надёжный признак.
-    if let Some((_, ip)) = by_mac.iter().find(|(mac, ip)| {
-        (mac.starts_with("b8-87-6e") || mac.starts_with("3c-0b-4f"))
-            && ip.starts_with("192.168.137.")
-    }) {
+    // 1) Устройство Яндекса по OUI — самый надёжный признак. У одного MAC
+    // может быть несколько адресов (старый DHCP/ICS): берём тот, который
+    // реально отвечает на ADB/HTTPS/HTTP, а не первый по порядку.
+    fn alive(ip: &str, port: u16) -> bool {
+        use std::net::{SocketAddr, TcpStream};
+        use std::time::Duration;
+        match format!("{ip}:{port}").parse::<SocketAddr>() {
+            Ok(addr) => TcpStream::connect_timeout(&addr, Duration::from_millis(250)).is_ok(),
+            Err(_) => false,
+        }
+    }
+    let mut yandex: Vec<String> = by_mac
+        .iter()
+        .filter(|(mac, ip)| {
+            (mac.starts_with("b8-87-6e") || mac.starts_with("3c-0b-4f"))
+                && ip.starts_with("192.168.137.")
+        })
+        .map(|(_, ip)| ip.clone())
+        .collect();
+    yandex.sort_by_key(|ip| ip_key(ip));
+    for ip in &yandex {
+        if alive(ip, 5555) || alive(ip, 443) || alive(ip, 80) {
+            return Some(ip.clone());
+        }
+    }
+    if let Some(ip) = yandex.first() {
         return Some(ip.clone());
     }
 
