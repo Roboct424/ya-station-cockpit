@@ -860,3 +860,40 @@ quasar -> `adbd`, `uid=0(root)`.
 лог «остальное → блокируется (оффлайн: --forward выключен, в сеть ничего
 не уходит)», `curl -k https://127.0.0.1:18443/unknown` -> 403
 `{"status":"blocked"}`. Ни одного исходящего соединения.
+
+## G-071 - проводной режим Хаба: `/connect` с `wifi_type=4` и пустым SSID
+
+**Симптом.** `POST /connect` с `ssid=""` (и любым `wifi_type`, кроме 4)
+возвращает `{"data":"WIFI_SSID_NOT_FOUND","error_code":1}`.
+
+**Причина.** Первый запуск трактует пустой SSID как имя Wi-Fi. Отдельного
+эндпоинта «Ethernet» нет: приложение в режиме «Проводное соединение»
+шлёт обычный `/connect`, но с `wifi_type = 4` («скрытая сеть»).
+
+**Доказательство (yiod.log Хаба 0.18.1.7, 20:58:39):**
+
+```
+[firstrun] Got credentials with id: a99787f4-...
+[firstrun] Received /connect request
+[firstrun] WifiType is 4
+[firstrun] Backend request: https://quasar.yandex.net/register?... -> 200 {"status":"ok"}
+[firstrun] New Configuration state: CONFIGURED
+[sync] backend request get_sync_info ... -> Config updated ... "adbd":{"network":true}
+[adb_service] Activate adb service. Running command:
+  /system/vendor/quasar/activate_adb.sh --quasmodrom activate --network
+```
+
+А для `WifiType is 3` в тех же логах:
+`Failed to connect to any wifi ssid. Error code: 1. WIFI_SSID_NOT_FOUND`.
+
+**Правило.** Проводной режим = `/connect` с `ssid: ""`,
+`wifi_type: 4`, `password: RSA("")`, `xtoken_code: RSA(token)`.
+Хаб не трогает Wi-Fi, берёт уже поднятый `eth0` и идёт на
+`quasar.yandex.net/register` (наш локальный quasar), затем
+`/get_sync_info` включает `adbd`.
+
+**Проверено.** 21.11.2026 приложение по временной сети `Yandex-Hub`
+перевело Хаб на провод; Хаб запросил `/get_sync_info` у локального
+quasar, открыл 5555, `uid=0(root)`; `ping 8.8.8.8` — 100% потерь.
+Реализовано в `crates/pairing/src/ap.rs`, `tools/ap_wifi.py`,
+`tools/sound_code.html`.

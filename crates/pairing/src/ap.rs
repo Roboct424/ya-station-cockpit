@@ -15,6 +15,7 @@ use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::time::Duration;
 
 use base64::Engine as _;
+use rsa::pkcs1::DecodeRsaPublicKey;
 use rsa::pkcs8::DecodePublicKey;
 use rsa::{Pkcs1v15Encrypt, RsaPublicKey};
 
@@ -46,10 +47,44 @@ pub struct ConnectResult {
     pub raw: serde_json::Value,
 }
 
+/// Разбирает ключ в любом из встречающихся форматов: SPKI PEM, PKCS#1 PEM,
+/// PEM с экранированными `\n`, голый base64 DER.
+fn parse_public_key(text: &str) -> Result<RsaPublicKey, PairingError> {
+    let normalized = text
+        .replace("\\r\\n", "\n")
+        .replace("\\n", "\n")
+        .replace("\r\n", "\n");
+    let trimmed = normalized.trim();
+    if let Ok(key) = RsaPublicKey::from_public_key_pem(trimmed) {
+        return Ok(key);
+    }
+    if let Ok(key) = RsaPublicKey::from_pkcs1_pem(trimmed) {
+        return Ok(key);
+    }
+    let b64: String = trimmed
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("-----"))
+        .collect::<String>()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    if let Ok(der) = base64::engine::general_purpose::STANDARD.decode(&b64) {
+        if let Ok(key) = RsaPublicKey::from_public_key_der(&der) {
+            return Ok(key);
+        }
+        if let Ok(key) = RsaPublicKey::from_pkcs1_der(&der) {
+            return Ok(key);
+        }
+    }
+    let head: String = trimmed.chars().take(48).collect();
+    Err(PairingError::Rsa(format!(
+        "не удалось разобрать ключ из /info (начало: {head:?})"
+    )))
+}
+
 /// Шифрует поле RSA/PKCS#1 v1.5 и кодирует в base64.
 pub fn encrypt_field(public_key_pem: &str, value: &str) -> Result<String, PairingError> {
-    let key = RsaPublicKey::from_public_key_pem(public_key_pem)
-        .map_err(|e| PairingError::Rsa(e.to_string()))?;
+    let key = parse_public_key(public_key_pem)?;
     let mut rng = rand::thread_rng();
     let cipher = key
         .encrypt(&mut rng, Pkcs1v15Encrypt, value.as_bytes())
@@ -58,8 +93,8 @@ pub fn encrypt_field(public_key_pem: &str, value: &str) -> Result<String, Pairin
 }
 
 /// `GET /info`: ключ и идентификаторы устройства.
-pub fn info(base_url: &str) -> Result<ApInfo, PairingError> {
-    let text = request(base_url, "GET", "/info", None)?;
+pub fn info(base_url: &str, bind: Option<IpAddr>) -> Result<ApInfo, PairingError> {
+    let text = request(base_url, "GET", "/info", None, bind)?;
     let raw: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| PairingError::Json(e.to_string()))?;
     let get = |key: &str| -> String {
@@ -86,9 +121,10 @@ pub fn connect(
     base_url: &str,
     creds: &Credentials,
     wired: bool,
+    bind: Option<IpAddr>,
 ) -> Result<ConnectResult, PairingError> {
-    let info = info(base_url)?;
-    connect_with(base_url, &info.crypto_key, creds, wired)
+    let info = info(base_url, bind)?;
+    connect_with(base_url, &info.crypto_key, creds, wired, bind)
 }
 
 /// Полный цикл: `/info`, шифрование, `/connect`.
@@ -96,9 +132,10 @@ pub fn pair(
     base_url: &str,
     creds: &Credentials,
     wired: bool,
+    bind: Option<IpAddr>,
 ) -> Result<(ApInfo, ConnectResult), PairingError> {
-    let info = info(base_url)?;
-    let result = connect_with(base_url, &info.crypto_key, creds, wired)?;
+    let info = info(base_url, bind)?;
+    let result = connect_with(base_url, &info.crypto_key, creds, wired, bind)?;
     Ok((info, result))
 }
 
@@ -107,30 +144,48 @@ fn connect_with(
     crypto_key: &str,
     creds: &Credentials,
     wired: bool,
+    bind: Option<IpAddr>,
 ) -> Result<ConnectResult, PairingError> {
     let token = if creds.token.is_empty() {
         DEFAULT_TOKEN
     } else {
         creds.token.as_str()
     };
+    // Проводной режим — это не отдельный эндпоинт: приложение шлёт
+    // /connect с пустым SSID и wifi_type=4 («скрытая сеть»). Первый запуск
+    // на Хабе видит type=4 и пустой SSID, не ищет Wi-Fi вовсе, а идёт
+    // регистрироваться через уже поднятый eth0 (см. G-071).
     let mut body = serde_json::Map::new();
     body.insert(
         "ssid".to_string(),
-        serde_json::Value::String(if wired { String::new() } else { creds.ssid.clone() }),
+        serde_json::Value::String(if wired {
+            String::new()
+        } else {
+            creds.ssid.clone()
+        }),
     );
-    if !wired {
-        body.insert(
-            "password".to_string(),
-            serde_json::Value::String(encrypt_field(crypto_key, &creds.password)?),
-        );
-    }
+    body.insert(
+        "password".to_string(),
+        serde_json::Value::String(encrypt_field(
+            crypto_key,
+            if wired { "" } else { &creds.password },
+        )?),
+    );
+    body.insert(
+        "wifi_type".to_string(),
+        serde_json::Value::Number(serde_json::Number::from(if wired {
+            4
+        } else {
+            creds.wifi_type as i32
+        })),
+    );
     body.insert(
         "xtoken_code".to_string(),
         serde_json::Value::String(encrypt_field(crypto_key, token)?),
     );
 
     let payload = serde_json::Value::Object(body).to_string();
-    let text = request(base_url, "POST", "/connect", Some(&payload))?;
+    let text = request(base_url, "POST", "/connect", Some(&payload), bind)?;
     let raw: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| PairingError::Json(e.to_string()))?;
     Ok(ConnectResult {
@@ -173,16 +228,46 @@ pub fn split_url(url: &str) -> Result<(IpAddr, u16, String), PairingError> {
     Ok((ip, port, path))
 }
 
+fn open(addr: SocketAddr, bind: Option<IpAddr>) -> Result<TcpStream, PairingError> {
+    if let Some(local) = bind {
+        if local.is_ipv4() != addr.is_ipv4() {
+            return Err(PairingError::Url(
+                "адрес устройства и выбранный адаптер разной версии IP".into(),
+            ));
+        }
+        let socket = socket2::Socket::new(
+            if addr.is_ipv4() {
+                socket2::Domain::IPV4
+            } else {
+                socket2::Domain::IPV6
+            },
+            socket2::Type::STREAM,
+            Some(socket2::Protocol::TCP),
+        )
+        .map_err(|e| PairingError::Http(e.to_string()))?;
+        let local_addr: socket2::SockAddr = SocketAddr::new(local, 0).into();
+        socket
+            .bind(&local_addr)
+            .map_err(|e| PairingError::Http(format!("bind {local}: {e}")))?;
+        socket
+            .connect_timeout(&addr.into(), CONNECT_TIMEOUT)
+            .map_err(|e| PairingError::Http(format!("{addr} через {local}: {e}")))?;
+        return Ok(socket.into());
+    }
+    TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT)
+        .map_err(|e| PairingError::Http(format!("{addr}: {e}")))
+}
+
 fn request(
     base_url: &str,
     method: &str,
     path: &str,
     body: Option<&str>,
+    bind: Option<IpAddr>,
 ) -> Result<String, PairingError> {
     let (ip, port, _) = split_url(base_url)?;
     let addr = SocketAddr::new(ip, port);
-    let mut stream = TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT)
-        .map_err(|e| PairingError::Http(format!("{addr}: {e}")))?;
+    let mut stream = open(addr, bind)?;
     stream.set_read_timeout(Some(READ_TIMEOUT)).ok();
     stream.set_write_timeout(Some(READ_TIMEOUT)).ok();
 
