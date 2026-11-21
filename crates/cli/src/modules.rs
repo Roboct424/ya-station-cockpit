@@ -165,10 +165,10 @@ pub fn find_station() -> Option<String> {
     }
 
     // 1) Устройство Яндекса по OUI — самый надёжный признак.
-    if let Some((_, ip)) = by_mac
-        .iter()
-        .find(|(mac, ip)| mac.starts_with("b8-87-6e") && ip.starts_with("192.168.137."))
-    {
+    if let Some((_, ip)) = by_mac.iter().find(|(mac, ip)| {
+        (mac.starts_with("b8-87-6e") || mac.starts_with("3c-0b-4f"))
+            && ip.starts_with("192.168.137.")
+    }) {
         return Some(ip.clone());
     }
 

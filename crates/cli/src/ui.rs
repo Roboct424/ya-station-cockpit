@@ -72,9 +72,9 @@ const ITEMS: &[InterceptItem] = &[
     },
     InterceptItem {
         id: "rest",
-        title: "Всё остальное",
+        title: "Всё остальное (всегда блокируется)",
         pattern: "*",
-        default: "proxy",
+        default: "block",
     },
 ];
 
@@ -452,6 +452,7 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
         ("POST", "/api/lang") => (200, "application/json", set_lang(body)),
         ("GET", "/api/hub/status") => (200, "application/json", hub_status()),
         ("POST", "/api/hub/serve") => (200, "application/json", hub_serve(body)),
+        ("POST", "/api/hub/stop") => (200, "application/json", hub_stop()),
         ("POST", "/api/hub/grab") => (200, "application/json", hub_grab(body)),
         ("POST", "/api/ca") => {
             let ctx = ctx_from(body);
@@ -1757,7 +1758,6 @@ fn start_stack(body: &str) -> String {
         register: cloud && field(body, "via_register") == "1",
         voice: cloud && field(body, "via_voice") == "1",
         metrics: cloud && field(body, "via_metrics") == "1",
-        rest: cloud && field(body, "via_rest") == "1",
     };
 
     let version = {
@@ -1805,12 +1805,17 @@ fn start_stack(body: &str) -> String {
     let update_enabled = field(body, "update") == "1";
     let _ = std::fs::write("data/allow_update", if update_enabled { "1" } else { "0" });
     rotate_attempt(&version, update_enabled);
-    let routes = build_routes(
+    let mut routes = build_routes(
         allow,
         UpdatePolicy {
             enabled: update_enabled,
         },
     );
+    if !cloud {
+        // Двойная защита: в оффлайне ни одно правило не проксирует,
+        // даже если в запросе пришёл via_*=1 (устаревшая страница/скрипт).
+        routes = routes.replace("action = \"proxy\"", "action = \"block\"");
+    }
     // Режим — в журнал явно: оффлайн не должен читаться как «в облако».
     if cloud {
         push_log("режим: облако — часть запросов уходит в интернет");
@@ -1927,7 +1932,6 @@ struct CloudAllow {
     register: bool,
     voice: bool,
     metrics: bool,
-    rest: bool,
 }
 
 /// Собирает таблицу маршрутов из пресета и режима.
@@ -1975,8 +1979,10 @@ fn build_routes(allow: CloudAllow, update: UpdatePolicy) -> String {
         }
         out.push('\n');
     }
-    let rest = if allow.rest { "proxy" } else { "block" };
-    out.push_str(&format!("[[route]]\nmatch = \"*\"\naction = \"{rest}\"\n"));
+    // Запасное правило никогда не уходит в облако: непонятный запрос
+    // молча блокируется. «Отдать всё остальное в облако» — запрещённая
+    // опция, её больше нет ни в пресете, ни в API.
+    out.push_str("[[route]]\nmatch = \"*\"\naction = \"block\"\n");
     out
 }
 
@@ -2256,32 +2262,93 @@ fn percent_decode(s: &str) -> String {
 // ------------------------------------------------------------ Хаб ---------
 
 static HUB_CHILD: std::sync::Mutex<Option<std::process::Child>> = std::sync::Mutex::new(None);
+static QUASAR_CHILD: std::sync::Mutex<Option<std::process::Child>> = std::sync::Mutex::new(None);
+
+fn kill_child(slot: &'static std::sync::Mutex<Option<std::process::Child>>) {
+    if let Ok(mut guard) = slot.lock() {
+        if let Some(mut child) = guard.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+/// Останавливает службы Хаба и внешний quasar.
+fn hub_stop() -> String {
+    kill_child(&HUB_CHILD);
+    kill_child(&QUASAR_CHILD);
+    push_log("хаб: службы остановлены");
+    serde_json::json!({ "ok": true, "text": "службы остановлены" }).to_string()
+}
 
 /// Запускает службы разблокировки Хаба отдельным процессом.
+///
+/// GOTCHA: G-067 — встроенный quasar (rustls) не устраивает TLS-стек Хаба,
+/// поэтому в оффлайн-режиме поднимаем внешний OpenSSL-сервер
+/// (`data/probe/quasar/fake-quasar.py`) на 443, а `hub serve` идёт
+/// с `--no-quasar`.
 fn hub_serve(body: &str) -> String {
     let mode = match field(body, "mode").as_str() {
         // base и setup — общие службы без перехвата адресов
         "base" | "setup" => "setup",
         _ => "sync",
     };
-    if let Ok(mut guard) = HUB_CHILD.lock() {
-        if let Some(child) = guard.as_mut() {
-            let _ = child.kill();
-        }
-        *guard = None;
-    }
+    kill_child(&HUB_CHILD);
+    kill_child(&QUASAR_CHILD);
+
+    let online = field(body, "online") == "1";
     let exe = std::env::current_exe().unwrap_or_else(|_| "cockpit".into());
     let log = std::fs::File::create("data/rushub.log").ok();
     let err = log.as_ref().and_then(|f| f.try_clone().ok());
     let alias = field(body, "alias");
     let mut cmd = std::process::Command::new(exe);
     cmd.args(["hub", "serve", "--mode", mode]);
-    if field(body, "online") == "1" {
+    if online {
         cmd.arg("--online");
     }
     if !alias.is_empty() {
         cmd.args(["--alias", &alias]);
     }
+
+    if !online && mode == "sync" {
+        cmd.arg("--no-quasar");
+        if std::net::TcpListener::bind(("0.0.0.0", 443)).is_err() {
+            push_log("хаб: 443 занят — использую уже запущенный quasar");
+        } else if !std::path::Path::new("data/probe/quasar/fake-quasar.py").exists() {
+            push_log("хаб: нет data/probe/quasar/fake-quasar.py");
+        } else {
+            let qlog = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("data/fake-quasar.log")
+                .ok();
+            let qerr = qlog.as_ref().and_then(|f| f.try_clone().ok());
+            let mut q = std::process::Command::new("python");
+            q.args(["-u", "fake-quasar.py"])
+                .current_dir("data/probe/quasar");
+            if let Some(out) = qlog {
+                q.stdout(out);
+            }
+            if let Some(e) = qerr {
+                q.stderr(e);
+            }
+            match q.spawn() {
+                Ok(mut child) => {
+                    std::thread::sleep(std::time::Duration::from_millis(600));
+                    if let Ok(Some(status)) = child.try_wait() {
+                        push_log(format!("хаб: quasar (OpenSSL) завершился: {status}"));
+                    } else {
+                        if let Ok(mut guard) = QUASAR_CHILD.lock() {
+                            *guard = Some(child);
+                        }
+                        push_log("хаб: quasar (OpenSSL) на 443 запущен");
+                    }
+                }
+                Err(e) => push_log(format!("хаб: quasar не запустился: {e}")),
+            }
+        }
+    }
+
     if let Some(out) = log {
         cmd.stdout(out);
     }
@@ -2289,8 +2356,32 @@ fn hub_serve(body: &str) -> String {
         cmd.stderr(e);
     }
     match cmd.spawn() {
-        Ok(child) => {
+        Ok(mut child) => {
             let pid = child.id();
+            std::thread::sleep(std::time::Duration::from_millis(800));
+            if let Ok(Some(status)) = child.try_wait() {
+                let tail = std::fs::read_to_string("data/rushub.log").unwrap_or_default();
+                let tail = tail
+                    .lines()
+                    .rev()
+                    .take(3)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                push_log(format!("хаб: службы {mode} завершились ({status}): {tail}"));
+                let hint = if tail.contains("отказано") || tail.contains("denied") {
+                    " — запустите программу от имени администратора"
+                } else {
+                    ""
+                };
+                return serde_json::json!({
+                    "ok": false,
+                    "text": format!("службы не поднялись ({status}): {tail}{hint}")
+                })
+                .to_string();
+            }
             if let Ok(mut guard) = HUB_CHILD.lock() {
                 *guard = Some(child);
             }

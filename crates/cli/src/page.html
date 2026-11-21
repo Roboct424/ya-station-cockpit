@@ -344,6 +344,8 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
         <div>
           <button class="act ghost" onclick="restartStack()">Перезапустить стек</button>
           <button class="act ghost" onclick="stopStack()">Остановить</button>
+          <button class="act ghost" onclick="hubGrab()">Подключить ADB (root)</button>
+          <button class="act ghost" onclick="hubStop()">Остановить службы</button>
         </div>
         <div style="margin-top:8px">
           <span id="r_hub" class="chip wait">службы не запущены</span>
@@ -400,8 +402,8 @@ const ACTIONS = [
   ['sync_info', 'конфиг с adbd'],
   ['firmware', 'файл прошивки'],
   ['custom', 'свой ответ (JSON)'],
-  ['proxy', 'отдать в облако'],
-  ['-', 'не отвечать']
+  ['-', 'не отвечать'],
+  ['block', 'заблокировать молча']
 ];
 
 function body(extra) {
@@ -446,6 +448,13 @@ async function hubGrab() {
   chip('r_hub', false, 'подключаюсь…');
   const r = await (await fetch('/api/hub/grab', {method: 'POST', body: ''})).json();
   chip('r_hub', r.ok, r.ok ? 'ADB: uid=0' : (r.text || 'не вышло'));
+  hubStatus();
+}
+
+async function hubStop() {
+  chip('r_hub', false, 'останавливаю…');
+  const r = await (await fetch('/api/hub/stop', {method: 'POST', body: ''})).json();
+  chip('r_hub', r.ok, r.text || 'службы остановлены');
   hubStatus();
 }
 

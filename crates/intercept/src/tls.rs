@@ -1211,7 +1211,19 @@ fn serve_local(
                 )
             }
             RouteAction::Proxy => {
-                return forward_request(tls, &raw, &host, &routes_forward(&routes))
+                // G-063: в оффлайне (forward = None) правило `proxy` не имеет
+                // права выходить в сеть. Раньше оно форвардило даже при
+                // `--forward false` — из-за `ForwardOptions::default()`.
+                if routes.forward.is_some() {
+                    return forward_request(tls, &raw, &host, &routes_forward(&routes));
+                }
+                return write_response(
+                    &mut tls,
+                    403,
+                    "application/json",
+                    b"{\"status\":\"blocked_offline\"}",
+                    None,
+                );
             }
         }
     }

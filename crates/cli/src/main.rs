@@ -1040,7 +1040,7 @@ fn run_local_ota(
     }
 
     let download_url = format!("https://quasar.yandex.net/firmware/{name}");
-    let rules = match cockpit_intercept::tls::load_rules(
+    let mut rules = match cockpit_intercept::tls::load_rules(
         routes_file,
         Some(cockpit_ota::check_updates_json(&entry, &download_url)),
         Some(cockpit_ota::sync_info_json()),
@@ -1061,6 +1061,15 @@ fn run_local_ota(
             Some((firmware.to_path_buf(), name.clone())),
         ),
     };
+    if !forward {
+        // Оффлайн: правило `proxy` превращается в блокировку. Иначе старый
+        // routes.toml с `action = "proxy"` уводил бы трафик в облако.
+        for rule in &mut rules {
+            if matches!(rule.action, cockpit_intercept::tls::RouteAction::Proxy) {
+                rule.action = cockpit_intercept::tls::RouteAction::Block;
+            }
+        }
+    }
     let routes = LocalRoutes {
         rules,
         check_updates: None,
@@ -1101,6 +1110,9 @@ fn run_local_ota(
         "  остальное → {}",
         match rest_action.as_str() {
             "block" => "блокируется (полный оффлайн, в сеть ничего не уходит)",
+            "proxy" if !forward => {
+                "блокируется (оффлайн: --forward выключен, в сеть ничего не уходит)"
+            }
             "proxy" => "ПРОКСИ В ОБЛАКО — трафик уходит в интернет, это не оффлайн",
             "-" => "молчит",
             _ => "404 (станция решит, что интернета нет)",
