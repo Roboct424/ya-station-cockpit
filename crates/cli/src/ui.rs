@@ -498,6 +498,57 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
         ("POST", "/api/pair") => {
             let ssid = field(body, "ssid");
             let password = field(body, "password");
+
+            if field(body, "mode") == "ap" {
+                let url = {
+                    let u = field(body, "url");
+                    if u.is_empty() {
+                        cockpit_pairing::ap::DEFAULT_URL.to_string()
+                    } else {
+                        u
+                    }
+                };
+                let wired = matches!(field(body, "wired").as_str(), "1" | "true");
+                let token = {
+                    let t = field(body, "token");
+                    if t.is_empty() {
+                        cockpit_pairing::ap::DEFAULT_TOKEN.to_string()
+                    } else {
+                        t
+                    }
+                };
+                let creds = cockpit_pairing::Credentials {
+                    token,
+                    ..cockpit_pairing::Credentials::new(ssid, password)
+                };
+                push_log(format!("▶ AP: {url}, запрос /info"));
+                let answer = match cockpit_pairing::ap::pair(&url, &creds, wired) {
+                    Ok((info, result)) => {
+                        push_log(format!(
+                            "AP: uuid={} version={} mac={}",
+                            info.uuid, info.version, info.mac
+                        ));
+                        push_log(format!("AP ответ: {} {}", result.status, result.data));
+                        let text = if result.status == "ok" {
+                            "готово: устройство подключается к сети".to_string()
+                        } else if result.data == "WIFI_SSID_NOT_FOUND" {
+                            "SSID не найден — проверьте 2.4 ГГц".to_string()
+                        } else if result.data == "WIFI_TIMEOUT" {
+                            "таймаут Wi-Fi — проверьте пароль/сеть".to_string()
+                        } else {
+                            format!("ответ: {} {}", result.status, result.data)
+                        };
+                        (true, text)
+                    }
+                    Err(e) => (false, e.to_string()),
+                };
+                return (
+                    200,
+                    "application/json",
+                    serde_json::json!({ "ok": answer.0, "text": answer.1 }).to_string(),
+                );
+            }
+
             let gain = field(body, "gain").parse::<f32>().unwrap_or(0.5);
             let repeat = field(body, "repeat").parse::<u32>().unwrap_or(1);
             let tones = field(body, "tones");

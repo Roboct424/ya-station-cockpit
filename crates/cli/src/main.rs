@@ -237,6 +237,9 @@ enum HubCmd {
         /// Разрешить внешние DNS-запросы (по умолчанию — полный оффлайн)
         #[arg(long)]
         online: bool,
+        /// Не поднимать встроенный quasar (его отдаёт внешний сервер)
+        #[arg(long)]
+        no_quasar: bool,
     },
 }
 
@@ -491,6 +494,25 @@ enum PairCmd {
         #[arg(long)]
         no_play: bool,
     },
+    /// Сопряжение через точку доступа устройства (AP HTTP, RSA/PKCS#1)
+    Wifi {
+        /// Адрес устройства: только IP, без DNS (оффлайн-гарантия)
+        #[arg(long, default_value = "http://192.168.43.1:8080")]
+        url: String,
+        #[arg(long)]
+        ssid: String,
+        #[arg(long, default_value = "")]
+        password: String,
+        /// Токен (на шаге Wi-Fi не проверяется)
+        #[arg(long, default_value = "localpair0000000")]
+        token: String,
+        /// Проводной режим: без Wi-Fi-кредов, устройство использует Ethernet
+        #[arg(long)]
+        wired: bool,
+        /// Только GET /info: показать ключ и идентификаторы
+        #[arg(long)]
+        info_only: bool,
+    },
     /// Показать кадр в hex (диагностика кодировщика)
     Frame {
         #[arg(long)]
@@ -717,6 +739,7 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
                 mode,
                 alias,
                 online,
+                no_quasar,
             } => {
                 let mode = hub::Mode::parse(&mode).ok_or_else(|| {
                     CockpitError::Config("режим должен быть setup или sync".into())
@@ -724,7 +747,7 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
                 let alias = alias
                     .parse::<std::net::Ipv4Addr>()
                     .map_err(|_| CockpitError::Config(format!("неверный адрес: {alias}")))?;
-                hub::serve(mode, alias, online).map_err(CockpitError::Internal)?;
+                hub::serve(mode, alias, online, !no_quasar).map_err(CockpitError::Internal)?;
                 Ok(ExitCode::SUCCESS)
             }
         },
@@ -1538,6 +1561,47 @@ fn run_pair(cmd: PairCmd) -> cockpit_core::Result<ExitCode> {
     let fail = |e: PairingError| CockpitError::Internal(e.to_string());
 
     match cmd {
+        PairCmd::Wifi {
+            url,
+            ssid,
+            password,
+            token,
+            wired,
+            info_only,
+        } => {
+            let creds = Credentials {
+                token,
+                ..Credentials::new(ssid, password)
+            };
+            i18n::say(format!("AP: адрес {url}, облако не используется"));
+            if info_only {
+                let info = cockpit_pairing::ap::info(&url).map_err(fail)?;
+                i18n::say(format!(
+                    "uuid: {}  version: {}  mac: {}",
+                    info.uuid, info.version, info.mac
+                ));
+                i18n::say("ключ RSA получен из /info");
+                return Ok(ExitCode::SUCCESS);
+            }
+            let (info, result) = cockpit_pairing::ap::pair(&url, &creds, wired).map_err(fail)?;
+            i18n::say(format!(
+                "uuid: {}  version: {}  mac: {}",
+                info.uuid, info.version, info.mac
+            ));
+            if result.data.is_empty() {
+                i18n::say(format!("ответ: {}", result.status));
+            } else {
+                i18n::say(format!("ответ: {} {}", result.status, result.data));
+            }
+            if result.status == "ok" {
+                i18n::say("готово: устройство подключается к сети");
+            } else if result.data == "WIFI_SSID_NOT_FOUND" {
+                i18n::say("SSID не найден — проверьте 2.4 ГГц");
+            } else if result.data == "WIFI_TIMEOUT" {
+                i18n::say("таймаут Wi-Fi — проверьте пароль/сеть");
+            }
+            Ok(ExitCode::SUCCESS)
+        }
         PairCmd::Frame {
             ssid,
             password,

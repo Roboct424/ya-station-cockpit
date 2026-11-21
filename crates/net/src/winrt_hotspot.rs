@@ -20,12 +20,13 @@ fn manager() -> Result<NetworkOperatorTetheringManager, NetError> {
 pub fn start(cfg: &ApConfig) -> Result<String, NetError> {
     let mgr = manager()?;
 
-    // Идемпотентность: если точка уже работает — не конфигурируем повторно.
     let state = mgr
         .TetheringOperationalState()
         .map_err(|e| NetError::Os(format!("состояние: {e}")))?;
+    // GOTCHA: G-064 — при включённой точке SSID не менялся: Windows
+    // оставляла прежнюю сеть. Поэтому сначала гасим, потом настраиваем.
     if state == TetheringOperationalState::On {
-        return Ok(format!("{state:?}"));
+        let _ = mgr.StopTetheringAsync().and_then(|op| op.get());
     }
     let conf = NetworkOperatorTetheringAccessPointConfiguration::new()
         .map_err(|e| NetError::Os(format!("конфиг хотспота: {e}")))?;

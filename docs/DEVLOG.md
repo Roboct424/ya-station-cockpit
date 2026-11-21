@@ -880,3 +880,29 @@ http=200 size=577
 * Пакеты: `ya-station-wifi-pairing_1.2.0_all.deb`,
   `ya-station-wifi-pairing-1.2.0.tar.gz` (`packaging/build_tar.py`),
   Windows exe пересобраны.
+
+## 2026-11-21 - кокпит 1.1.0: сопряжение по AP HTTP и установка APK на MIUI
+
+* `cockpit-pairing` научился ходить в точку доступа устройства:
+  `GET /info`, RSA/PKCS#1 v1.5, `POST /connect`. Новый модуль `ap.rs`:
+  свой HTTP/1.1 поверх `TcpStream` (без лишних зависимостей), JSON через
+  `serde_json`; адрес принимается **только IP-литералом** - имя хоста
+  отвергается, чтобы сопряжение не могло уйти в DNS/интернет.
+* CLI: `cockpit pair wifi --ssid S [--password P] [--url http://IP:8080]
+  [--wired] [--info-only]`. Проводной режим отправляет `ssid: ""` без
+  пароля (Ethernet).
+* UI: в карточке «Сопряжение» появился выбор способа - «Звук» или
+  «Wi-Fi AP»; `/api/pair` с `mode=ap` делает `/info` + `/connect` и
+  пишет в журнал uuid/version/mac и ответ устройства.
+* Проверено на мок-сервере: Rust-клиент и UI-эндпоинт отправили
+  `secret-123`/`pass-999`, мок расшифровал PKCS#1 - совпало. Звук:
+  `pair sound --preroll 3 --no-play` даёт WAV 156 КБ.
+* Хаб сейчас снова под ADB: `192.168.137.234:5555`, `uid=0(root)` -
+  разблокировка оффлайн жива. Mini 2 в этой сессии не подключена:
+  звуковой протокол проверен ранее (0.369.1.46), AP у неё нет.
+* Android APK: причина «не ставится» - телефон заполнен (447 МБ < порога
+  установщика), MIUI блокирует ADB-установку (`USER_RESTRICTED`), а Play
+  Protect - старый `targetSdk 27`. Исправлено: `targetSdk 33`,
+  `android:exported`, HTTP через сырой `Socket` (G-069), файл
+  переименован в `StationPairing.apk`, версия 1.2.1. Установлено и
+  проверено на M2101K6G: `/info` -> RSA -> `/connect` через `adb reverse`.

@@ -799,3 +799,38 @@ quasar -> `adbd`, `uid=0(root)`.
 **Проверено.** APK 1.2 (`com.rig.soundcode`, 21 КБ): вкладка «Wi-Fi (AP)»,
 `/info` + RSA/PKCS#1, подпись v1+v2; RSA сверен с Python
 (`PKCS1v15` -> исходный UTF-8).
+
+## G-069 - APK «не ставится»: мало места, MIUI USER_RESTRICTED, Play Protect и targetSdk
+
+**Симптомы на M2101K6G (Android 13, MIUI 14).**
+
+1. `adb install` -> `java.io.IOException: Requested internal only, but not
+   enough space`, хотя APK 21 КБ. В `/data` свободно 447 МБ, но порог
+   «мало места» ~500 МБ.
+2. После обхода порога: `INSTALL_FAILED_USER_RESTRICTED: Install canceled by
+   user` - MIUI не разрешает установку через ADB, пока в «Для
+   разработчиков» не включена «Установка через USB» (часто требует
+   Mi-аккаунт и SIM).
+3. Ручная установка через файловый менеджер: Google Play Защита пишет
+   «Подозрительное приложение заблокировано» и не даёт поставить APK с
+   `targetSdk 27` («сделано для старой версии Android»).
+
+**Решения.**
+
+* Место (обратимо): `adb shell settings put global
+  sys_storage_threshold_max_bytes 16777216`, после установки -
+  `settings delete global sys_storage_threshold_max_bytes`.
+* MIUI: ставить не через `adb install`, а открыть APK из файлового
+  менеджера и подтвердить; либо включить «Установка через USB».
+* Play Protect: в диалоге «Рекомендуется проверка» нажать «Подробнее» ->
+  «Установить без проверки». Чтобы диалога не было - поднять
+  `targetSdk` до 33 (тогда нужен `android:exported="true"`).
+* Cleartext: при `targetSdk 28+` обычный HTTP к точке доступа блокируется,
+  а `android:usesCleartextTraffic` нет в stub `android.jar` API 16.
+  Поэтому HTTP в APK - вручную поверх `java.net.Socket`: политика
+  cleartext к сырым сокетам не применяется.
+
+**Проверено.** `StationPairing.apk` 1.2.1 (`versionCode 4`, `targetSdk 33`)
+установлен и запущен; в приложении `/info` -> RSA/PKCS#1 -> `/connect`
+на мок через `adb reverse`, пароль расшифрован. Оффлайн-рут Хаба на месте:
+`192.168.137.234:5555` -> `uid=0(root)`.

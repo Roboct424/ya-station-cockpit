@@ -12,6 +12,7 @@
 
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -41,7 +42,7 @@ impl Mode {
 }
 
 /// Запускает все службы и блокируется навсегда.
-pub fn serve(mode: Mode, alias: Ipv4Addr, online: bool) -> Result<(), String> {
+pub fn serve(mode: Mode, alias: Ipv4Addr, online: bool, quasar: bool) -> Result<(), String> {
     if mode == Mode::Sync {
         if let Err(error) = add_alias(alias) {
             // без прав администратора адрес не повесить — службы всё равно поднимаем
@@ -65,9 +66,11 @@ pub fn serve(mode: Mode, alias: Ipv4Addr, online: bool) -> Result<(), String> {
     }
 
     spawn("dns", move || dns_loop(mode, alias, online));
+    spawn("http", http_loop);
     spawn("dhcp", dhcp_loop);
-    spawn("sntp", sntp_loop);
-    if mode == Mode::Sync {
+    spawn("sntp", move || sntp_loop(alias));
+    spawn("sntp-tcp", sntp_tcp_loop);
+    if mode == Mode::Sync && quasar {
         spawn("quasar", quasar_loop);
         // как только станция поднимет adbd — сразу подключаемся и закрепляем
         spawn("adb", auto_grab);
@@ -142,12 +145,19 @@ fn dns_loop(mode: Mode, alias: Ipv4Addr, online: bool) {
             continue;
         };
         let yandex = name.contains("yandex") || name.contains("yango");
+        // NTP-имена тоже ведём на себя: иначе Хаб остаётся с часами 1970
+        // и не может проверить ни один сертификат.
+        let ntp = name.contains("ntp")
+            || name.starts_with("time.")
+            || name.contains(".time.")
+            || name == "time.android.com";
+        log(&format!("DNS: {name} тип {qtype}"));
         if yandex && qtype == 28 {
             // G-056: IPv6 у Хаба нет — отвечаем «пусто», чтобы он шёл по IPv4.
             let _ = sock.send_to(&empty_answer(query, q_end), peer);
             continue;
         }
-        if yandex && qtype == 1 && mode == Mode::Sync {
+        if (yandex || ntp) && qtype == 1 && mode == Mode::Sync {
             let _ = sock.send_to(&a_answer(query, q_end, alias), peer);
             continue;
         }
@@ -158,7 +168,8 @@ fn dns_loop(mode: Mode, alias: Ipv4Addr, online: bool) {
         }
         match forward(query) {
             Some(reply) => {
-                let _ = sock.send_to(&reply, peer);
+                log(&format!("SNTP: ответ для {peer}"));
+        let _ = sock.send_to(&reply, peer);
             }
             None => log(&format!("DNS: {name} не разрешился")),
         }
@@ -218,20 +229,25 @@ fn forward(query: &[u8]) -> Option<Vec<u8>> {
 
 // --------------------------------------------------------------- SNTP ------
 
-fn sntp_loop() {
-    let Ok(sock) = UdpSocket::bind(("0.0.0.0", 123)) else {
-        log("SNTP: порт 123 занят");
+/// NTP поверх TCP: некоторые клиенты (и ntp.yantp.net) так умеют.
+fn sntp_tcp_loop() {
+    let Ok(listener) = TcpListener::bind(("0.0.0.0", 123)) else {
+        log("SNTP: TCP 123 занят");
         return;
     };
-    log("SNTP: слушаю 0.0.0.0:123");
-    let mut buf = [0u8; 512];
-    loop {
-        let Ok((len, peer)) = sock.recv_from(&mut buf) else {
-            continue;
-        };
-        if len < 48 {
+    log("SNTP: TCP 123 слушаю");
+    for stream in listener.incoming() {
+        let Ok(mut stream) = stream else { continue };
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+        let mut buf = [0u8; 48];
+        if stream.read_exact(&mut buf).is_err() {
             continue;
         }
+        let peer = stream
+            .peer_addr()
+            .map(|a| a.to_string())
+            .unwrap_or_default();
+        log(&format!("SNTP: TCP-запрос от {peer}"));
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -246,6 +262,55 @@ fn sntp_loop() {
         reply[24..32].copy_from_slice(&buf[40..48]);
         reply[32..40].copy_from_slice(&ntp_stamp(now));
         reply[40..48].copy_from_slice(&ntp_stamp(now));
+        let _ = stream.write_all(&reply);
+        let _ = stream.flush();
+    }
+}
+
+fn sntp_loop(alias: Ipv4Addr) {
+    // Отвечаем с того адреса, куда пришёл запрос: Хаб спрашивает
+    // 213.180.193.78 и ответ с 192.168.137.1 отвергает.
+    for ip in [alias, SERVER_IP] {
+        thread::spawn(move || sntp_serve(ip));
+    }
+}
+
+fn sntp_serve(ip: Ipv4Addr) {
+    let Ok(sock) = udp_reuse((ip.octets(), 123)) else {
+        log(&format!("SNTP: {ip}:123 занят"));
+        return;
+    };
+    sock.set_read_timeout(Some(Duration::from_millis(500))).ok();
+    log(&format!("SNTP: слушаю {ip}:123"));
+    let mut buf = [0u8; 512];
+    loop {
+        let Ok((len, peer)) = sock.recv_from(&mut buf) else {
+            continue;
+        };
+        log(&format!(
+            "SNTP: UDP {len} Б от {peer}, заголовок {:02x} {:02x} {:02x} {:02x}",
+            buf[0], buf[1], buf[2], buf[3]
+        ));
+        if len < 48 {
+            continue;
+        }
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64();
+        let mut reply = [0u8; 48];
+        // Версию берём из запроса: некоторые клиенты отвергают чужую.
+        reply[0] = (buf[0] & 0x38) | 0x04; // LI=0, VN как у клиента, Mode=4
+        reply[1] = 1; // stratum 1
+        reply[2] = 4; // poll
+        reply[3] = 0xEC; // precision -20
+        reply[4..8].copy_from_slice(&[0, 0, 0, 1]); // root delay
+        reply[8..12].copy_from_slice(&[0, 0, 0, 1]); // root dispersion
+        reply[12..16].copy_from_slice(b"LOCL");
+        reply[16..24].copy_from_slice(&ntp_stamp(now - 1.0)); // reference
+        reply[24..32].copy_from_slice(&buf[40..48]); // originate = client transmit
+        reply[32..40].copy_from_slice(&ntp_stamp(now)); // receive
+        reply[40..48].copy_from_slice(&ntp_stamp(now)); // transmit
         let _ = sock.send_to(&reply, peer);
     }
 }
@@ -273,23 +338,12 @@ fn udp_reuse(addr: ([u8; 4], u16)) -> std::io::Result<UdpSocket> {
 }
 
 fn dhcp_loop() {
+    // GOTCHA: G-066 - на Windows второй bind на :67 с SO_REUSEADDR
+    // перехватывает broadcast, и сервер не видит DISCOVER. Один сокет.
     let Ok(rx) = udp_reuse(([0, 0, 0, 0], 67)) else {
         log("DHCP: порт 67 занят");
         return;
     };
-    // Ответы шлём с адреса ICS; этот же сокет может получать broadcast,
-    // поэтому слушаем оба — на Windows доставка зависит от порядка bind.
-    let tx = udp_reuse((SERVER_IP.octets(), 67)).ok();
-    if let Some(sock) = tx.as_ref() {
-        let _ = TX.set(
-            sock.try_clone()
-                .unwrap_or_else(|_| sock.try_clone().expect("clone")),
-        );
-        log("DHCP: ответы пойдут с 192.168.137.1");
-    }
-    if let Some(sock) = tx {
-        thread::spawn(move || dhcp_recv(sock));
-    }
     log("DHCP: слушаю 0.0.0.0:67");
     dhcp_recv(rx);
 }
@@ -310,6 +364,19 @@ fn dhcp_recv(sock: UdpSocket) {
         if !mac.starts_with(&[0x3c, 0x0b, 0x4f]) {
             continue;
         }
+        // Видно, что Хаб просит адрес и что мы ему ответили.
+        let kind_name = match packet[242] {
+            1 => "DISCOVER",
+            3 => "REQUEST",
+            4 => "DECLINE",
+            7 => "RELEASE",
+            8 => "INFORM",
+            _ => "?",
+        };
+        log(&format!(
+            "DHCP: {kind_name} от {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}",
+            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
+        ));
         let mut kind = 0u8;
         let mut i = 240;
         while i + 1 < packet.len() {
@@ -350,14 +417,20 @@ fn dhcp_recv(sock: UdpSocket) {
 
 fn dhcp_reply(kind: u8, request: &[u8], mac: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(300);
-    out.extend_from_slice(&[2, 1, 6, 0]);
-    out.extend_from_slice(&request[4..8]);
-    out.extend_from_slice(&request[8..12]); // secs + flags как у клиента
-    out.extend_from_slice(&CLIENT_IP.octets());
-    out.extend_from_slice(&SERVER_IP.octets());
-    out.extend_from_slice(&[0, 0, 0, 0]);
-    out.extend_from_slice(mac);
-    out.extend_from_slice(&[0u8; 202]);
+    // BOOTP: ровно 236 байт до cookie. Раньше здесь терялись 4 байта
+    // (giaddr) и chaddr был короче 16 — клиент такой ответ молча отбрасывал.
+    out.extend_from_slice(&[2, 1, 6, 0]); // op, htype, hlen, hops
+    out.extend_from_slice(&request[4..8]); // xid
+    out.extend_from_slice(&request[8..12]); // secs + flags
+    out.extend_from_slice(&[0, 0, 0, 0]); // ciaddr
+    out.extend_from_slice(&CLIENT_IP.octets()); // yiaddr
+    out.extend_from_slice(&SERVER_IP.octets()); // siaddr
+    out.extend_from_slice(&[0, 0, 0, 0]); // giaddr
+    let mut chaddr = [0u8; 16];
+    chaddr[..6].copy_from_slice(mac);
+    out.extend_from_slice(&chaddr);
+    out.extend_from_slice(&[0u8; 64]); // sname
+    out.extend_from_slice(&[0u8; 128]); // file
     out.extend_from_slice(b"\x63\x82\x53\x63");
     out.extend_from_slice(&[53, 1, kind]);
     out.extend_from_slice(&[54, 4]);
@@ -369,8 +442,96 @@ fn dhcp_reply(kind: u8, request: &[u8], mac: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&[6, 4]);
     out.extend_from_slice(&SERVER_IP.octets());
     out.extend_from_slice(&[28, 4, 192, 168, 137, 255]);
+    // Опция 42: NTP-сервер. Без неё Хаб живёт с часами 1970 года
+    // и отвергает любой сертификат как «ещё не действительный».
+    out.extend_from_slice(&[42, 4]);
+    out.extend_from_slice(&SERVER_IP.octets());
     out.push(255);
     out
+}
+
+// --------------------------------------------------------------- http ------
+
+/// Проверка связи: станция просит generate_204 и берёт время из заголовка Date.
+fn http_loop() {
+    let Ok(listener) = TcpListener::bind("0.0.0.0:80") else {
+        log("HTTP: порт 80 занят");
+        return;
+    };
+    log("HTTP: слушаю 0.0.0.0:80 (204 на любую проверку связи)");
+    for stream in listener.incoming() {
+        let Ok(mut stream) = stream else { continue };
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+        let mut buf = [0u8; 2048];
+        let n = stream.read(&mut buf).unwrap_or(0);
+        let head = String::from_utf8_lossy(&buf[..n]).to_string();
+        let path = head
+            .lines()
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .unwrap_or("/")
+            .to_string();
+        let host = head
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("host")
+                    .then(|| value.trim().to_string())
+            })
+            .unwrap_or_default();
+        log(&format!("HTTP: {host}{path}"));
+        dump_probe(
+            "http",
+            &format!(
+                "время: {}\n\n{}\n",
+                chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+                head.trim_end()
+            ),
+        );
+        // Запасной путь: если станция спросит конфиг по HTTP, отдаём его
+        // без TLS (у Хаба с часами 1970 TLS всё равно не сойдётся).
+        if path.contains("/get_sync_info") {
+            log("  -> sync info по HTTP");
+            let body = cockpit_ota::sync_info_json();
+            let date = chrono::Utc::now().format("%a, %d %b %Y %H:%M:%S GMT");
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nDate: {date}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(&body);
+            let _ = stream.flush();
+            continue;
+        }
+        if path.contains("/check_updates") {
+            let body = br#"{"hasUpdate":false}"#;
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(body);
+            let _ = stream.flush();
+            continue;
+        }
+        // 204 без тела: станция считает, что интернет есть.
+        // Время — строго UTC: локальное с меткой GMT станция отвергает.
+        // Для отладки можно подменить дату файлом data/probe/fake_date.
+        let date = std::fs::read_to_string("data/probe/fake_date")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| {
+                chrono::Utc::now()
+                    .format("%a, %d %b %Y %H:%M:%S GMT")
+                    .to_string()
+            });
+        let reply = format!(
+            "HTTP/1.1 204 No Content\r\nDate: {date}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+        let _ = stream.write_all(reply.as_bytes());
+        let _ = stream.flush();
+    }
 }
 
 // ------------------------------------------------------------- quasar ------
@@ -400,16 +561,38 @@ fn quasar_loop() {
         let Ok(stream) = stream else { continue };
         let config = Arc::clone(&config);
         thread::spawn(move || {
-            let Ok(mut tls) = (|| -> Result<_, ()> {
-                let mut conn = rustls::ServerConnection::new(config).map_err(|_| ())?;
-                let mut stream = stream;
-                while conn.is_handshaking() {
-                    conn.complete_io(&mut stream).map_err(|_| ())?;
+            let peer = stream
+                .peer_addr()
+                .map(|a| a.to_string())
+                .unwrap_or_default();
+            log(&format!("quasar: TCP от {peer}"));
+            let mut conn = match rustls::ServerConnection::new(config) {
+                Ok(conn) => conn,
+                Err(e) => {
+                    log(&format!("quasar: конфиг TLS: {e}"));
+                    return;
                 }
-                Ok(rustls::StreamOwned::new(conn, stream))
-            })() else {
-                return;
             };
+            let mut stream = stream;
+            loop {
+                if !conn.is_handshaking() {
+                    break;
+                }
+                match conn.complete_io(&mut stream) {
+                    Ok(_) => {}
+                    Err(e) => {
+                        log(&format!("quasar: рукопожатие с {peer} не удалось: {e}"));
+                        return;
+                    }
+                }
+            }
+            let mut tls = rustls::StreamOwned::new(conn, stream);
+            let sni = tls
+                .conn
+                .server_name()
+                .unwrap_or("(без SNI)")
+                .to_string();
+            log(&format!("quasar: подключение SNI={sni}"));
             let _ = handle_quasar(&mut tls);
         });
     }
@@ -436,6 +619,21 @@ fn load_cert_chain() -> Result<
     Ok((certs, key))
 }
 
+/// Счётчик дампов: имя файла не должно повторяться.
+static PROBE_SEQ: AtomicU64 = AtomicU64::new(1);
+
+/// Пишет полный запрос в `data/probe/` — для разбора протокола.
+fn dump_probe(kind: &str, content: &str) {
+    let dir = std::path::Path::new("data/probe");
+    if std::fs::create_dir_all(dir).is_err() {
+        return;
+    }
+    let seq = PROBE_SEQ.fetch_add(1, Ordering::Relaxed);
+    let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+    let name = format!("{stamp}-{seq:03}-{kind}.txt");
+    let _ = std::fs::write(dir.join(name), content);
+}
+
 fn handle_quasar(
     stream: &mut rustls::StreamOwned<rustls::ServerConnection, TcpStream>,
 ) -> std::io::Result<()> {
@@ -447,7 +645,7 @@ fn handle_quasar(
         }
         head.push(byte[0]);
     }
-    let text = String::from_utf8_lossy(&head);
+    let text = String::from_utf8_lossy(&head).to_string();
     let first = text.lines().next().unwrap_or_default();
     let path = first.split_whitespace().nth(1).unwrap_or("/");
     let host = text
@@ -458,7 +656,44 @@ fn handle_quasar(
                 .then(|| value.trim().to_string())
         })
         .unwrap_or_default();
-    log(&format!("{host}{path}"));
+    // Тело запроса: нужно для разбора регистрации.
+    let length = text
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse::<usize>().ok())
+                .flatten()
+        })
+        .unwrap_or(0)
+        .min(1 << 20);
+    let mut payload = vec![0u8; length];
+    if length > 0 {
+        let mut read = 0;
+        while read < length {
+            match stream.read(&mut payload[read..]) {
+                Ok(0) => break,
+                Ok(n) => read += n,
+                Err(_) => break,
+            }
+        }
+        payload.truncate(read);
+    }
+    let sni = stream.conn.server_name().unwrap_or("(без SNI)").to_string();
+    let dump = format!(
+        "время: {}\nSNI: {sni}\n\n{}\n--- тело ({} Б) ---\n{}\n--- hex ---\n{}\n",
+        chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+        text.trim_end(),
+        payload.len(),
+        String::from_utf8_lossy(&payload),
+        payload
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+    dump_probe("quasar", &dump);
+    log(&format!("{host}{path} ({} Б)", payload.len()));
 
     let body = if path.contains("/get_sync_info") {
         log("  -> sync info с adbd");

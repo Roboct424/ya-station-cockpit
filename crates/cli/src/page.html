@@ -308,16 +308,27 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
   <div class="split">
     <div class="stackL">
       <div class="card">
-        <h2>Звук сопряжения</h2>
+        <h2>Сопряжение</h2>
         <div class="row">
           <div class="col">
+            <label>Способ</label>
+            <select id="pmode" onchange="pairMode()">
+              <option value="sound">Звук (колонка с микрофоном)</option>
+              <option value="ap">Wi-Fi AP (Хаб, станция с экраном)</option>
+            </select>
             <label>SSID</label><input type="text" id="pssid" value="YaRig">
             <label>Пароль</label><input type="text" id="ppass" value="11111111">
           </div>
-          <div class="col">
+          <div class="col" id="sound_fields">
             <label>Громкость (рабочая 0.5)</label><input type="text" id="gain" value="0.5">
             <label>Повторов</label><input type="text" id="repeat" value="1">
             <label>Предстарт (0–4)</label><input type="text" id="preroll" value="1">
+          </div>
+          <div class="col" id="ap_fields" style="display:none">
+            <label>Адрес устройства</label>
+            <input type="text" id="purl" value="http://192.168.43.1:8080">
+            <label><input type="checkbox" id="pwired"> проводной режим (Ethernet)</label>
+            <p class="hint">Пароль шифруется ключом из /info; облако не используется.</p>
           </div>
         </div>
         <button class="act" id="btnPair" onclick="pair()">Проиграть код</button>
@@ -1080,16 +1091,35 @@ async function stopStack() {
   chip('r_stack', r.ok, r.text);
 }
 
+function pairMode() {
+  const ap = $('pmode').value === 'ap';
+  $('sound_fields').style.display = ap ? 'none' : '';
+  $('ap_fields').style.display = ap ? '' : 'none';
+  $('btnPair').textContent = ap ? 'Подключить по AP' : 'Проиграть код';
+}
+
 async function pair() {
-  $('btnPair').disabled = true; chip('r_pair', false, 'играю…');
-  const r = await (await fetch('/api/pair', {method: 'POST', body: new URLSearchParams({
-    ssid: $('pssid').value, password: $('ppass').value,
-    gain: $('gain').value, repeat: $('repeat').value,
-    tones: 'standard', preroll: $('preroll').value
-  })})).json();
+  const ap = $('pmode').value === 'ap';
+  $('btnPair').disabled = true;
+  chip('r_pair', false, ap ? 'подключаю…' : 'играю…');
+  const params = {
+    mode: $('pmode').value,
+    ssid: $('pssid').value, password: $('ppass').value
+  };
+  if (ap) {
+    params.url = $('purl').value;
+    params.wired = $('pwired').checked ? '1' : '0';
+  } else {
+    params.gain = $('gain').value;
+    params.repeat = $('repeat').value;
+    params.tones = 'standard';
+    params.preroll = $('preroll').value;
+  }
+  const r = await (await fetch('/api/pair', {method: 'POST', body: new URLSearchParams(params)})).json();
   $('btnPair').disabled = false;
   chip('r_pair', r.ok, r.text);
 }
+pairMode();
 
 let tailCursor = 0;
 

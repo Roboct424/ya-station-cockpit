@@ -526,8 +526,16 @@ pub fn check_updates_json(entry: &Entry, download_url: &str) -> Vec<u8> {
 /// `system_config` станция не завершает привязку и уходит на повторный сброс
 /// (`wifi_reseter: Reseting completed`).
 pub fn sync_info_json() -> Vec<u8> {
+    // Время отдаём вместе с конфигом: у Хаба нет RTC, и без этого он
+    // живёт с часами 1970 года и отвергает любой TLS-сертификат.
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
     let body = serde_json::json!({
         "status": "ok",
+        "server_time": now,
+        "time": now,
         "tags": [],
         "subscription": { "mode": "transaction" },
         "config": {

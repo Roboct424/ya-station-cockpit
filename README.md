@@ -44,6 +44,8 @@ cargo run -- journal tail           # что произошло
 | `cockpit ota observe\|observed` | реестр версий без архивов (для сообщества) |
 | `cockpit ota fetch-all` | скачать все версии из манифеста |
 | `cockpit device info\|list` | ADB: подключение, версия, root |
+| `cockpit pair sound --ssid S [--password P] [--preroll 0..4]` | звуковой код: WAV и проигрывание (колонки с микрофоном) |
+| `cockpit pair wifi --ssid S [--password P] [--url http://IP:8080] [--wired]` | AP HTTP: `/info` → RSA/PKCS#1 → `/connect`, без облака |
 | `cockpit local-ota` | локальный OTA/sync: прошивка + конфиг с adbd |
 | `cockpit hub serve --mode base\|sync` | службы Хаба: IPv4-DNS, DHCP, SNTP, локальный `quasar` с `adbd` |
 | `cockpit activate` | сценарий: OTA → ADB → root → версия → сторож |
@@ -152,6 +154,8 @@ cargo run -- journal tail
 | `cockpit ota observe\|observed` | version registry without archives (for the community) |
 | `cockpit ota fetch-all` | download every version from the manifest |
 | `cockpit device info\|list` | ADB: connection, version, root |
+| `cockpit pair sound --ssid S [--password P] [--preroll 0..4]` | sound code: WAV and playback (speakers with a microphone) |
+| `cockpit pair wifi --ssid S [--password P] [--url http://IP:8080] [--wired]` | AP HTTP: `/info` → RSA/PKCS#1 → `/connect`, no cloud |
 | `cockpit local-ota` | local OTA/sync: firmware + config with adbd |
 | `cockpit hub serve --mode base\|sync` | Hub services: IPv4 DNS, DHCP, SNTP, local `quasar` with `adbd` |
 | `cockpit activate` | scenario: OTA → ADB → root → version → guard |

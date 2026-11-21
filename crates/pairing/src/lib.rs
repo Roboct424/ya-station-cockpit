@@ -98,7 +98,21 @@ pub enum PairingError {
 
     #[error("нет проигрывателя WAV: {0}")]
     NoPlayer(String),
+
+    #[error("HTTP: {0}")]
+    Http(String),
+
+    #[error("JSON: {0}")]
+    Json(String),
+
+    #[error("RSA: {0}")]
+    Rsa(String),
+
+    #[error("адрес: {0}")]
+    Url(String),
 }
+
+pub mod ap;
 
 // --------------------------------------------------------------- GF(16) ----
 
