@@ -81,7 +81,7 @@ pre{background:#0b0e12;border:1px solid #1e242c;border-radius:10px;padding:11px;
  white-space:pre-wrap;font:12px/1.45 ui-monospace,Consolas,monospace;height:340px;overflow:auto;color:#cbd5e1}
 .split{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;height:calc(100vh - 150px);min-height:420px}
 .split>*{min-width:0}
-.stackL{display:grid;grid-template-rows:1fr 1fr;gap:10px;min-height:0}
+.stackL{display:grid;grid-template-rows:auto 1fr;gap:10px;min-height:0}
 .split .card{margin:0;min-height:0;display:flex;flex-direction:column}
 .split .card pre, .split .card .box{flex:1;min-height:0;overflow:auto}
 pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
@@ -89,7 +89,7 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
 /* ---- компактный режим и узкие окна ---- */
 /* Содержимое колонок шага 3 прокручивается внутри, кнопки всегда достижимы. */
 #s3 .stackL{overflow:auto}
-#s3 .stackL .card{overflow:auto}
+#s3 .stackL .card{overflow:visible}
 #s3 .split>.card{overflow:auto}
 
 @media (max-height:820px){
@@ -354,15 +354,13 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
             <label>Предстарт (0–4)</label><input type="text" id="preroll" value="1">
           </div>
           <div class="col" id="ap_fields" style="display:none">
-            <label>Адрес устройства</label>
-            <input type="text" id="purl" value="http://192.168.43.1:8080">
             <label>Адаптер (источник)</label>
             <select id="pbind"><option value="">авто (по маршруту)</option></select>
             <label><input type="checkbox" id="pwired"> проводной режим (Ethernet)</label>
-            <p class="hint">Выберите Wi-Fi-адаптер, подключённый к точке доступа устройства
-              (или к Ethernet Хаба). Пароль шифруется ключом из /info; облако не используется.
-              Для проводного режима SSID — непустая заглушка: если поле пустое,
-              берётся первый SSID из /ssid, а если сетей нет — подставляется wired.</p>
+            <p class="hint">Адрес определяется автоматически: 192.168.43.1 для AP,
+              IP станции для провода. Пароль шифруется ключом из /info; облако
+              не используется. Для провода SSID — непустая заглушка: если поле
+              пустое, берётся первый SSID из /ssid, а если сетей нет — wired.</p>
           </div>
         </div>
         <button class="act" id="btnPair" onclick="pair()">Проиграть код</button>
@@ -493,12 +491,6 @@ async function hubStop() {
 }
 
 
-let _shareOk = false, _ethOk = false;
-
-function syncEth() {
-  if (_shareOk && _ethOk) markDone('eth_card');
-}
-
 function markDone(id, on = true) {
   const el = $(id);
   if (el) el.classList.toggle('done', !!on);
@@ -512,8 +504,9 @@ function updateProgress() {
   let done = 0;
   let total = 1;
   if (active === 's1') {
-    total = 3;
-    done = ['clean_card', 'profile_card', 'eth_card'].filter((id) => {
+    // На шаге 1 остались только очистка и профиль: подключение уехало на шаг 2.
+    total = 2;
+    done = ['clean_card', 'profile_card'].filter((id) => {
       const el = $(id);
       return el && el.classList.contains('done');
     }).length;
@@ -878,7 +871,7 @@ async function enableShare() {
   $('btnShare').disabled = false;
   chip('r_eth', r.ok, r.ok ? 'общий доступ включён' : 'ошибка');
   $('eth_hint').textContent = r.text || '';
-  if (r.ok) { _shareOk = true; syncEth(); }
+  if (r.ok) state();
   // Адрес порта подхватываем сами, если включено автоопределение.
   if (r.ok) {
     const ip = await refreshIface(adapter);
@@ -908,7 +901,7 @@ async function setEthernet() {
   $('btnEth').disabled = false;
   chip('r_eth', r.ok, r.ok ? 'адрес назначен' : 'ошибка');
   $('eth_hint').textContent = r.text || '';
-  if (r.ok) { _ethOk = true; markDone('eth_card'); state(); }
+  if (r.ok) state();
 }
 
 async function bleScan() {
@@ -1207,8 +1200,25 @@ async function pair() {
     ssid: $('pssid').value, password: $('ppass').value
   };
   if (ap) {
-    params.url = $('purl').value;
-    params.wired = $('pwired').checked ? '1' : '0';
+    const wired = $('pwired').checked;
+    if (wired) {
+      const station = ($('station_ip').value || '').trim();
+      const host = station && station !== '—' ? station : '192.168.137.234';
+      params.url = `http://${host}:8080`;
+      // Перед проводным /connect поднимаем локальный sync/quasar, иначе
+      // Хаб после перехода на Ethernet уходит в «нет интернета».
+      const st = await (await fetch('/api/hub/status')).json();
+      if (!st.running) {
+        chip('r_pair', false, 'поднимаю локальный сервер…');
+        await fetch('/api/hub/serve', {
+          method: 'POST', body: new URLSearchParams({mode: 'sync'})
+        });
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
+    } else {
+      params.url = 'http://192.168.43.1:8080';
+    }
+    params.wired = wired ? '1' : '0';
     params.bind = $('pbind').value;
   } else {
     params.gain = $('gain').value;
