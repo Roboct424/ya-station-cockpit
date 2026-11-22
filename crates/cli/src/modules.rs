@@ -1,13 +1,13 @@
-//! Модули мастера: каждая плитка — одна операция над станцией или окружением.
+//! РњРѕРґСѓР»Рё РјР°СЃС‚РµСЂР°: РєР°Р¶РґР°СЏ РїР»РёС‚РєР° вЂ” РѕРґРЅР° РѕРїРµСЂР°С†РёСЏ РЅР°Рґ СЃС‚Р°РЅС†РёРµР№ РёР»Рё РѕРєСЂСѓР¶РµРЅРёРµРј.
 //!
-//! Принцип тот же, что у шагов активации: модуль либо уже сделан (skip), либо
-//! выполняется, либо возвращает понятную ошибку с подсказкой. Всё пишется в
-//! журнал, а текст выполнения уходит в терминал мастера.
+//! РџСЂРёРЅС†РёРї С‚РѕС‚ Р¶Рµ, С‡С‚Рѕ Сѓ С€Р°РіРѕРІ Р°РєС‚РёРІР°С†РёРё: РјРѕРґСѓР»СЊ Р»РёР±Рѕ СѓР¶Рµ СЃРґРµР»Р°РЅ (skip), Р»РёР±Рѕ
+//! РІС‹РїРѕР»РЅСЏРµС‚СЃСЏ, Р»РёР±Рѕ РІРѕР·РІСЂР°С‰Р°РµС‚ РїРѕРЅСЏС‚РЅСѓСЋ РѕС€РёР±РєСѓ СЃ РїРѕРґСЃРєР°Р·РєРѕР№. Р’СЃС‘ РїРёС€РµС‚СЃСЏ РІ
+//! Р¶СѓСЂРЅР°Р», Р° С‚РµРєСЃС‚ РІС‹РїРѕР»РЅРµРЅРёСЏ СѓС…РѕРґРёС‚ РІ С‚РµСЂРјРёРЅР°Р» РјР°СЃС‚РµСЂР°.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Что модулю нужно знать про окружение.
+/// Р§С‚Рѕ РјРѕРґСѓР»СЋ РЅСѓР¶РЅРѕ Р·РЅР°С‚СЊ РїСЂРѕ РѕРєСЂСѓР¶РµРЅРёРµ.
 #[derive(Clone)]
 pub struct ModuleCtx {
     pub adb: String,
@@ -15,7 +15,7 @@ pub struct ModuleCtx {
     pub ssid: String,
     pub password: String,
     pub ca_pem: PathBuf,
-    /// Имя проводного адаптера (для общего доступа).
+    /// РРјСЏ РїСЂРѕРІРѕРґРЅРѕРіРѕ Р°РґР°РїС‚РµСЂР° (РґР»СЏ РѕР±С‰РµРіРѕ РґРѕСЃС‚СѓРїР°).
     pub ethernet: String,
 }
 
@@ -34,22 +34,22 @@ impl Default for ModuleCtx {
     }
 }
 
-/// Каталог, куда программа кладёт свои platform-tools.
+/// РљР°С‚Р°Р»РѕРі, РєСѓРґР° РїСЂРѕРіСЂР°РјРјР° РєР»Р°РґС‘С‚ СЃРІРѕРё platform-tools.
 fn adb_home() -> PathBuf {
     PathBuf::from("data").join("adb")
 }
 
-/// Гарантирует, что adb есть: ищет локально, иначе скачивает platform-tools.
+/// Р“Р°СЂР°РЅС‚РёСЂСѓРµС‚, С‡С‚Рѕ adb РµСЃС‚СЊ: РёС‰РµС‚ Р»РѕРєР°Р»СЊРЅРѕ, РёРЅР°С‡Рµ СЃРєР°С‡РёРІР°РµС‚ platform-tools.
 pub fn ensure_adb() -> Result<PathBuf, String> {
     let local = adb_home().join("adb.exe");
     if local.exists() {
         return Ok(local);
     }
-    // Чужой adb тоже годится, но копируем его к себе: программа должна
-    // работать, даже если исходную папку удалят.
+    // Р§СѓР¶РѕР№ adb С‚РѕР¶Рµ РіРѕРґРёС‚СЃСЏ, РЅРѕ РєРѕРїРёСЂСѓРµРј РµРіРѕ Рє СЃРµР±Рµ: РїСЂРѕРіСЂР°РјРјР° РґРѕР»Р¶РЅР°
+    // СЂР°Р±РѕС‚Р°С‚СЊ, РґР°Р¶Рµ РµСЃР»Рё РёСЃС…РѕРґРЅСѓСЋ РїР°РїРєСѓ СѓРґР°Р»СЏС‚.
     if let Some(found) = find_adb() {
         let dir = adb_home();
-        std::fs::create_dir_all(&dir).map_err(|e| format!("каталог adb: {e}"))?;
+        std::fs::create_dir_all(&dir).map_err(|e| format!("РєР°С‚Р°Р»РѕРі adb: {e}"))?;
         if let Some(parent) = found.parent() {
             for name in ["adb.exe", "AdbWinApi.dll", "AdbWinUsbApi.dll"] {
                 let from = parent.join(name);
@@ -68,7 +68,7 @@ pub fn ensure_adb() -> Result<PathBuf, String> {
 
 fn download_adb() -> Result<PathBuf, String> {
     let dir = adb_home();
-    std::fs::create_dir_all(&dir).map_err(|e| format!("каталог adb: {e}"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("РєР°С‚Р°Р»РѕРі adb: {e}"))?;
     let zip = dir.join("platform-tools.zip");
     let url = "https://dl.google.com/android/repository/platform-tools-latest-windows.zip";
 
@@ -79,7 +79,7 @@ fn download_adb() -> Result<PathBuf, String> {
         .status()
         .map_err(|e| format!("curl: {e}"))?;
     if !status.success() {
-        return Err("не удалось скачать platform-tools".to_string());
+        return Err("РЅРµ СѓРґР°Р»РѕСЃСЊ СЃРєР°С‡Р°С‚СЊ platform-tools".to_string());
     }
 
     let unpack = dir.join("unpacked");
@@ -92,24 +92,25 @@ fn download_adb() -> Result<PathBuf, String> {
     let status = Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .status()
-        .map_err(|e| format!("распаковка: {e}"))?;
+        .map_err(|e| format!("СЂР°СЃРїР°РєРѕРІРєР°: {e}"))?;
     if !status.success() {
-        return Err("не удалось распаковать platform-tools".to_string());
+        return Err("РЅРµ СѓРґР°Р»РѕСЃСЊ СЂР°СЃРїР°РєРѕРІР°С‚СЊ platform-tools".to_string());
     }
 
-    // Переносим только то, что нужно adb.
+    // РџРµСЂРµРЅРѕСЃРёРј С‚РѕР»СЊРєРѕ С‚Рѕ, С‡С‚Рѕ РЅСѓР¶РЅРѕ adb.
     let inner = unpack.join("platform-tools");
     for name in ["adb.exe", "AdbWinApi.dll", "AdbWinUsbApi.dll"] {
         let from = inner.join(name);
         if from.exists() {
-            std::fs::copy(&from, dir.join(name)).map_err(|e| format!("копирование {name}: {e}"))?;
+            std::fs::copy(&from, dir.join(name))
+                .map_err(|e| format!("РєРѕРїРёСЂРѕРІР°РЅРёРµ {name}: {e}"))?;
         }
     }
     let _ = std::fs::remove_file(&zip);
     let _ = std::fs::remove_dir_all(&unpack);
 
     if !dir.join("adb.exe").exists() {
-        return Err("в архиве не нашёлся adb.exe".to_string());
+        return Err("РІ Р°СЂС…РёРІРµ РЅРµ РЅР°С€С‘Р»СЃСЏ adb.exe".to_string());
     }
     Ok(dir)
 }
@@ -119,7 +120,7 @@ fn adb_ensure() -> Result<String, String> {
     let out = Command::new(&path)
         .arg("version")
         .output()
-        .map_err(|e| format!("adb не запускается: {e}"))?;
+        .map_err(|e| format!("adb РЅРµ Р·Р°РїСѓСЃРєР°РµС‚СЃСЏ: {e}"))?;
     Ok(format!(
         "adb: {}\n{}",
         path.display(),
@@ -127,7 +128,7 @@ fn adb_ensure() -> Result<String, String> {
     ))
 }
 
-/// Ручной адрес станции (`data/station_ip`), если автоопределение выключено.
+/// Р СѓС‡РЅРѕР№ Р°РґСЂРµСЃ СЃС‚Р°РЅС†РёРё (`data/station_ip`), РµСЃР»Рё Р°РІС‚РѕРѕРїСЂРµРґРµР»РµРЅРёРµ РІС‹РєР»СЋС‡РµРЅРѕ.
 pub fn manual_station_ip() -> Option<String> {
     let path = std::path::PathBuf::from("data").join("station_ip");
     let text = std::fs::read_to_string(path).ok()?;
@@ -139,9 +140,9 @@ pub fn manual_station_ip() -> Option<String> {
     }
 }
 
-/// Ищет станцию в ARP-таблице по её MAC (b8:87:6e).
+/// РС‰РµС‚ СЃС‚Р°РЅС†РёСЋ РІ ARP-С‚Р°Р±Р»РёС†Рµ РїРѕ РµС‘ MAC (b8:87:6e).
 pub fn find_station() -> Option<String> {
-    // Ручной адрес важнее автоопределения.
+    // Р СѓС‡РЅРѕР№ Р°РґСЂРµСЃ РІР°Р¶РЅРµРµ Р°РІС‚РѕРѕРїСЂРµРґРµР»РµРЅРёСЏ.
     if let Some(ip) = manual_station_ip() {
         return Some(ip);
     }
@@ -152,8 +153,8 @@ pub fn find_station() -> Option<String> {
     };
     let text = String::from_utf8_lossy(&out.stdout).to_string();
 
-    // Группируем по MAC и берём наименьший адрес: после сброса у станции
-    // может остаться старый выданный адрес в таблице.
+    // Р“СЂСѓРїРїРёСЂСѓРµРј РїРѕ MAC Рё Р±РµСЂС‘Рј РЅР°РёРјРµРЅСЊС€РёР№ Р°РґСЂРµСЃ: РїРѕСЃР»Рµ СЃР±СЂРѕСЃР° Сѓ СЃС‚Р°РЅС†РёРё
+    // РјРѕР¶РµС‚ РѕСЃС‚Р°С‚СЊСЃСЏ СЃС‚Р°СЂС‹Р№ РІС‹РґР°РЅРЅС‹Р№ Р°РґСЂРµСЃ РІ С‚Р°Р±Р»РёС†Рµ.
     let mut by_mac: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
     for line in text.lines() {
         let mut parts = line.split_whitespace();
@@ -180,9 +181,9 @@ pub fn find_station() -> Option<String> {
             .or_insert_with(|| ip.to_string());
     }
 
-    // 1) Устройство Яндекса по OUI — самый надёжный признак. У одного MAC
-    // может быть несколько адресов (старый DHCP/ICS): берём тот, который
-    // реально отвечает на ADB/HTTPS/HTTP, а не первый по порядку.
+    // 1) РЈСЃС‚СЂРѕР№СЃС‚РІРѕ РЇРЅРґРµРєСЃР° РїРѕ OUI вЂ” СЃР°РјС‹Р№ РЅР°РґС‘Р¶РЅС‹Р№ РїСЂРёР·РЅР°Рє. РЈ РѕРґРЅРѕРіРѕ MAC
+    // РјРѕР¶РµС‚ Р±С‹С‚СЊ РЅРµСЃРєРѕР»СЊРєРѕ Р°РґСЂРµСЃРѕРІ (СЃС‚Р°СЂС‹Р№ DHCP/ICS): Р±РµСЂС‘Рј С‚РѕС‚, РєРѕС‚РѕСЂС‹Р№
+    // СЂРµР°Р»СЊРЅРѕ РѕС‚РІРµС‡Р°РµС‚ РЅР° ADB/HTTPS/HTTP, Р° РЅРµ РїРµСЂРІС‹Р№ РїРѕ РїРѕСЂСЏРґРєСѓ.
     fn alive(ip: &str, port: u16) -> bool {
         use std::net::{SocketAddr, TcpStream};
         use std::time::Duration;
@@ -209,9 +210,9 @@ pub fn find_station() -> Option<String> {
         return Some(ip.clone());
     }
 
-    // 2) Остальные кандидаты: шлюз и широковещательный отбрасываем.
-    // Станция живёт только в нашей сети (точка доступа или проводной порт):
-    // 192.168.138.0/24. Иначе в кандидаты попадут чужие устройства из Wi-Fi.
+    // 2) РћСЃС‚Р°Р»СЊРЅС‹Рµ РєР°РЅРґРёРґР°С‚С‹: С€Р»СЋР· Рё С€РёСЂРѕРєРѕРІРµС‰Р°С‚РµР»СЊРЅС‹Р№ РѕС‚Р±СЂР°СЃС‹РІР°РµРј.
+    // РЎС‚Р°РЅС†РёСЏ Р¶РёРІС‘С‚ С‚РѕР»СЊРєРѕ РІ РЅР°С€РµР№ СЃРµС‚Рё (С‚РѕС‡РєР° РґРѕСЃС‚СѓРїР° РёР»Рё РїСЂРѕРІРѕРґРЅРѕР№ РїРѕСЂС‚):
+    // 192.168.138.0/24. РРЅР°С‡Рµ РІ РєР°РЅРґРёРґР°С‚С‹ РїРѕРїР°РґСѓС‚ С‡СѓР¶РёРµ СѓСЃС‚СЂРѕР№СЃС‚РІР° РёР· Wi-Fi.
     let candidates: Vec<String> = by_mac
         .values()
         .filter(|ip| ip.starts_with("192.168.138."))
@@ -222,7 +223,7 @@ pub fn find_station() -> Option<String> {
         return candidates.first().cloned();
     }
 
-    // 3) Если кандидатов несколько — проверяем, кто отвечает по сети.
+    // 3) Р•СЃР»Рё РєР°РЅРґРёРґР°С‚РѕРІ РЅРµСЃРєРѕР»СЊРєРѕ вЂ” РїСЂРѕРІРµСЂСЏРµРј, РєС‚Рѕ РѕС‚РІРµС‡Р°РµС‚ РїРѕ СЃРµС‚Рё.
     for ip in &candidates {
         for port in [5555u16, 443, 80] {
             use std::net::{SocketAddr, TcpStream};
@@ -237,7 +238,7 @@ pub fn find_station() -> Option<String> {
     None
 }
 
-/// Числовой ключ адреса — чтобы сравнивать «наименьший».
+/// Р§РёСЃР»РѕРІРѕР№ РєР»СЋС‡ Р°РґСЂРµСЃР° вЂ” С‡С‚РѕР±С‹ СЃСЂР°РІРЅРёРІР°С‚СЊ В«РЅР°РёРјРµРЅСЊС€РёР№В».
 fn ip_key(ip: &str) -> u32 {
     let mut value = 0u32;
     for octet in ip.split('.') {
@@ -246,7 +247,7 @@ fn ip_key(ip: &str) -> u32 {
     value
 }
 
-/// Мини 3 (bergamot) требует других путей и скриптов шага 4.
+/// РњРёРЅРё 3 (bergamot) С‚СЂРµР±СѓРµС‚ РґСЂСѓРіРёС… РїСѓС‚РµР№ Рё СЃРєСЂРёРїС‚РѕРІ С€Р°РіР° 4.
 fn is_mini3() -> bool {
     let info = crate::station::load();
     let platform = info.get("platform").and_then(|v| v.as_str()).unwrap_or("");
@@ -261,7 +262,7 @@ fn backup_pull(ctx: &ModuleCtx) -> Result<String, String> {
     }
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
     let dir = PathBuf::from("data").join("backups").join(&stamp);
-    std::fs::create_dir_all(&dir).map_err(|e| format!("каталог бэкапа: {e}"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| format!("РєР°С‚Р°Р»РѕРі Р±СЌРєР°РїР°: {e}"))?;
 
     let mut log = String::new();
     let paths = [
@@ -280,22 +281,22 @@ fn backup_pull(ctx: &ModuleCtx) -> Result<String, String> {
             .output()
             .map_err(|e| format!("adb pull: {e}"))?;
         let ok = out.status.success();
-        log.push_str(&format!("{} {remote}\n", if ok { "✓" } else { "·" }));
+        log.push_str(&format!("{} {remote}\n", if ok { "вњ“" } else { "В·" }));
     }
-    log.push_str(&format!("каталог: {}", dir.display()));
+    log.push_str(&format!("РєР°С‚Р°Р»РѕРі: {}", dir.display()));
     Ok(log)
 }
 
 fn backup_mini3(ctx: &ModuleCtx) -> Result<String, String> {
     let script = PathBuf::from("firmware").join("mini3").join("backup.sh");
     if !script.exists() {
-        return Err(format!("нет {}", script.display()));
+        return Err(format!("РЅРµС‚ {}", script.display()));
     }
     adb(
         ctx,
         &["shell", "mkdir -p /data/opt/cockpit /data/opt/backup"],
     )?;
-    adb_push(ctx, &script, "/data/opt/cockpit/backup.sh")?;
+    push_script(ctx, &script, "/data/opt/cockpit/backup.sh")?;
     let out = adb(ctx, &["shell", "sh /data/opt/cockpit/backup.sh"])?;
     let mut log = out.clone();
     let remote = out
@@ -306,7 +307,7 @@ fn backup_mini3(ctx: &ModuleCtx) -> Result<String, String> {
     if let Some(remote) = remote {
         let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
         let dir = PathBuf::from("data").join("backups");
-        std::fs::create_dir_all(&dir).map_err(|e| format!("каталог бэкапа: {e}"))?;
+        std::fs::create_dir_all(&dir).map_err(|e| format!("РєР°С‚Р°Р»РѕРі Р±СЌРєР°РїР°: {e}"))?;
         let local = dir.join(format!("mini3-{stamp}.tgz"));
         let pull = Command::new(&ctx.adb)
             .args(["-s", &ctx.addr, "pull", remote])
@@ -314,10 +315,10 @@ fn backup_mini3(ctx: &ModuleCtx) -> Result<String, String> {
             .output()
             .map_err(|e| format!("adb pull: {e}"))?;
         if pull.status.success() {
-            log.push_str(&format!("\nархив: {}", local.display()));
+            log.push_str(&format!("\nР°СЂС…РёРІ: {}", local.display()));
         } else {
             log.push_str(&format!(
-                "\nархив не забран: {}",
+                "\nР°СЂС…РёРІ РЅРµ Р·Р°Р±СЂР°РЅ: {}",
                 String::from_utf8_lossy(&pull.stderr)
             ));
         }
@@ -328,10 +329,10 @@ fn backup_mini3(ctx: &ModuleCtx) -> Result<String, String> {
 fn guard_mini3(ctx: &ModuleCtx) -> Result<String, String> {
     let script = PathBuf::from("firmware").join("mini3").join("guard.sh");
     if !script.exists() {
-        return Err(format!("нет {}", script.display()));
+        return Err(format!("РЅРµС‚ {}", script.display()));
     }
     adb(ctx, &["shell", "mkdir -p /data/opt/cockpit"])?;
-    adb_push(ctx, &script, "/data/opt/cockpit/guard.sh")?;
+    push_script(ctx, &script, "/data/opt/cockpit/guard.sh")?;
     adb(ctx, &["shell", "sh /data/opt/cockpit/guard.sh"])
 }
 
@@ -339,7 +340,7 @@ fn ca_install_mini3(ctx: &ModuleCtx) -> Result<String, String> {
     const AAA: &str = include_str!("../assets/aaa-root.pem");
     let script = PathBuf::from("firmware").join("mini3").join("ca.sh");
     if !script.exists() {
-        return Err(format!("нет {}", script.display()));
+        return Err(format!("РЅРµС‚ {}", script.display()));
     }
     let dir = std::env::temp_dir().join("cockpit-modules");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -351,14 +352,14 @@ fn ca_install_mini3(ctx: &ModuleCtx) -> Result<String, String> {
     let mut log = String::new();
     if ctx.ca_pem.exists() {
         adb_push(ctx, &ctx.ca_pem, "/data/opt/cockpit/ca.pem")?;
-        log.push_str("наш CA: передан\n");
+        log.push_str("РЅР°С€ CA: РїРµСЂРµРґР°РЅ\n");
     } else {
         log.push_str(&format!(
-            "наш CA не найден ({}), ставлю только корень AAA\n",
+            "РЅР°С€ CA РЅРµ РЅР°Р№РґРµРЅ ({}), СЃС‚Р°РІР»СЋ С‚РѕР»СЊРєРѕ РєРѕСЂРµРЅСЊ AAA\n",
             ctx.ca_pem.display()
         ));
     }
-    adb_push(ctx, &script, "/data/opt/cockpit/ca.sh")?;
+    push_script(ctx, &script, "/data/opt/cockpit/ca.sh")?;
     let out = adb(ctx, &["shell", "sh /data/opt/cockpit/ca.sh"])?;
     log.push_str(&out);
     Ok(log)
@@ -368,16 +369,16 @@ fn adb_noupdate(ctx: &ModuleCtx) -> Result<String, String> {
     adb_connect(ctx)?;
     let script = PathBuf::from("firmware").join("mini3").join("noupdate.sh");
     if !script.exists() {
-        return Err(format!("нет {}", script.display()));
+        return Err(format!("РЅРµС‚ {}", script.display()));
     }
     adb(ctx, &["shell", "mkdir -p /data/opt"])?;
-    adb_push(ctx, &script, "/data/opt/yandex-noupdate.sh")?;
+    push_script(ctx, &script, "/data/opt/yandex-noupdate.sh")?;
     let disable = adb(ctx, &["shell", "sh /data/opt/yandex-noupdate.sh disable"])?;
     let status = adb(ctx, &["shell", "sh /data/opt/yandex-noupdate.sh status"])?;
     Ok(format!("{disable}\n{status}"))
 }
 
-/// Ищет adb: переменная окружения, PATH, Android SDK, типовые папки.
+/// РС‰РµС‚ adb: РїРµСЂРµРјРµРЅРЅР°СЏ РѕРєСЂСѓР¶РµРЅРёСЏ, PATH, Android SDK, С‚РёРїРѕРІС‹Рµ РїР°РїРєРё.
 pub fn find_adb() -> Option<PathBuf> {
     let own = adb_home().join("adb.exe");
     if own.exists() {
@@ -400,7 +401,7 @@ pub fn find_adb() -> Option<PathBuf> {
         return Some(PathBuf::from("adb"));
     }
 
-    // Типовые места, включая SDK и папку загрузок.
+    // РўРёРїРѕРІС‹Рµ РјРµСЃС‚Р°, РІРєР»СЋС‡Р°СЏ SDK Рё РїР°РїРєСѓ Р·Р°РіСЂСѓР·РѕРє.
     let mut roots: Vec<PathBuf> = Vec::new();
     if let Ok(local) = std::env::var("LOCALAPPDATA") {
         roots.push(PathBuf::from(local).join("Android").join("Sdk"));
@@ -447,7 +448,7 @@ fn search_adb(dir: &Path, depth: usize) -> Option<PathBuf> {
     None
 }
 
-/// Плитка мастера.
+/// РџР»РёС‚РєР° РјР°СЃС‚РµСЂР°.
 pub struct Module {
     pub id: &'static str,
     pub group: &'static str,
@@ -459,121 +460,121 @@ pub struct Module {
 pub const MODULES: &[Module] = &[
     Module {
         id: "env.cleanup",
-        group: "Окружение",
-        title: "Чистка окружения",
-        summary: "Убирает чужие записи из hosts, старые прокси и занятые порты",
+        group: "РћРєСЂСѓР¶РµРЅРёРµ",
+        title: "Р§РёСЃС‚РєР° РѕРєСЂСѓР¶РµРЅРёСЏ",
+        summary: "РЈР±РёСЂР°РµС‚ С‡СѓР¶РёРµ Р·Р°РїРёСЃРё РёР· hosts, СЃС‚Р°СЂС‹Рµ РїСЂРѕРєСЃРё Рё Р·Р°РЅСЏС‚С‹Рµ РїРѕСЂС‚С‹",
         needs_adb: false,
     },
     Module {
         id: "net.hotspot",
-        group: "Сеть",
-        title: "Точка доступа",
-        summary: "Поднимает хотспот с нужным SSID и паролем через WinRT",
+        group: "РЎРµС‚СЊ",
+        title: "РўРѕС‡РєР° РґРѕСЃС‚СѓРїР°",
+        summary: "РџРѕРґРЅРёРјР°РµС‚ С…РѕС‚СЃРїРѕС‚ СЃ РЅСѓР¶РЅС‹Рј SSID Рё РїР°СЂРѕР»РµРј С‡РµСЂРµР· WinRT",
         needs_adb: false,
     },
     Module {
         id: "net.share",
-        group: "Сеть",
-        title: "Общий доступ на Ethernet",
-        summary: "Включает ICS: Windows выдаёт станции адрес по кабелю",
+        group: "РЎРµС‚СЊ",
+        title: "РћР±С‰РёР№ РґРѕСЃС‚СѓРї РЅР° Ethernet",
+        summary: "Р’РєР»СЋС‡Р°РµС‚ ICS: Windows РІС‹РґР°С‘С‚ СЃС‚Р°РЅС†РёРё Р°РґСЂРµСЃ РїРѕ РєР°Р±РµР»СЋ",
         needs_adb: false,
     },
     Module {
         id: "net.unshare",
-        group: "Сеть",
-        title: "Убрать общий доступ",
-        summary: "Выключает ICS и возвращает адаптер на DHCP",
+        group: "РЎРµС‚СЊ",
+        title: "РЈР±СЂР°С‚СЊ РѕР±С‰РёР№ РґРѕСЃС‚СѓРї",
+        summary: "Р’С‹РєР»СЋС‡Р°РµС‚ ICS Рё РІРѕР·РІСЂР°С‰Р°РµС‚ Р°РґР°РїС‚РµСЂ РЅР° DHCP",
         needs_adb: false,
     },
     Module {
         id: "net.yandex-ips",
-        group: "Сеть",
-        title: "Адреса Яндекса на нас",
-        summary: "Вешает реальные IP облака на наш порт: станция идёт к нам без DNS",
+        group: "РЎРµС‚СЊ",
+        title: "РђРґСЂРµСЃР° РЇРЅРґРµРєСЃР° РЅР° РЅР°СЃ",
+        summary: "Р’РµС€Р°РµС‚ СЂРµР°Р»СЊРЅС‹Рµ IP РѕР±Р»Р°РєР° РЅР° РЅР°С€ РїРѕСЂС‚: СЃС‚Р°РЅС†РёСЏ РёРґС‘С‚ Рє РЅР°Рј Р±РµР· DNS",
         needs_adb: false,
     },
     Module {
         id: "net.yandex-ips-off",
-        group: "Сеть",
-        title: "Снять адреса Яндекса",
-        summary: "Убирает перенаправление по IP",
+        group: "РЎРµС‚СЊ",
+        title: "РЎРЅСЏС‚СЊ Р°РґСЂРµСЃР° РЇРЅРґРµРєСЃР°",
+        summary: "РЈР±РёСЂР°РµС‚ РїРµСЂРµРЅР°РїСЂР°РІР»РµРЅРёРµ РїРѕ IP",
         needs_adb: false,
     },
     Module {
         id: "net.names",
-        group: "Сеть",
-        title: "Имена станции → мы",
-        summary: "Пишет облачные имена в hosts ноутбука: Windows-DNS отдаёт станции наш адрес",
+        group: "РЎРµС‚СЊ",
+        title: "РРјРµРЅР° СЃС‚Р°РЅС†РёРё в†’ РјС‹",
+        summary: "РџРёС€РµС‚ РѕР±Р»Р°С‡РЅС‹Рµ РёРјРµРЅР° РІ hosts РЅРѕСѓС‚Р±СѓРєР°: Windows-DNS РѕС‚РґР°С‘С‚ СЃС‚Р°РЅС†РёРё РЅР°С€ Р°РґСЂРµСЃ",
         needs_adb: false,
     },
     Module {
         id: "net.static-ip",
-        group: "Сеть",
-        title: "Статический адрес",
-        summary: "Прописывает станции адрес заранее: её проверка связи идёт через 0 с",
+        group: "РЎРµС‚СЊ",
+        title: "РЎС‚Р°С‚РёС‡РµСЃРєРёР№ Р°РґСЂРµСЃ",
+        summary: "РџСЂРѕРїРёСЃС‹РІР°РµС‚ СЃС‚Р°РЅС†РёРё Р°РґСЂРµСЃ Р·Р°СЂР°РЅРµРµ: РµС‘ РїСЂРѕРІРµСЂРєР° СЃРІСЏР·Рё РёРґС‘С‚ С‡РµСЂРµР· 0 СЃ",
         needs_adb: true,
     },
     Module {
         id: "net.hosts",
-        group: "Сеть",
-        title: "Имена → наш сервер",
-        summary: "Все облачные имена станции направляет на нас (перехват по именам)",
+        group: "РЎРµС‚СЊ",
+        title: "РРјРµРЅР° в†’ РЅР°С€ СЃРµСЂРІРµСЂ",
+        summary: "Р’СЃРµ РѕР±Р»Р°С‡РЅС‹Рµ РёРјРµРЅР° СЃС‚Р°РЅС†РёРё РЅР°РїСЂР°РІР»СЏРµС‚ РЅР° РЅР°СЃ (РїРµСЂРµС…РІР°С‚ РїРѕ РёРјРµРЅР°Рј)",
         needs_adb: true,
     },
     Module {
         id: "ca.install",
-        group: "Сертификаты",
-        title: "Установить корневой CA",
-        summary: "Кладёт наш CA в хранилище станции, заменяя предыдущий, и проверяет",
+        group: "РЎРµСЂС‚РёС„РёРєР°С‚С‹",
+        title: "РЈСЃС‚Р°РЅРѕРІРёС‚СЊ РєРѕСЂРЅРµРІРѕР№ CA",
+        summary: "РљР»Р°РґС‘С‚ РЅР°С€ CA РІ С…СЂР°РЅРёР»РёС‰Рµ СЃС‚Р°РЅС†РёРё, Р·Р°РјРµРЅСЏСЏ РїСЂРµРґС‹РґСѓС‰РёР№, Рё РїСЂРѕРІРµСЂСЏРµС‚",
         needs_adb: true,
     },
     Module {
         id: "clock.sync",
-        group: "Время",
-        title: "Синхронизация часов",
-        summary: "Выставляет время станции по ноутбуку",
+        group: "Р’СЂРµРјСЏ",
+        title: "РЎРёРЅС…СЂРѕРЅРёР·Р°С†РёСЏ С‡Р°СЃРѕРІ",
+        summary: "Р’С‹СЃС‚Р°РІР»СЏРµС‚ РІСЂРµРјСЏ СЃС‚Р°РЅС†РёРё РїРѕ РЅРѕСѓС‚Р±СѓРєСѓ",
         needs_adb: true,
     },
     Module {
         id: "ota.serve",
         group: "OTA",
-        title: "Локальный OTA/sync",
-        summary: "Отдаёт прошивку, /check_updates, /get_sync_info и 204 на порту 80",
+        title: "Р›РѕРєР°Р»СЊРЅС‹Р№ OTA/sync",
+        summary: "РћС‚РґР°С‘С‚ РїСЂРѕС€РёРІРєСѓ, /check_updates, /get_sync_info Рё 204 РЅР° РїРѕСЂС‚Сѓ 80",
         needs_adb: false,
     },
     Module {
         id: "adb.guard",
         group: "ADB",
-        title: "Сторож ADB",
-        summary: "Ставит S99adbguard: сетевой ADB поднимается сам после сброса",
+        title: "РЎС‚РѕСЂРѕР¶ ADB",
+        summary: "РЎС‚Р°РІРёС‚ S99adbguard: СЃРµС‚РµРІРѕР№ ADB РїРѕРґРЅРёРјР°РµС‚СЃСЏ СЃР°Рј РїРѕСЃР»Рµ СЃР±СЂРѕСЃР°",
         needs_adb: true,
     },
     Module {
         id: "adb.noupdate",
         group: "ADB",
-        title: "Отключить обновления",
-        summary: "Подменяет ota_script.pub, глушит device_ota_update.sh, убирает updatesd",
+        title: "РћС‚РєР»СЋС‡РёС‚СЊ РѕР±РЅРѕРІР»РµРЅРёСЏ",
+        summary: "РџРѕРґРјРµРЅСЏРµС‚ ota_script.pub, РіР»СѓС€РёС‚ device_ota_update.sh, СѓР±РёСЂР°РµС‚ updatesd",
         needs_adb: true,
     },
     Module {
         id: "adb.ensure",
         group: "ADB",
-        title: "ADB внутри программы",
-        summary: "Скачивает platform-tools в data/adb при первом запуске и проверяет",
+        title: "ADB РІРЅСѓС‚СЂРё РїСЂРѕРіСЂР°РјРјС‹",
+        summary: "РЎРєР°С‡РёРІР°РµС‚ platform-tools РІ data/adb РїСЂРё РїРµСЂРІРѕРј Р·Р°РїСѓСЃРєРµ Рё РїСЂРѕРІРµСЂСЏРµС‚",
         needs_adb: false,
     },
     Module {
         id: "backup.pull",
         group: "ADB",
-        title: "Бэкап станции",
-        summary: "Снимает конфиги и скрипты станции в data/backups (только после разблокировки)",
+        title: "Р‘СЌРєР°Рї СЃС‚Р°РЅС†РёРё",
+        summary: "РЎРЅРёРјР°РµС‚ РєРѕРЅС„РёРіРё Рё СЃРєСЂРёРїС‚С‹ СЃС‚Р°РЅС†РёРё РІ data/backups (С‚РѕР»СЊРєРѕ РїРѕСЃР»Рµ СЂР°Р·Р±Р»РѕРєРёСЂРѕРІРєРё)",
         needs_adb: true,
     },
     Module {
         id: "verify.configured",
-        group: "Проверка",
-        title: "Проверить настройку",
-        summary: "Смотрит в лог станции: есть ли CONFIGURED и файл registered",
+        group: "РџСЂРѕРІРµСЂРєР°",
+        title: "РџСЂРѕРІРµСЂРёС‚СЊ РЅР°СЃС‚СЂРѕР№РєСѓ",
+        summary: "РЎРјРѕС‚СЂРёС‚ РІ Р»РѕРі СЃС‚Р°РЅС†РёРё: РµСЃС‚СЊ Р»Рё CONFIGURED Рё С„Р°Р№Р» registered",
         needs_adb: true,
     },
 ];
@@ -584,7 +585,7 @@ pub fn find(id: &str) -> Option<&'static Module> {
 
 pub fn run(id: &str, ctx: &ModuleCtx) -> Result<String, String> {
     let Some(module) = find(id) else {
-        return Err(format!("неизвестный модуль: {id}"));
+        return Err(format!("РЅРµРёР·РІРµСЃС‚РЅС‹Р№ РјРѕРґСѓР»СЊ: {id}"));
     };
     let mut ctx = ctx.clone();
     if module.needs_adb {
@@ -593,7 +594,7 @@ pub fn run(id: &str, ctx: &ModuleCtx) -> Result<String, String> {
     let ctx = &ctx;
     if module.needs_adb && !adb_reachable(ctx) {
         return Err(format!(
-            "станция не отвечает на {} — включите ADB",
+            "СЃС‚Р°РЅС†РёСЏ РЅРµ РѕС‚РІРµС‡Р°РµС‚ РЅР° {} вЂ” РІРєР»СЋС‡РёС‚Рµ ADB",
             ctx.addr
         ));
     }
@@ -615,11 +616,11 @@ pub fn run(id: &str, ctx: &ModuleCtx) -> Result<String, String> {
         "adb.ensure" => adb_ensure(),
         "backup.pull" => backup_pull(ctx),
         "verify.configured" => verify_configured(ctx),
-        _ => Err(format!("модуль {id} не реализован")),
+        _ => Err(format!("РјРѕРґСѓР»СЊ {id} РЅРµ СЂРµР°Р»РёР·РѕРІР°РЅ")),
     }
 }
 
-/// Быстрая проверка: отвечает ли ADB по этому адресу.
+/// Р‘С‹СЃС‚СЂР°СЏ РїСЂРѕРІРµСЂРєР°: РѕС‚РІРµС‡Р°РµС‚ Р»Рё ADB РїРѕ СЌС‚РѕРјСѓ Р°РґСЂРµСЃСѓ.
 fn adb_reachable(ctx: &ModuleCtx) -> bool {
     use std::net::{SocketAddr, TcpStream};
     use std::time::Duration;
@@ -636,7 +637,7 @@ fn adb(ctx: &ModuleCtx, args: &[&str]) -> Result<String, String> {
     cmd.args(["-s", &ctx.addr]).args(args);
     let out = cmd
         .output()
-        .map_err(|e| format!("не запустить adb ({}): {e}", ctx.adb))?;
+        .map_err(|e| format!("РЅРµ Р·Р°РїСѓСЃС‚РёС‚СЊ adb ({}): {e}", ctx.adb))?;
     let mut text = String::from_utf8_lossy(&out.stdout).to_string();
     text.push_str(&String::from_utf8_lossy(&out.stderr));
     if !out.status.success() {
@@ -649,7 +650,7 @@ fn adb_connect(ctx: &ModuleCtx) -> Result<String, String> {
     let out = Command::new(&ctx.adb)
         .args(["connect", &ctx.addr])
         .output()
-        .map_err(|e| format!("не запустить adb ({}): {e}", ctx.adb))?;
+        .map_err(|e| format!("РЅРµ Р·Р°РїСѓСЃС‚РёС‚СЊ adb ({}): {e}", ctx.adb))?;
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
@@ -659,7 +660,7 @@ fn adb_push(ctx: &ModuleCtx, local: &Path, remote: &str) -> Result<(), String> {
         .arg(local)
         .arg(remote)
         .output()
-        .map_err(|e| format!("не запустить adb: {e}"))?;
+        .map_err(|e| format!("РЅРµ Р·Р°РїСѓСЃС‚РёС‚СЊ adb: {e}"))?;
     if !out.status.success() {
         return Err(format!(
             "adb push {}: {}",
@@ -670,7 +671,7 @@ fn adb_push(ctx: &ModuleCtx, local: &Path, remote: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Кладёт скрипт в /tmp и запускает его под shell.
+/// РљР»Р°РґС‘С‚ СЃРєСЂРёРїС‚ РІ /tmp Рё Р·Р°РїСѓСЃРєР°РµС‚ РµРіРѕ РїРѕРґ shell.
 fn adb_script(ctx: &ModuleCtx, name: &str, body: &str) -> Result<String, String> {
     let dir = std::env::temp_dir().join("cockpit-modules");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -681,18 +682,35 @@ fn adb_script(ctx: &ModuleCtx, name: &str, body: &str) -> Result<String, String>
     adb(ctx, &["shell", "sh", &remote])
 }
 
-// ---------------------------------------------------------- модули ----
+/// РџСѓС€РёС‚ С„Р°Р№Р» СЃРєСЂРёРїС‚Р° СЃ РїРµСЂРµРІРѕРґР°РјРё СЃС‚СЂРѕРє LF.
+///
+/// Git РЅР° Windows РѕС‚РґР°С‘С‚ `.sh` СЃ CRLF, Р° busybox РЅР° СЃС‚Р°РЅС†РёРё РЅР° СЌС‚РѕРј
+/// РїР°РґР°РµС‚ (`set: illegal option`). РџРѕСЌС‚РѕРјСѓ РїРµСЂРµРґ push РІСЃРµРіРґР° С‡РёРЅРёРј EOL.
+fn push_script(ctx: &ModuleCtx, local: &Path, remote: &str) -> Result<(), String> {
+    let text = std::fs::read_to_string(local).map_err(|e| format!("{}: {e}", local.display()))?;
+    let dir = std::env::temp_dir().join("cockpit-modules");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let name = local
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("script.sh");
+    let tmp = dir.join(format!("lf-{name}"));
+    std::fs::write(&tmp, text.replace("\r\n", "\n")).map_err(|e| e.to_string())?;
+    adb_push(ctx, &tmp, remote)
+}
+
+// ---------------------------------------------------------- РјРѕРґСѓР»Рё ----
 
 fn env_cleanup() -> Result<String, String> {
     let mut log = String::new();
 
-    // 1. Чужие записи в hosts ноутбука: раньше из-за них форвардер ходил сам в себя.
+    // 1. Р§СѓР¶РёРµ Р·Р°РїРёСЃРё РІ hosts РЅРѕСѓС‚Р±СѓРєР°: СЂР°РЅСЊС€Рµ РёР·-Р·Р° РЅРёС… С„РѕСЂРІР°СЂРґРµСЂ С…РѕРґРёР» СЃР°Рј РІ СЃРµР±СЏ.
     let hosts = PathBuf::from(std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".into()))
         .join("System32\\drivers\\etc\\hosts");
     match std::fs::read_to_string(&hosts) {
         Ok(text) => {
-            // Блок `# cockpit-names` — наш, его не трогаем: именно он
-            // направляет имена станции на нас (G-041).
+            // Р‘Р»РѕРє `# cockpit-names` вЂ” РЅР°С€, РµРіРѕ РЅРµ С‚СЂРѕРіР°РµРј: РёРјРµРЅРЅРѕ РѕРЅ
+            // РЅР°РїСЂР°РІР»СЏРµС‚ РёРјРµРЅР° СЃС‚Р°РЅС†РёРё РЅР° РЅР°СЃ (G-041).
             let mut in_our_block = false;
             let kept: Vec<&str> = text
                 .lines()
@@ -715,20 +733,20 @@ fn env_cleanup() -> Result<String, String> {
                 .collect();
             let removed = text.lines().count() - kept.len();
             if removed == 0 {
-                log.push_str("hosts: посторонних записей нет\n");
+                log.push_str("hosts: РїРѕСЃС‚РѕСЂРѕРЅРЅРёС… Р·Р°РїРёСЃРµР№ РЅРµС‚\n");
             } else {
                 let mut out = kept.join("\n");
                 out.push('\n');
                 std::fs::write(&hosts, out).map_err(|e| {
-                    format!("hosts не записался ({e}) — запустите от администратора")
+                    format!("hosts РЅРµ Р·Р°РїРёСЃР°Р»СЃСЏ ({e}) вЂ” Р·Р°РїСѓСЃС‚РёС‚Рµ РѕС‚ Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂР°")
                 })?;
-                log.push_str(&format!("hosts: убрано записей {removed}\n"));
+                log.push_str(&format!("hosts: СѓР±СЂР°РЅРѕ Р·Р°РїРёСЃРµР№ {removed}\n"));
             }
         }
-        Err(e) => log.push_str(&format!("hosts: не прочитан ({e})\n")),
+        Err(e) => log.push_str(&format!("hosts: РЅРµ РїСЂРѕС‡РёС‚Р°РЅ ({e})\n")),
     }
 
-    // 2. Старые Python-прокси: они держат 80/443 и мешают нашему серверу.
+    // 2. РЎС‚Р°СЂС‹Рµ Python-РїСЂРѕРєСЃРё: РѕРЅРё РґРµСЂР¶Р°С‚ 80/443 Рё РјРµС€Р°СЋС‚ РЅР°С€РµРјСѓ СЃРµСЂРІРµСЂСѓ.
     let ps = Command::new("powershell")
         .args([
             "-NoProfile",
@@ -749,7 +767,9 @@ fn env_cleanup() -> Result<String, String> {
                 killed += 1;
             }
         }
-        log.push_str(&format!("старые прокси: остановлено {killed}\n"));
+        log.push_str(&format!(
+            "СЃС‚Р°СЂС‹Рµ РїСЂРѕРєСЃРё: РѕСЃС‚Р°РЅРѕРІР»РµРЅРѕ {killed}\n"
+        ));
     }
 
     Ok(log)
@@ -779,10 +799,10 @@ fn net_hotspot(ctx: &ModuleCtx) -> Result<String, String> {
     Ok(text)
 }
 
-/// Включает общий доступ (ICS) с аплинка на выбранный адаптер.
+/// Р’РєР»СЋС‡Р°РµС‚ РѕР±С‰РёР№ РґРѕСЃС‚СѓРї (ICS) СЃ Р°РїР»РёРЅРєР° РЅР° РІС‹Р±СЂР°РЅРЅС‹Р№ Р°РґР°РїС‚РµСЂ.
 ///
-/// GOTCHA: G-050 — COM-объект HNetCfg работает только из процесса с правами
-/// администратора, поэтому модуль вызывается мастером, а не отдельным CLI.
+/// GOTCHA: G-050 вЂ” COM-РѕР±СЉРµРєС‚ HNetCfg СЂР°Р±РѕС‚Р°РµС‚ С‚РѕР»СЊРєРѕ РёР· РїСЂРѕС†РµСЃСЃР° СЃ РїСЂР°РІР°РјРё
+/// Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂР°, РїРѕСЌС‚РѕРјСѓ РјРѕРґСѓР»СЊ РІС‹Р·С‹РІР°РµС‚СЃСЏ РјР°СЃС‚РµСЂРѕРј, Р° РЅРµ РѕС‚РґРµР»СЊРЅС‹Рј CLI.
 fn net_share(ctx: &ModuleCtx) -> Result<String, String> {
     let adapter = if ctx.ethernet.is_empty() {
         "Ethernet".to_string()
@@ -836,7 +856,7 @@ Start-Sleep -Seconds 4
     Ok(text)
 }
 
-/// Выключает общий доступ и возвращает адаптер на DHCP.
+/// Р’С‹РєР»СЋС‡Р°РµС‚ РѕР±С‰РёР№ РґРѕСЃС‚СѓРї Рё РІРѕР·РІСЂР°С‰Р°РµС‚ Р°РґР°РїС‚РµСЂ РЅР° DHCP.
 fn net_unshare(ctx: &ModuleCtx) -> Result<String, String> {
     let adapter = if ctx.ethernet.is_empty() {
         "Ethernet".to_string()
@@ -881,7 +901,7 @@ netsh interface ip set address name="{adapter}" dhcp | Out-Null
     Ok(text)
 }
 
-/// Имена, чьи настоящие адреса вешаем на свой порт.
+/// РРјРµРЅР°, С‡СЊРё РЅР°СЃС‚РѕСЏС‰РёРµ Р°РґСЂРµСЃР° РІРµС€Р°РµРј РЅР° СЃРІРѕР№ РїРѕСЂС‚.
 const REDIRECT_NAMES: &[&str] = &[
     "quasar.yandex.net",
     "scbh.yandex.net",
@@ -893,7 +913,7 @@ const REDIRECT_NAMES: &[&str] = &[
     "quasar.yandex.ru",
 ];
 
-/// Разрешает имя через публичный DNS, обходя hosts.
+/// Р Р°Р·СЂРµС€Р°РµС‚ РёРјСЏ С‡РµСЂРµР· РїСѓР±Р»РёС‡РЅС‹Р№ DNS, РѕР±С…РѕРґСЏ hosts.
 fn resolve_real(name: &str) -> Vec<String> {
     let out = Command::new("nslookup")
         .args([name, "8.8.8.8"])
@@ -906,8 +926,8 @@ fn resolve_real(name: &str) -> Vec<String> {
         if token.matches('.').count() != 3 || !token.split('.').all(|p| !p.is_empty()) {
             continue;
         }
-        // GOTCHA: G-049 — в выводе nslookup первым идёт адрес самого
-        // резолвера; его нельзя вешать на интерфейс, иначе ломается DNS.
+        // GOTCHA: G-049 вЂ” РІ РІС‹РІРѕРґРµ nslookup РїРµСЂРІС‹Рј РёРґС‘С‚ Р°РґСЂРµСЃ СЃР°РјРѕРіРѕ
+        // СЂРµР·РѕР»РІРµСЂР°; РµРіРѕ РЅРµР»СЊР·СЏ РІРµС€Р°С‚СЊ РЅР° РёРЅС‚РµСЂС„РµР№СЃ, РёРЅР°С‡Рµ Р»РѕРјР°РµС‚СЃСЏ DNS.
         if token == "8.8.8.8"
             || token.starts_with("127.")
             || token.starts_with("0.")
@@ -922,10 +942,10 @@ fn resolve_real(name: &str) -> Vec<String> {
     ips
 }
 
-/// Вешает (или снимает) настоящие адреса облака на выбранный адаптер.
+/// Р’РµС€Р°РµС‚ (РёР»Рё СЃРЅРёРјР°РµС‚) РЅР°СЃС‚РѕСЏС‰РёРµ Р°РґСЂРµСЃР° РѕР±Р»Р°РєР° РЅР° РІС‹Р±СЂР°РЅРЅС‹Р№ Р°РґР°РїС‚РµСЂ.
 ///
-/// GOTCHA: G-048 — ICS-DNS не учитывает hosts, поэтому станция ходит на
-/// настоящие IP. Алиасы на нашем порту заставляют трафик приходить к нам.
+/// GOTCHA: G-048 вЂ” ICS-DNS РЅРµ СѓС‡РёС‚С‹РІР°РµС‚ hosts, РїРѕСЌС‚РѕРјСѓ СЃС‚Р°РЅС†РёСЏ С…РѕРґРёС‚ РЅР°
+/// РЅР°СЃС‚РѕСЏС‰РёРµ IP. РђР»РёР°СЃС‹ РЅР° РЅР°С€РµРј РїРѕСЂС‚Сѓ Р·Р°СЃС‚Р°РІР»СЏСЋС‚ С‚СЂР°С„РёРє РїСЂРёС…РѕРґРёС‚СЊ Рє РЅР°Рј.
 fn net_yandex_ips(ctx: &ModuleCtx, add: bool) -> Result<String, String> {
     let adapter = if ctx.ethernet.is_empty() {
         "Ethernet".to_string()
@@ -942,14 +962,16 @@ fn net_yandex_ips(ctx: &ModuleCtx, add: bool) -> Result<String, String> {
         }
     }
     if ips.is_empty() {
-        return Err("не удалось определить адреса облака".to_string());
+        return Err(
+            "РЅРµ СѓРґР°Р»РѕСЃСЊ РѕРїСЂРµРґРµР»РёС‚СЊ Р°РґСЂРµСЃР° РѕР±Р»Р°РєР°".to_string(),
+        );
     }
 
     let mut log = String::new();
     let mut applied = 0usize;
     for ip in &ips {
-        // Сначала снимаем адрес, чтобы шаг был повторяемым: netsh не умеет
-        // «добавить, если нет» и ругается на существующий адрес.
+        // РЎРЅР°С‡Р°Р»Р° СЃРЅРёРјР°РµРј Р°РґСЂРµСЃ, С‡С‚РѕР±С‹ С€Р°Рі Р±С‹Р» РїРѕРІС‚РѕСЂСЏРµРјС‹Рј: netsh РЅРµ СѓРјРµРµС‚
+        // В«РґРѕР±Р°РІРёС‚СЊ, РµСЃР»Рё РЅРµС‚В» Рё СЂСѓРіР°РµС‚СЃСЏ РЅР° СЃСѓС‰РµСЃС‚РІСѓСЋС‰РёР№ Р°РґСЂРµСЃ.
         let _ = Command::new("netsh")
             .args([
                 "interface",
@@ -982,9 +1004,9 @@ fn net_yandex_ips(ctx: &ModuleCtx, add: bool) -> Result<String, String> {
         }
     }
     if add && applied == 0 {
-        return Err("netsh не применил ни одного адреса (нужны права администратора)".to_string());
+        return Err("netsh РЅРµ РїСЂРёРјРµРЅРёР» РЅРё РѕРґРЅРѕРіРѕ Р°РґСЂРµСЃР° (РЅСѓР¶РЅС‹ РїСЂР°РІР° Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂР°)".to_string());
     }
-    Ok(format!("{adapter}: адресов {}\n{log}", ips.len()))
+    Ok(format!("{adapter}: Р°РґСЂРµСЃРѕРІ {}\n{log}", ips.len()))
 }
 
 fn net_names() -> Result<String, String> {
@@ -1036,7 +1058,7 @@ fn net_names() -> Result<String, String> {
         .join("System32\\drivers\\etc\\hosts");
     let text = std::fs::read_to_string(&hosts).map_err(|e| format!("hosts: {e}"))?;
 
-    // Убираем прежний наш блок целиком, затем пишем свежий.
+    // РЈР±РёСЂР°РµРј РїСЂРµР¶РЅРёР№ РЅР°С€ Р±Р»РѕРє С†РµР»РёРєРѕРј, Р·Р°С‚РµРј РїРёС€РµРј СЃРІРµР¶РёР№.
     let mut out = String::new();
     let mut skip = false;
     for line in text.lines() {
@@ -1054,15 +1076,15 @@ fn net_names() -> Result<String, String> {
         out.push_str(line);
         out.push('\n');
     }
-    out.push_str("# cockpit-names: имена станции -> наш сервер\n");
+    out.push_str("# cockpit-names: РёРјРµРЅР° СЃС‚Р°РЅС†РёРё -> РЅР°С€ СЃРµСЂРІРµСЂ\n");
     for name in names {
         out.push_str(&format!("192.168.138.1 {name}\n"));
     }
 
     std::fs::write(&hosts, out)
-        .map_err(|e| format!("hosts не записался ({e}) — запустите от администратора"))?;
+        .map_err(|e| format!("hosts РЅРµ Р·Р°РїРёСЃР°Р»СЃСЏ ({e}) вЂ” Р·Р°РїСѓСЃС‚РёС‚Рµ РѕС‚ Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂР°"))?;
     Ok(format!(
-        "записей: {}\nимена теперь указывают на 192.168.138.1",
+        "Р·Р°РїРёСЃРµР№: {}\nРёРјРµРЅР° С‚РµРїРµСЂСЊ СѓРєР°Р·С‹РІР°СЋС‚ РЅР° 192.168.138.1",
         names.len()
     ))
 }
@@ -1072,10 +1094,10 @@ fn net_static_ip(ctx: &ModuleCtx) -> Result<String, String> {
     let script = r#"C=/etc/dhcpcd.conf
 mount -o remount,rw / 2>/dev/null
 if grep -q "cockpit-static" "$C" 2>/dev/null; then
-  echo "статика уже есть"
+  echo "СЃС‚Р°С‚РёРєР° СѓР¶Рµ РµСЃС‚СЊ"
 else
-  printf '\n# cockpit-static: адрес выдан заранее\ninterface wlan0\nstatic ip_address=192.168.138.217/24\nstatic routers=192.168.138.1\nstatic domain_name_servers=192.168.138.1\n' >> "$C"
-  echo "статика добавлена"
+  printf '\n# cockpit-static: Р°РґСЂРµСЃ РІС‹РґР°РЅ Р·Р°СЂР°РЅРµРµ\ninterface wlan0\nstatic ip_address=192.168.138.217/24\nstatic routers=192.168.138.1\nstatic domain_name_servers=192.168.138.1\n' >> "$C"
+  echo "СЃС‚Р°С‚РёРєР° РґРѕР±Р°РІР»РµРЅР°"
 fi
 sync
 tail -4 "$C"
@@ -1102,7 +1124,7 @@ for n in oauth.yandex.ru scbh.yandex.net quasar.yandex.ru quasar.yandex.net \
   grep -q "192.168.138.1 $n" $H 2>/dev/null || echo "192.168.138.1 $n" >> $H
 done
 sync
-echo "записей: $(grep -c 192.168.138.1 $H)"
+echo "Р·Р°РїРёСЃРµР№: $(grep -c 192.168.138.1 $H)"
 "#;
     adb_script(ctx, "hosts_add.sh", script)
 }
@@ -1114,7 +1136,7 @@ fn ca_install(ctx: &ModuleCtx) -> Result<String, String> {
     }
     if !ctx.ca_pem.exists() {
         return Err(format!(
-            "нет {} — запустите модуль OTA, он создаёт CA",
+            "РЅРµС‚ {} вЂ” Р·Р°РїСѓСЃС‚РёС‚Рµ РјРѕРґСѓР»СЊ OTA, РѕРЅ СЃРѕР·РґР°С‘С‚ CA",
             ctx.ca_pem.display()
         ));
     }
@@ -1126,10 +1148,10 @@ SHA='{sha}'
 MARK=/data/cockpit-ca.sha
 mount -o remount,rw / 2>/dev/null
 if [ -f "$MARK" ] && [ "$(cat $MARK)" = "$SHA" ]; then
-  echo "CA уже установлен"
+  echo "CA СѓР¶Рµ СѓСЃС‚Р°РЅРѕРІР»РµРЅ"
   exit 0
 fi
-# Убираем наш прошлый сертификат: он всегда дописан в конец.
+# РЈР±РёСЂР°РµРј РЅР°С€ РїСЂРѕС€Р»С‹Р№ СЃРµСЂС‚РёС„РёРєР°С‚: РѕРЅ РІСЃРµРіРґР° РґРѕРїРёСЃР°РЅ РІ РєРѕРЅРµС†.
 if [ -f "$MARK" ]; then
   total=$(grep -c 'BEGIN CERTIFICATE' "$B")
   keep=$((total - 1))
@@ -1141,7 +1163,7 @@ cat /tmp/cockpit-ca.pem >> "$B"
 mkdir -p /data
 echo "$SHA" > "$MARK"
 sync
-echo "сертификатов: $(grep -c 'BEGIN CERTIFICATE' "$B")"
+echo "СЃРµСЂС‚РёС„РёРєР°С‚РѕРІ: $(grep -c 'BEGIN CERTIFICATE' "$B")"
 "#
     );
     adb_script(ctx, "install_ca.sh", &script)
@@ -1151,7 +1173,9 @@ fn clock_sync(ctx: &ModuleCtx) -> Result<String, String> {
     adb_connect(ctx)?;
     let utc = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let out = adb(ctx, &["shell", &format!("date -s '{utc}'; date")])?;
-    Ok(format!("время по ноутбуку (UTC {utc}):\n{out}"))
+    Ok(format!(
+        "РІСЂРµРјСЏ РїРѕ РЅРѕСѓС‚Р±СѓРєСѓ (UTC {utc}):\n{out}"
+    ))
 }
 
 fn ota_serve(_ctx: &ModuleCtx) -> Result<String, String> {
@@ -1184,10 +1208,10 @@ fn ota_serve(_ctx: &ModuleCtx) -> Result<String, String> {
         .stdout(out)
         .stderr(err)
         .spawn()
-        .map_err(|e| format!("не запустить local-ota: {e}"))?;
+        .map_err(|e| format!("РЅРµ Р·Р°РїСѓСЃС‚РёС‚СЊ local-ota: {e}"))?;
 
     Ok(format!(
-        "local-ota запущен (pid {}), лог: {}",
+        "local-ota Р·Р°РїСѓС‰РµРЅ (pid {}), Р»РѕРі: {}",
         child.id(),
         log.display()
     ))
@@ -1200,7 +1224,7 @@ fn adb_guard(ctx: &ModuleCtx) -> Result<String, String> {
     }
     let script = PathBuf::from("firmware").join("S99adbguard");
     if !script.exists() {
-        return Err(format!("нет {}", script.display()));
+        return Err(format!("РЅРµС‚ {}", script.display()));
     }
     adb_push(ctx, &script, "/tmp/S99adbguard")?;
     adb(
