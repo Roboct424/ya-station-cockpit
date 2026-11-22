@@ -71,9 +71,16 @@ pub fn serve(mode: Mode, alias: Ipv4Addr, online: bool, quasar: bool) -> Result<
     // чужих клиентов точки (телефон). Поэтому не поднимаем их вовсе.
     let hotspot = cockpit_net::hotspot_is_on();
     if hotspot {
-        log("точка доступа: DHCP/DNS/NAT у ICS, свои 53/67 не поднимаем");
+        // ICS держит 53 wildcard'ом; садимся на адрес шлюза точки поверх
+        // него (SO_REUSEADDR) и отвечаем мгновенно — наш ответ приходит
+        // раньше, чем ICS успевает сходить в апстрим.
+        let ap = Ipv4Addr::new(192, 168, 137, 1);
+        log("точка доступа: DNS перехватываем на 192.168.137.1, DHCP/NAT у ICS");
+        spawn("dns-ap", move || dns_loop(ap, ap, mode, online));
     } else {
-        spawn("dns", move || dns_loop(mode, alias, online));
+        spawn("dns", move || {
+            dns_loop(Ipv4Addr::UNSPECIFIED, alias, mode, online)
+        });
         spawn("dhcp", dhcp_loop);
     }
     spawn("http", http_loop);
@@ -254,15 +261,20 @@ fn ensure_private_profile() {
 
 // ---------------------------------------------------------------- DNS ------
 
-fn dns_loop(mode: Mode, alias: Ipv4Addr, online: bool) {
-    // 0.0.0.0: отвечаем и на проводном линке, и на точке доступа
-    // (там шлюз 192.168.137.1 от Windows ICS).
-    let Ok(sock) = UdpSocket::bind(("0.0.0.0", 53)) else {
-        log("DNS: порт 53 занят");
+fn dns_loop(listen: Ipv4Addr, answer: Ipv4Addr, mode: Mode, online: bool) {
+    // 0.0.0.0 — проводной линк. 192.168.137.1 — точка доступа: садимся
+    // поверх ICS-DNS с SO_REUSEADDR и отвечаем быстрее него (G-093).
+    let sock = if listen.is_unspecified() {
+        UdpSocket::bind((listen, 53))
+    } else {
+        udp_reuse((listen.octets(), 53))
+    };
+    let Ok(sock) = sock else {
+        log(&format!("DNS: {listen}:53 занят"));
         return;
     };
     sock.set_read_timeout(Some(Duration::from_secs(2))).ok();
-    log(&format!("DNS: слушаю 0.0.0.0:53 (ответ {alias})"));
+    log(&format!("DNS: слушаю {listen}:53 (ответ {answer})"));
     let mut buf = [0u8; 2048];
     loop {
         let Ok((len, peer)) = sock.recv_from(&mut buf) else {
@@ -286,7 +298,7 @@ fn dns_loop(mode: Mode, alias: Ipv4Addr, online: bool) {
             continue;
         }
         if (yandex || ntp) && qtype == 1 && mode == Mode::Sync {
-            let _ = sock.send_to(&a_answer(query, q_end, alias), peer);
+            let _ = sock.send_to(&a_answer(query, q_end, answer), peer);
             continue;
         }
         if !online {

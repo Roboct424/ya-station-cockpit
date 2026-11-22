@@ -91,7 +91,12 @@
     "IPv6 на точке выключен": "IPv6 is off on the hotspot",
     "IPv6 на точке остался (нужны права администратора)": "IPv6 is still on the hotspot (administrator rights required)",
     "IPv6 на точке уже выключен": "IPv6 is already off on the hotspot",
-    "точка без адреса": "hotspot has no address yet"
+    "точка без адреса": "hotspot has no address yet",
+    "Применить и перейти к попытке": "Apply and go to the attempt",
+    "Перезапустить службы": "Restart services",
+    "службы перезапущены": "services restarted",
+    "перезапускаю…": "restarting…",
+    "точка доступа: DNS перехватываем на 192.168.137.1, DHCP/NAT у ICS": "hotspot: intercepting DNS on 192.168.137.1, DHCP/NAT left to ICS"
   },
   "_comment": "Все системные сообщения. Ключ — русский текст из кода (динамические части: {0}, {1}), значение — английский. Проверка: python tools/i18n_check.py",
   "en": {

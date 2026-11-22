@@ -167,7 +167,6 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
         <div class="check"><input type="checkbox" checked disabled><span>Запущенные Python-прокси (probe204, net_force3, fake-quasar)</span></div>
         <div class="check"><input type="checkbox" checked disabled><span>Занятые порты 80 и 443</span></div>
         <button class="act" id="btnClean" onclick="cleanup()">Очистить</button>
-        <button class="act" onclick="hubServe('base')">Подготовить сеть</button>
         <span id="r_clean" class="chip wait">не выполнялось</span>
         <span id="r_sys" class="chip wait">сеть: не готовилась</span>
       </div>
@@ -343,10 +342,7 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
   </div>
   </div>
 
-  <button class="act apply" id="btnApply" onclick="applyAndRestart()">Применить и перезапустить стек</button>
-  <div style="display:flex;justify-content:flex-end;margin-top:4px">
-    <button class="act" onclick="nextFromSetup()">Далее: попытка →</button>
-  </div>
+  <button class="act apply" id="btnApply" onclick="applyAndRestart()">Применить и перейти к попытке</button>
   <p class="hint" id="apply_hint" style="text-align:center"></p>
 </section>
 
@@ -388,9 +384,8 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
         <h2>Станция</h2>
         <div id="dev" class="box muted">…</div>
         <div>
-          <button class="act ghost" onclick="restartStack()">Перезапустить стек</button>
+          <button class="act ghost" onclick="restartStack()">Перезапустить службы</button>
           <button class="act ghost" onclick="stopStack()">Остановить</button>
-          <button class="act" onclick="hubServe('sync')">Запустить службу</button>
         </div>
         <div style="margin-top:8px">
           <span id="r_hub" class="chip wait">службы не запущены</span>
@@ -1154,10 +1149,16 @@ function renderMaint(j) {
 }
 
 async function restartStack() {
-  $('apply_hint').textContent = 'перезапускаю стек…';
-  const r = await (await fetch('/api/restart', {method: 'POST', body: new URLSearchParams({mode: 'offline', update: '0'})})).json();
-  $('apply_hint').textContent = r.ok ? `стек работает: ${r.routes} маршрутов` : 'ошибка';
-  append('перезапуск стека: ' + (r.text || ''));
+  chip('r_hub', false, 'перезапускаю…');
+  const body = new URLSearchParams({
+    mode: 'sync',
+    link: $('link').value,
+    adapter: $('adapter').value || 'Ethernet'
+  });
+  const r = await (await fetch('/api/hub/serve', {method: 'POST', body})).json();
+  chip('r_hub', r.ok, r.ok ? 'службы перезапущены' : (r.text || 'ошибка'));
+  append(r.ok ? 'службы перезапущены' : 'ошибка: ' + r.text);
+  hubStatus();
 }
 
 async function cleanupAll() {
@@ -1232,16 +1233,6 @@ async function applyAndRestart() {
   $('apply_hint').textContent = r.ok ? 'службы перехвата работают' : (r.text || 'ошибка');
   append(r.ok ? 'службы перехвата запущены' : 'ошибка запуска: ' + r.text);
   if (r.ok) document.querySelector('.tabs button[data-tab="s3"]').click();
-}
-
-/// «Далее» на шаге 2: если стек ещё не применили — применяем и запускаем,
-/// потом переходим к попытке. Раньше это делала только большая кнопка.
-async function nextFromSetup() {
-  if (!_applied) {
-    await applyAndRestart();
-    return;
-  }
-  goTab('s3');
 }
 
 async function stopStack() {
