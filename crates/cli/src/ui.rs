@@ -522,8 +522,25 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
                     token,
                     ..cockpit_pairing::Credentials::new(ssid, password)
                 };
+                let bind = match field(body, "bind").as_str() {
+                    "" => None,
+                    text => match text.parse::<std::net::IpAddr>() {
+                        Ok(ip) => Some(ip),
+                        Err(e) => {
+                            return (
+                                200,
+                                "application/json",
+                                serde_json::json!({
+                                    "ok": false,
+                                    "text": format!("адаптер: {e}")
+                                })
+                                .to_string(),
+                            )
+                        }
+                    },
+                };
                 push_log(format!("▶ AP: {url}, запрос /info"));
-                let answer = match cockpit_pairing::ap::pair(&url, &creds, wired) {
+                let answer = match cockpit_pairing::ap::pair(&url, &creds, wired, bind) {
                     Ok((info, result)) => {
                         push_log(format!(
                             "AP: uuid={} version={} mac={}",
@@ -1265,7 +1282,13 @@ fn ble_json() -> String {
 fn adapters_json() -> String {
     let path = std::env::temp_dir().join("cockpit_adapters.json");
     let script = format!(
-        "$json = Get-NetAdapter | Where-Object Status -eq 'Up' | Select-Object Name,InterfaceDescription | ConvertTo-Json -Compress; \
+        "$json = Get-NetAdapter | Where-Object Status -eq 'Up' | ForEach-Object {{ \
+           $ip = Get-NetIPAddress -InterfaceIndex $_.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | \
+                 Where-Object {{ $_.IPAddress -notlike '169.254*' -and $_.IPAddress -ne '127.0.0.1' }} | \
+                 Select-Object -First 1; \
+           [pscustomobject]@{{ Name=$_.Name; InterfaceDescription=$_.InterfaceDescription; \
+             IPAddress=$ip.IPAddress; PrefixLength=$ip.PrefixLength }} }} | \
+         ConvertTo-Json -Compress; \
          [IO.File]::WriteAllText('{}', $json, (New-Object Text.UTF8Encoding $false))",
         path.display()
     );
@@ -1293,7 +1316,12 @@ fn adapters_json() -> String {
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             if !name.is_empty() {
-                items.push(serde_json::json!({ "name": name, "desc": desc }));
+                items.push(serde_json::json!({
+                    "name": name,
+                    "desc": desc,
+                    "ip": item.get("IPAddress").and_then(|v| v.as_str()).unwrap_or(""),
+                    "prefix": item.get("PrefixLength").and_then(|v| v.as_u64()).unwrap_or(0)
+                }));
             }
         }
     }

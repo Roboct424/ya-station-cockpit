@@ -499,16 +499,22 @@ enum PairCmd {
         /// Адрес устройства: только IP, без DNS (оффлайн-гарантия)
         #[arg(long, default_value = "http://192.168.43.1:8080")]
         url: String,
-        #[arg(long)]
+        /// SSID: для Wi-Fi — реальная сеть; для --wired — необязательная
+        /// заглушка (если пусто, берётся первый из GET /ssid)
+        #[arg(long, default_value = "")]
         ssid: String,
         #[arg(long, default_value = "")]
         password: String,
         /// Токен (на шаге Wi-Fi не проверяется)
         #[arg(long, default_value = "localpair0000000")]
         token: String,
-        /// Проводной режим: без Wi-Fi-кредов, устройство использует Ethernet
+        /// Проводной режим: /connect с wifi_type=NONE, хаб гасит AP
+        /// и остаётся на Ethernet (SSID — только заглушка)
         #[arg(long)]
         wired: bool,
+        /// Исходный IP (адаптер), через который идти к устройству
+        #[arg(long)]
+        bind: Option<String>,
         /// Только GET /info: показать ключ и идентификаторы
         #[arg(long)]
         info_only: bool,
@@ -1579,15 +1585,24 @@ fn run_pair(cmd: PairCmd) -> cockpit_core::Result<ExitCode> {
             password,
             token,
             wired,
+            bind,
             info_only,
         } => {
+            if !wired && !info_only && ssid.trim().is_empty() {
+                i18n::say("нужен --ssid (для Wi-Fi) или --wired");
+                return Ok(ExitCode::FAILURE);
+            }
             let creds = Credentials {
                 token,
                 ..Credentials::new(ssid, password)
             };
+            let bind = bind
+                .map(|text| text.parse::<std::net::IpAddr>())
+                .transpose()
+                .map_err(|e| CockpitError::Config(format!("--bind: {e}")))?;
             i18n::say(format!("AP: адрес {url}, облако не используется"));
             if info_only {
-                let info = cockpit_pairing::ap::info(&url).map_err(fail)?;
+                let info = cockpit_pairing::ap::info(&url, bind).map_err(fail)?;
                 i18n::say(format!(
                     "uuid: {}  version: {}  mac: {}",
                     info.uuid, info.version, info.mac
@@ -1595,7 +1610,8 @@ fn run_pair(cmd: PairCmd) -> cockpit_core::Result<ExitCode> {
                 i18n::say("ключ RSA получен из /info");
                 return Ok(ExitCode::SUCCESS);
             }
-            let (info, result) = cockpit_pairing::ap::pair(&url, &creds, wired).map_err(fail)?;
+            let (info, result) =
+                cockpit_pairing::ap::pair(&url, &creds, wired, bind).map_err(fail)?;
             i18n::say(format!(
                 "uuid: {}  version: {}  mac: {}",
                 info.uuid, info.version, info.mac

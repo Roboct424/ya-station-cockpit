@@ -139,6 +139,25 @@ pub fn pair(
     Ok((info, result))
 }
 
+/// Первый SSID из `/ssid`. Нужен как непустая заглушка для проводного
+/// режима: Хаб с `wifi_type: "NONE"` к нему не подключается.
+fn first_scanned_ssid(base_url: &str, bind: Option<IpAddr>) -> Result<String, PairingError> {
+    let text = request(base_url, "GET", "/ssid", None, bind)?;
+    let raw: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| PairingError::Json(e.to_string()))?;
+    raw.get("ssid")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| {
+            arr.iter()
+                .filter_map(|item| item.get("ssid").and_then(|v| v.as_str()))
+                .find(|s| !s.is_empty())
+        })
+        .map(|s| s.to_string())
+        .ok_or_else(|| {
+            PairingError::Json("в /ssid нет ни одной сети; укажите SSID вручную (--ssid)".into())
+        })
+}
+
 fn connect_with(
     base_url: &str,
     crypto_key: &str,
@@ -151,19 +170,17 @@ fn connect_with(
     } else {
         creds.token.as_str()
     };
-    // Проводной режим — это не отдельный эндпоинт: приложение шлёт
-    // /connect с пустым SSID и wifi_type=4 («скрытая сеть»). Первый запуск
-    // на Хабе видит type=4 и пустой SSID, не ищет Wi-Fi вовсе, а идёт
-    // регистрироваться через уже поднятый eth0 (см. G-071).
+    // Проводной режим — не отдельный эндпоинт. Приложение шлёт /connect
+    // с непустым SSID (заглушка — текущая домашняя сеть), wifi_type
+    // строкой "NONE" и stop_access_point=true. Хаб к этому SSID не
+    // подключается: он гасит AP и остаётся на eth0 (G-073).
+    let wired_ssid = if wired && creds.ssid.is_empty() {
+        first_scanned_ssid(base_url, bind)?
+    } else {
+        creds.ssid.clone()
+    };
     let mut body = serde_json::Map::new();
-    body.insert(
-        "ssid".to_string(),
-        serde_json::Value::String(if wired {
-            String::new()
-        } else {
-            creds.ssid.clone()
-        }),
-    );
+    body.insert("ssid".to_string(), serde_json::Value::String(wired_ssid));
     body.insert(
         "password".to_string(),
         serde_json::Value::String(encrypt_field(
@@ -173,11 +190,22 @@ fn connect_with(
     );
     body.insert(
         "wifi_type".to_string(),
-        serde_json::Value::Number(serde_json::Number::from(if wired {
-            4
+        serde_json::Value::String(if wired {
+            "NONE".to_string()
         } else {
-            creds.wifi_type as i32
-        })),
+            match creds.wifi_type {
+                crate::WifiType::Open => "OPEN".to_string(),
+                crate::WifiType::Wpa | crate::WifiType::Hidden => "WPA".to_string(),
+            }
+        }),
+    );
+    body.insert(
+        "hidden_ssid".to_string(),
+        serde_json::Value::Bool(!wired && creds.wifi_type == crate::WifiType::Hidden),
+    );
+    body.insert(
+        "stop_access_point".to_string(),
+        serde_json::Value::Bool(true),
     );
     body.insert(
         "xtoken_code".to_string(),
@@ -224,7 +252,11 @@ pub fn split_url(url: &str) -> Result<(IpAddr, u16, String), PairingError> {
     let ip: IpAddr = host
         .parse()
         .map_err(|_| PairingError::Url(format!("нужен IP-адрес, а не имя: {host}")))?;
-    let path = if path.is_empty() { "/".to_string() } else { path.to_string() };
+    let path = if path.is_empty() {
+        "/".to_string()
+    } else {
+        path.to_string()
+    };
     Ok((ip, port, path))
 }
 
@@ -315,7 +347,9 @@ fn request(
     let mut chunked = false;
     let mut length: Option<usize> = None;
     for line in lines {
-        let Some((name, value)) = line.split_once(':') else { continue };
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
         let name = name.trim().to_ascii_lowercase();
         let value = value.trim();
         if name == "transfer-encoding" && value.eq_ignore_ascii_case("chunked") {

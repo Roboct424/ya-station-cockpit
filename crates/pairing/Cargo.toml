@@ -10,3 +10,4 @@ serde_json.workspace = true
 rsa = "0.9"
 base64 = "0.22"
 rand = "0.8"
+socket2 = "0.5"
