@@ -210,6 +210,9 @@ pub fn leaf_from_ca(
         rcgen::KeyUsagePurpose::KeyEncipherment,
     ];
     params.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
+    // AKI обязателен для строгих проверок цепочки (Android): без него
+    // клиент не связывает лист с промежуточным CA и пишет unknown ca.
+    params.use_authority_key_identifier_extension = true;
     // Станция стартует с часами 1970 года: окно должно быть широким.
     params.not_before = rcgen::date_time_ymd(2020, 1, 1);
     params.not_after = rcgen::date_time_ymd(2049, 12, 31);

@@ -1442,3 +1442,25 @@ Android-проверка цепочки требует EKU сервера, ин�
 
 `/api/about` теперь отдаёт `data` — фактический каталог данных, чтобы
 это было видно в диагностике.
+
+---
+
+## G-096. В собранном листе не было AKI
+
+**Симптом.** Даже с `keyUsage` и `extendedKeyUsage=serverAuth` станция
+отвечает `unknown ca`.
+
+**Причина.** В листе отсутствовал `authorityKeyIdentifier`. Строгая
+проверка цепочки (Android) сопоставляет AKI листа с SKI промежуточного
+CA; без него путь не строится.
+
+**Исправление.** `leaf_from_ca` включает
+`use_authority_key_identifier_extension = true`. Теперь профиль листа
+совпадает с PoC `p384_wide_sha384`:
+
+```
+authorityKeyIdentifier (34:ea:ea:…)
+subjectAltName
+keyUsage (digitalSignature + keyEncipherment)
+extendedKeyUsage (serverAuth)
+```
