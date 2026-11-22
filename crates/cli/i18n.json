@@ -194,7 +194,7 @@
     "Всё остальное": "Everything else",
     "Всё остальное (всегда блокируется)": "Everything else (always blocked)",
     "Всё, что делается через ADB, живёт здесь: снять бэкап, закрепить ADB и поставить наш сертификат.": "Everything done over ADB lives here: back up, pin ADB, install our certificate.",
-    "Выберите Wi-Fi-адаптер, подключённый к точке доступа устройства (или к Ethernet Хаба). Пароль шифруется ключом из /info; облако не используется. Для проводного режима SSID — непустая заглушка: если поле пустое, берётся первый SSID из /ssid.": "Select the Wi-Fi adapter connected to the device's access point (or to the Hub's Ethernet). The password is encrypted with the key from /info; no cloud is used. In wired mode the SSID is a non-empty placeholder: if the field is empty, the first SSID from /ssid is used.",
+    "Выберите Wi-Fi-адаптер, подключённый к точке доступа устройства (или к Ethernet Хаба). Пароль шифруется ключом из /info; облако не используется. Для проводного режима SSID — непустая заглушка: если поле пустое, берётся первый SSID из /ssid, а если сетей нет — подставляется wired.": "Select the Wi-Fi adapter connected to the device's access point (or to the Hub's Ethernet). The password is encrypted with the key from /info; no cloud is used. In wired mode the SSID is a non-empty placeholder: if the field is empty, the first SSID from /ssid is used; if there are no networks, the placeholder \"wired\" is used.",
     "Выключает ICS и возвращает адаптер на DHCP": "Disables ICS and returns the adapter to DHCP",
     "Выставляет время станции по ноутбуку": "Sets the station time from the laptop",
     "Голос": "Voice",

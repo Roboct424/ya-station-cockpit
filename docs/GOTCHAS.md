@@ -959,6 +959,9 @@ quasar, открыл 5555, `uid=0(root)`; `ping 8.8.8.8` — 100% потерь.
   `WIFI_SSID_NOT_FOUND error_code 1` и ничего не делает.
   С `"NONE"` он к этому SSID не подключается — это только заглушка.
   Надёжнее брать реальную сеть из `GET /ssid` (первую в списке).
+  Если `/ssid` пуст или недоступен, `ap.rs` подставляет свою заглушку
+  `wired` (`WIRED_SSID_PLACEHOLDER`) — проводной режим не падает
+  из-за пустого эфира.
 * `stop_access_point: true` — Хаб сразу гасит AP и HTTP-сервер.
 * RSA — **PKCS#1 v1.5** (G-064). OAEP Keymaster отвергает
   (`KEYMASTER_ERROR -1000`).

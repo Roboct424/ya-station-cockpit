@@ -25,6 +25,9 @@ use crate::{Credentials, PairingError};
 pub const DEFAULT_URL: &str = "http://192.168.43.1:8080";
 /// Токен по умолчанию: на шаге Wi-Fi не проверяется.
 pub const DEFAULT_TOKEN: &str = "localpair0000000";
+/// Заглушка SSID для проводного режима, если `/ssid` не вернул сетей.
+/// Хаб с `wifi_type: "NONE"` к ней не подключается.
+pub const WIRED_SSID_PLACEHOLDER: &str = "wired";
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
@@ -141,10 +144,19 @@ pub fn pair(
 
 /// Первый SSID из `/ssid`. Нужен как непустая заглушка для проводного
 /// режима: Хаб с `wifi_type: "NONE"` к нему не подключается.
-fn first_scanned_ssid(base_url: &str, bind: Option<IpAddr>) -> Result<String, PairingError> {
-    let text = request(base_url, "GET", "/ssid", None, bind)?;
-    let raw: serde_json::Value =
-        serde_json::from_str(&text).map_err(|e| PairingError::Json(e.to_string()))?;
+///
+/// Если сетей нет (или `/ssid` недоступен), возвращается собственная
+/// заглушка [`WIRED_SSID_PLACEHOLDER`] — проводной режим не должен падать
+/// из-за пустого эфира.
+fn first_scanned_ssid(base_url: &str, bind: Option<IpAddr>) -> String {
+    let text = match request(base_url, "GET", "/ssid", None, bind) {
+        Ok(text) => text,
+        Err(_) => return WIRED_SSID_PLACEHOLDER.to_string(),
+    };
+    let raw: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(raw) => raw,
+        Err(_) => return WIRED_SSID_PLACEHOLDER.to_string(),
+    };
     raw.get("ssid")
         .and_then(|v| v.as_array())
         .and_then(|arr| {
@@ -153,9 +165,7 @@ fn first_scanned_ssid(base_url: &str, bind: Option<IpAddr>) -> Result<String, Pa
                 .find(|s| !s.is_empty())
         })
         .map(|s| s.to_string())
-        .ok_or_else(|| {
-            PairingError::Json("в /ssid нет ни одной сети; укажите SSID вручную (--ssid)".into())
-        })
+        .unwrap_or_else(|| WIRED_SSID_PLACEHOLDER.to_string())
 }
 
 fn connect_with(
@@ -175,7 +185,7 @@ fn connect_with(
     // строкой "NONE" и stop_access_point=true. Хаб к этому SSID не
     // подключается: он гасит AP и остаётся на eth0 (G-073).
     let wired_ssid = if wired && creds.ssid.is_empty() {
-        first_scanned_ssid(base_url, bind)?
+        first_scanned_ssid(base_url, bind)
     } else {
         creds.ssid.clone()
     };
@@ -431,5 +441,13 @@ mod tests {
         let plain = key.decrypt(Pkcs1v15Encrypt, &bytes).unwrap();
         assert_eq!(plain, b"secret-123");
         assert_eq!(bytes.len(), 256);
+    }
+
+    #[test]
+    fn wired_ssid_falls_back_to_placeholder() {
+        // Порт 9 закрыт: /ssid недоступен, но проводной режим не должен
+        // падать — подставляется собственная заглушка.
+        let ssid = first_scanned_ssid("http://127.0.0.1:9", None);
+        assert_eq!(ssid, WIRED_SSID_PLACEHOLDER);
     }
 }
