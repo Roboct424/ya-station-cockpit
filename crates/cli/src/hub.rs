@@ -409,9 +409,16 @@ fn sntp_tcp_loop() {
 
 fn sntp_loop(alias: Ipv4Addr) {
     // Отвечаем с того адреса, куда пришёл запрос: Хаб спрашивает
-    // 213.180.193.78 и ответ с 192.168.138.1 отвергает. Третий адрес —
-    // шлюз точки доступа Windows (ICS).
-    for ip in [alias, SERVER_IP, Ipv4Addr::new(192, 168, 138, 1)] {
+    // 213.180.193.78 и ответ с проводного адреса отвергает. Третий
+    // адрес — шлюз точки доступа Windows (ICS). Без него станция в
+    // AP-режиме не получает время, и цепочка 2025 года выглядит
+    // «ещё не действительной» (UnknownCA).
+    let ap = Ipv4Addr::new(192, 168, 137, 1);
+    let mut ips = vec![alias, SERVER_IP];
+    if ap != alias && ap != SERVER_IP {
+        ips.push(ap);
+    }
+    for ip in ips {
         if !local_ipv4(ip) {
             continue;
         }
