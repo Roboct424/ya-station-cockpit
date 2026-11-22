@@ -1464,3 +1464,20 @@ subjectAltName
 keyUsage (digitalSignature + keyEncipherment)
 extendedKeyUsage (serverAuth)
 ```
+
+---
+
+## G-097. DecodeError вместо UnknownCA: дубль корня в цепочке
+
+**Симптом.** С `p384_wide_sha384` станция отвечает
+`received fatal alert: DecodeError`, с собранным листом —
+`UnknownCA`.
+
+**Причина.** В PoC-файлах `*.chain` корневой сертификат продублирован
+(4 сертификата вместо 3). Старый TLS-клиент станции разбирает
+Certificate-сообщение и падает с `DecodeError`. `UnknownCA` — это уже
+успешный разбор, но отказ по доверию.
+
+**Исправление.** `FixedCert::load` убирает повторы: каждый сертификат
+уходит в цепочке ровно один раз. Для доверия лучше пробовать набор без
+корня (`noroot`, 2 сертификата) или собранный лист (3).

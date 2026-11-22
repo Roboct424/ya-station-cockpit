@@ -297,6 +297,14 @@ impl FixedCert {
         let chain_bytes = std::fs::read(chain_path)?;
         let chain: Vec<CertificateDer<'static>> =
             rustls_pemfile::certs(&mut &chain_bytes[..]).collect::<Result<Vec<_>, _>>()?;
+        // В PoC-цепочках корень продублирован. Старый клиент станции на
+        // такой Certificate-месседж отвечает DecodeError, поэтому
+        // оставляем каждый сертификат ровно один раз.
+        let mut seen = std::collections::HashSet::new();
+        let chain: Vec<CertificateDer<'static>> = chain
+            .into_iter()
+            .filter(|cert| seen.insert(cert.as_ref().to_vec()))
+            .collect();
         if chain.is_empty() {
             return Err(TlsError::Io(io::Error::new(
                 io::ErrorKind::InvalidData,
