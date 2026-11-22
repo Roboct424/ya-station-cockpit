@@ -2382,6 +2382,8 @@ fn percent_decode(s: &str) -> String {
 
 static HUB_CHILD: std::sync::Mutex<Option<std::process::Child>> = std::sync::Mutex::new(None);
 static QUASAR_CHILD: std::sync::Mutex<Option<std::process::Child>> = std::sync::Mutex::new(None);
+/// Режим последнего запуска hub serve: "setup" или "sync".
+static HUB_MODE: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 
 fn kill_child(slot: &'static std::sync::Mutex<Option<std::process::Child>>) {
     if let Ok(mut guard) = slot.lock() {
@@ -2396,6 +2398,9 @@ fn kill_child(slot: &'static std::sync::Mutex<Option<std::process::Child>>) {
 fn hub_stop() -> String {
     kill_child(&HUB_CHILD);
     kill_child(&QUASAR_CHILD);
+    if let Ok(mut mode) = HUB_MODE.lock() {
+        mode.clear();
+    }
     push_log("хаб: службы остановлены");
     serde_json::json!({ "ok": true, "text": "службы остановлены" }).to_string()
 }
@@ -2412,6 +2417,9 @@ fn hub_serve(body: &str) -> String {
         "base" | "setup" => "setup",
         _ => "sync",
     };
+    if let Ok(mut current) = HUB_MODE.lock() {
+        *current = mode.to_string();
+    }
     kill_child(&HUB_CHILD);
     kill_child(&QUASAR_CHILD);
 
@@ -2575,9 +2583,20 @@ fn hub_status() -> String {
             None => false,
         })
         .unwrap_or(false);
+    let mode = HUB_MODE.lock().map(|mode| mode.clone()).unwrap_or_default();
+    let quasar_child = QUASAR_CHILD
+        .lock()
+        .map(|mut guard| match guard.as_mut() {
+            Some(child) => matches!(child.try_wait(), Ok(None)),
+            None => false,
+        })
+        .unwrap_or(false);
+    let quasar = quasar_child || std::net::TcpStream::connect(("127.0.0.1", 443)).is_ok();
     serde_json::json!({
         "ok": true,
         "running": running,
+        "mode": mode,
+        "quasar": quasar,
         "station": station,
         "adb": adb
     })
