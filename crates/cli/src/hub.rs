@@ -49,6 +49,7 @@ pub fn serve(mode: Mode, alias: Ipv4Addr, online: bool, quasar: bool) -> Result<
             log(&format!("адрес {alias} не добавлен: {error}"));
         }
     }
+    prepare_link();
     log(&format!(
         "режим {}: DNS на {SERVER_IP}:53, DHCP :67, SNTP :123{}",
         if mode == Mode::Sync { "sync" } else { "setup" },
@@ -126,6 +127,79 @@ fn add_alias(ip: Ipv4Addr) -> Result<(), String> {
     }
 }
 
+/// Готовит линк к работе DHCP: профиль сети и правила брандмауэра.
+///
+/// G-055: при профиле «Общедоступная» Windows режет входящий UDP 67/68,
+/// станция не получает адрес по DHCP, уходит в 169.254.* и на `/connect`
+/// отвечает `NO_INTERNET`. Правила и профиль ставятся только с правами
+/// администратора; без них службы всё равно поднимаются.
+fn prepare_link() {
+    ensure_private_profile();
+    ensure_firewall_rule("cockpit-hub-udp", &["protocol=UDP", "localport=53,67,68"]);
+    ensure_firewall_rule("cockpit-hub-tcp", &["protocol=TCP", "localport=80,443"]);
+}
+
+fn ensure_firewall_rule(name: &str, extra: &[&str]) {
+    let rule = format!("name={name}");
+    let exists = std::process::Command::new("netsh")
+        .args(["advfirewall", "firewall", "show", "rule", &rule])
+        .output()
+        .map(|out| out.status.success())
+        .unwrap_or(false);
+    if exists {
+        return;
+    }
+    let mut cmd = std::process::Command::new("netsh");
+    cmd.args(["advfirewall", "firewall", "add", "rule", &rule])
+        .args(["dir=in", "action=allow", "profile=any"])
+        .args(extra);
+    match cmd.output() {
+        Ok(out) if out.status.success() => {
+            log(&format!("брандмауэр: правило {name} добавлено"));
+        }
+        Ok(_) => log(&format!(
+            "брандмауэр: правило {name} не добавлено — нужны права администратора"
+        )),
+        Err(error) => log(&format!("брандмауэр: {error}")),
+    }
+}
+
+fn ensure_private_profile() {
+    let query = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "(Get-NetConnectionProfile -InterfaceAlias 'Ethernet' -ErrorAction Stop).NetworkCategory",
+        ])
+        .output();
+    let Ok(query) = query else {
+        return;
+    };
+    if !query.status.success() {
+        return;
+    }
+    let category = String::from_utf8_lossy(&query.stdout).trim().to_string();
+    if category.eq_ignore_ascii_case("Private") {
+        return;
+    }
+    let out = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Set-NetConnectionProfile -InterfaceAlias 'Ethernet' -NetworkCategory Private -ErrorAction Stop",
+        ])
+        .output();
+    match out {
+        Ok(out) if out.status.success() => {
+            log("сеть Ethernet переведена в профиль «Частная» (DHCP разрешён)");
+        }
+        Ok(_) => log("сеть Ethernet в профиле «Общедоступная» — DHCP может не дойти"),
+        Err(error) => log(&format!("профиль сети: {error}")),
+    }
+}
+
 // ---------------------------------------------------------------- DNS ------
 
 fn dns_loop(mode: Mode, alias: Ipv4Addr, online: bool) {
@@ -151,7 +225,7 @@ fn dns_loop(mode: Mode, alias: Ipv4Addr, online: bool) {
             || name.starts_with("time.")
             || name.contains(".time.")
             || name == "time.android.com";
-        log(&format!("DNS: {name} тип {qtype}"));
+        log(&format!("DNS: {name} тип {qtype} от {peer}"));
         if yandex && qtype == 28 {
             // G-056: IPv6 у Хаба нет — отвечаем «пусто», чтобы он шёл по IPv4.
             let _ = sock.send_to(&empty_answer(query, q_end), peer);
@@ -461,6 +535,10 @@ fn http_loop() {
     log("HTTP: слушаю 0.0.0.0:80 (204 на любую проверку связи)");
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };
+        let peer = stream
+            .peer_addr()
+            .map(|a| a.to_string())
+            .unwrap_or_default();
         let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
         let mut buf = [0u8; 2048];
         let n = stream.read(&mut buf).unwrap_or(0);
@@ -479,7 +557,7 @@ fn http_loop() {
                     .then(|| value.trim().to_string())
             })
             .unwrap_or_default();
-        log(&format!("HTTP: {host}{path}"));
+        log(&format!("HTTP: {host}{path} от {peer}"));
         dump_probe(
             "http",
             &format!(
@@ -537,48 +615,168 @@ fn http_loop() {
 // ------------------------------------------------------------- quasar ------
 
 fn quasar_loop() {
-    // Нативный TLS (Schannel на Windows, OpenSSL на Linux) — тот же
-    // стек, что был у рабочего OpenSSL-сервера, но без Python.
+    // Чистый Rust TLS (rustls): сертификат и ключ вшиты в бинарник,
+    // внешних файлов и Python нет. Schannel не подошёл: он отвергает
+    // TLS 1.3 ClientHello Хаба (G-079).
     const CHAIN: &[u8] = include_bytes!("../../../packaging/quasar/quasar-chain.pem");
     const KEY: &[u8] = include_bytes!("../../../packaging/quasar/quasar-leaf.key");
-    let identity = match native_tls::Identity::from_pkcs8(CHAIN, KEY) {
-        Ok(identity) => identity,
-        Err(error) => {
-            log(&format!("quasar: сертификат: {error}"));
-            return;
-        }
+    let Ok(chain) = load_cert_chain(CHAIN, KEY) else {
+        log("quasar: не загрузились встроенные сертификаты");
+        return;
     };
-    let acceptor = match native_tls::TlsAcceptor::new(identity) {
-        Ok(acceptor) => Arc::new(acceptor),
-        Err(error) => {
-            log(&format!("quasar: конфиг TLS: {error}"));
-            return;
-        }
-    };
+    let config =
+        match rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS12])
+            .with_no_client_auth()
+            .with_single_cert(chain.0, chain.1)
+        {
+            Ok(config) => Arc::new(config),
+            Err(error) => {
+                log(&format!("quasar: конфиг TLS: {error}"));
+                return;
+            }
+        };
     let Ok(listener) = TcpListener::bind(("0.0.0.0", 443)) else {
         log("quasar: порт 443 занят");
         return;
     };
-    log("quasar: TLS на 0.0.0.0:443 (native-tls)");
+    log("quasar: TLS на 0.0.0.0:443 (rustls)");
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
-        let acceptor = Arc::clone(&acceptor);
+        let config = Arc::clone(&config);
         thread::spawn(move || {
             let peer = stream
                 .peer_addr()
                 .map(|a| a.to_string())
                 .unwrap_or_default();
-            let mut tls = match acceptor.accept(stream) {
-                Ok(tls) => tls,
+            // ClientHello нужен только для разбора отказов: peek ничего
+            // не съедает из сокета.
+            let hello = peek_client_hello(&stream);
+            let mut conn = match rustls::ServerConnection::new(config) {
+                Ok(conn) => conn,
                 Err(error) => {
-                    log(&format!("quasar: рукопожатие с {peer} не удалось: {error}"));
+                    log(&format!("quasar: конфиг TLS: {error}"));
                     return;
                 }
             };
+            let mut stream = stream;
+            while conn.is_handshaking() {
+                if let Err(error) = conn.complete_io(&mut stream) {
+                    log(&format!("quasar: рукопожатие с {peer} не удалось: {error}"));
+                    if let Some(hello) = &hello {
+                        log(&format!("quasar: ClientHello от {peer}: {hello}"));
+                    }
+                    return;
+                }
+            }
             log(&format!("quasar: подключение {peer}"));
+            let mut tls = rustls::StreamOwned::new(conn, stream);
             let _ = handle_quasar(&mut tls);
         });
     }
+}
+
+fn load_cert_chain(
+    chain_pem: &[u8],
+    key_pem: &[u8],
+) -> Result<
+    (
+        Vec<rustls::pki_types::CertificateDer<'static>>,
+        rustls::pki_types::PrivateKeyDer<'static>,
+    ),
+    (),
+> {
+    use rustls::pki_types::pem::PemObject;
+    let certs: Vec<_> = rustls::pki_types::CertificateDer::pem_slice_iter(chain_pem)
+        .filter_map(Result::ok)
+        .collect();
+    let key = rustls::pki_types::PrivateKeyDer::from_pem_slice(key_pem).map_err(|_| ())?;
+    if certs.is_empty() {
+        return Err(());
+    }
+    Ok((certs, key))
+}
+
+/// Снимает ClientHello, чтобы понять, почему TLS его отвергает.
+fn peek_client_hello(stream: &TcpStream) -> Option<String> {
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
+    let mut buf = [0u8; 2048];
+    let n = stream.peek(&mut buf).unwrap_or(0);
+    let _ = stream.set_read_timeout(None);
+    if n == 0 {
+        return None;
+    }
+    Some(describe_client_hello(&buf[..n]))
+}
+
+/// Кратко описывает ClientHello: версия, шифры, расширения.
+fn describe_client_hello(b: &[u8]) -> String {
+    if b.len() < 11 || b[0] != 0x16 {
+        return format!("не TLS-запись: {}", b.first().copied().unwrap_or(0));
+    }
+    let record_version = format!("{:02x}{:02x}", b[1], b[2]);
+    let mut pos = 5;
+    if b.get(pos) != Some(&0x01) {
+        return format!("запись 0x16, тип рукопожатия {}", b[pos]);
+    }
+    pos += 4;
+    if b.len() < pos + 35 {
+        return format!("обрезано, запись {record_version}");
+    }
+    let version = format!("{:02x}{:02x}", b[pos], b[pos + 1]);
+    pos += 34;
+    let session = *b.get(pos).unwrap_or(&0) as usize;
+    pos += 1 + session;
+    let Some(ciphers_len) = b
+        .get(pos..pos + 2)
+        .map(|s| u16::from_be_bytes([s[0], s[1]]) as usize)
+    else {
+        return format!("версия {version}, обрезано до шифров");
+    };
+    pos += 2;
+    let mut ciphers = Vec::new();
+    let mut i = pos;
+    while i + 1 < pos + ciphers_len && i + 1 < b.len() {
+        ciphers.push(format!("{:02x}{:02x}", b[i], b[i + 1]));
+        i += 2;
+    }
+    pos += ciphers_len;
+    let mut extensions = Vec::new();
+    let mut supported = Vec::new();
+    let mut sni = String::new();
+    if pos + 2 <= b.len() {
+        let ext_len = u16::from_be_bytes([b[pos], b[pos + 1]]) as usize;
+        pos += 2;
+        let end = (pos + ext_len).min(b.len());
+        while pos + 4 <= end {
+            let id = u16::from_be_bytes([b[pos], b[pos + 1]]);
+            let len = u16::from_be_bytes([b[pos + 2], b[pos + 3]]) as usize;
+            extensions.push(format!("{id:04x}"));
+            let body = &b[pos + 4..(pos + 4 + len).min(end)];
+            if id == 43 && body.len() >= 3 {
+                let count = body[0] as usize;
+                let mut k = 1;
+                while k + 1 < body.len() && supported.len() < count {
+                    supported.push(format!("{:02x}{:02x}", body[k], body[k + 1]));
+                    k += 2;
+                }
+            }
+            if id == 0 && body.len() > 5 {
+                let start = 5;
+                let stop = start + body[3] as usize;
+                if stop <= body.len() {
+                    sni = String::from_utf8_lossy(&body[start..stop]).to_string();
+                }
+            }
+            pos += 4 + len;
+        }
+    }
+    format!(
+        "TLS {version} (запись {record_version}), SNI '{}', шифры [{}], поддерживает [{}], расширения [{}]",
+        sni,
+        ciphers.join(" "),
+        supported.join(" "),
+        extensions.join(" ")
+    )
 }
 
 /// Счётчик дампов: имя файла не должно повторяться.
@@ -639,7 +837,7 @@ fn handle_quasar(stream: &mut (impl Read + Write)) -> std::io::Result<()> {
         }
         payload.truncate(read);
     }
-    let sni = "(native-tls)";
+    let sni = "(rustls)";
     let dump = format!(
         "время: {}\nSNI: {sni}\n\n{}\n--- тело ({} Б) ---\n{}\n--- hex ---\n{}\n",
         chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
@@ -660,12 +858,48 @@ fn handle_quasar(stream: &mut (impl Read + Write)) -> std::io::Result<()> {
         cockpit_ota::sync_info_json()
     } else if path.contains("/check_updates") {
         br#"{"hasUpdate":false}"#.to_vec()
-    } else if path.contains("/uni.ws") {
-        return respond(stream, 503, b"");
+    } else if path.contains("/token") {
+        // Без OAuth-ответа станция не завершает регистрацию (G-080).
+        log("  -> OAuth token");
+        oauth_token_json()
     } else {
         br#"{"status":"ok"}"#.to_vec()
     };
     respond(stream, 200, &body)
+}
+
+/// OAuth-ответ для `/token`: access/refresh JWT без подписи.
+fn oauth_token_json() -> Vec<u8> {
+    use base64::Engine;
+    let encode = |value: serde_json::Value| {
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value.to_string().as_bytes())
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let exp = now + 31_536_000;
+    let header = encode(serde_json::json!({ "alg": "none", "typ": "JWT" }));
+    let access = format!(
+        "{header}.{}.cockpit",
+        encode(serde_json::json!({
+            "iss": "cockpit", "sub": "offline", "iat": now, "exp": exp
+        }))
+    );
+    let refresh = format!(
+        "{header}.{}.cockpit",
+        encode(serde_json::json!({
+            "iss": "cockpit", "typ": "refresh", "iat": now, "exp": exp
+        }))
+    );
+    let body = serde_json::json!({
+        "access_token": access,
+        "token_type": "bearer",
+        "expires_in": 31_536_000,
+        "refresh_token": refresh,
+        "scope": "quasar"
+    });
+    serde_json::to_vec(&body).unwrap_or_default()
 }
 
 fn respond(stream: &mut impl Write, code: u16, body: &[u8]) -> std::io::Result<()> {
@@ -717,5 +951,54 @@ fn auto_grab() {
             return;
         }
         thread::sleep(Duration::from_secs(5));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CHAIN: &[u8] = include_bytes!("../../../packaging/quasar/quasar-chain.pem");
+    const KEY: &[u8] = include_bytes!("../../../packaging/quasar/quasar-leaf.key");
+
+    /// Длина одного DER-объекта по его заголовку.
+    fn der_len(der: &[u8]) -> usize {
+        let tag = der[1];
+        let (header, len) = if tag < 0x80 {
+            (2, tag as usize)
+        } else if tag == 0x81 {
+            (3, der[2] as usize)
+        } else if tag == 0x82 {
+            (4, u16::from_be_bytes([der[2], der[3]]) as usize)
+        } else if tag == 0x83 {
+            let len = ((der[2] as usize) << 16) | ((der[3] as usize) << 8) | der[4] as usize;
+            (5, len)
+        } else {
+            (0, 0)
+        };
+        header + len
+    }
+
+    /// G-079: в PEM не должно быть склеенных сертификатов — иначе Хаб
+    /// отвечает `decode_error` на Certificate.
+    #[test]
+    fn embedded_chain_is_split_into_certificates() {
+        let (certs, _key) = load_cert_chain(CHAIN, KEY).expect("цепочка");
+        assert_eq!(certs.len(), 3, "лист + промежуточный + корень");
+        for cert in &certs {
+            let der = cert.as_ref();
+            assert_eq!(der.first(), Some(&0x30), "не DER-SEQUENCE");
+            assert_eq!(der_len(der), der.len(), "лишние байты в PEM-блоке");
+        }
+    }
+
+    /// G-080: без access/refresh токена Хаб не выходит из NO_INTERNET.
+    #[test]
+    fn oauth_token_has_both_tokens() {
+        let body: serde_json::Value = serde_json::from_slice(&oauth_token_json()).expect("json");
+        assert_eq!(body["token_type"], "bearer");
+        assert!(body["access_token"].as_str().unwrap().contains('.'));
+        assert!(body["refresh_token"].as_str().unwrap().contains('.'));
+        assert_eq!(body["expires_in"], 31_536_000);
     }
 }

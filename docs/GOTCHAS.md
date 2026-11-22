@@ -1089,12 +1089,58 @@ ICS также противоречит оффлайн-режиму.
 
 ---
 
-## G-079. quasar на нативном TLS (Schannel / OpenSSL), без rustls и Python
+## G-079. quasar: rustls, только TLS 1.2, цепочка без склеенных блоков
 
-**Почему.** Встроенный rustls не завершал рукопожатие со старым TLS
-Хаба. Рабочим был OpenSSL-сервер (сначала Python-скрипт). В v1.3.0
-вместо rustls используется `native-tls`: Schannel на Windows, OpenSSL
-на Linux — тот же стек, что у рабочего варианта, но внутри бинарника.
+**Симптом.** Хаб стучится на 443, но рукопожатие рвётся: то
+`unexpected end of file`, то `received fatal alert: DecodeError`.
 
-Сертификат и ключ вшиты, `Identity::from_pkcs8`; `hub serve` поднимает
-TLS-сервер на 443 сам. Python и внешние файлы не нужны.
+**Причина 1 — склеенный PEM.** В `quasar-chain.pem` третий блок
+`BEGIN/END CERTIFICATE` содержал **два** сертификата подряд в одном
+base64 (2156 байт DER вместо 1078). Клиент Хаба не мог разобрать
+Certificate и присылал `decode_error`. Исправлено: цепочка разбита
+на отдельные блоки (лист → EM OV TLS CA — G3C → AAA Certificate
+Services), дубль корня убран.
+
+**Причина 2 — TLS 1.3.** Rustls отдаёт TLS 1.3, который старый клиент
+Хаба разбирает с `DecodeError`. Рабочий Python-сервер тоже стоял с
+`maximum_version = TLSv1_2`. Теперь rustls собран
+`builder_with_protocol_versions(&[&TLS12])`.
+
+**Почему не Schannel.** `native-tls` (v1.3.0) на TLS 1.2 отвечал
+`SEC_E_UNTRUSTED_ROOT`, на TLS 1.3 — `SEC_E_ILLEGAL_MESSAGE`: Schannel
+строже проверяет собственный сертификат и не умеет то, что умеет
+OpenSSL. Вернулись на rustls — он же чистый Rust, без DLL и Python.
+
+---
+
+## G-080. `/connect` → `NO_INTERNET` без OAuth-ответа на `/token`
+
+**Симптом.** 204 на `scbh.yandex.net/generate_204` отдаётся, DHCP и
+DNS в порядке, а `/connect` всё равно `error NO_INTERNET`.
+
+**Причина.** Перед применением настроек Хаб идёт в облако:
+`oauth.yandex.ru/token`, затем `quasar.yandex.net/...`. Заглушка
+отвечала `{"status":"ok"}` на всё, включая `/token`. Без валидного
+OAuth-JSON Хаб считает, что интернета нет, и отказывает.
+
+**Исправление.** `hub.rs::oauth_token_json` отдаёт access/refresh JWT
+(alg=none, exp +1 год), как это делал рабочий `fake-quasar.py`.
+Проверено: `/connect` → `{"status":"ok"}`, `adbd` слушает 5555,
+`id -u` → 0.
+
+---
+
+## G-081. Профиль сети «Общедоступная» режет DHCP
+
+**Симптом.** Хаб после перезагрузки висит на `169.254.*`, `ping` и
+8080 не отвечают, в логе `hub serve` нет ни одного `DHCP: DISCOVER`.
+
+**Причина.** Ethernet попал в профиль «Общедоступная», а брандмауэр
+Windows в этом профиле блокирует входящий UDP 67/68. ICS раньше
+держал профиль «Частная», поэтому DHCP работал; без ICS — нет.
+
+**Исправление.** `hub serve` при старте (`prepare_link`, нужен
+администратор) переводит Ethernet в профиль «Частная» и добавляет
+правила `cockpit-hub-udp` (UDP 53,67,68) и `cockpit-hub-tcp`
+(TCP 80,443). Без прав правила не ставятся, в лог пишется
+предупреждение.
