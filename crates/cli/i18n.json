@@ -81,7 +81,12 @@
     "точка доступа включена — сначала остановите её (шаг 2), потом запускайте службу Хаба": "hotspot is on — stop it first (step 2), then start the hub service",
     "адреса облака на ноутбуке: {0}": "cloud addresses on the laptop: {0}",
     "адреса облака не добавлены: {0}": "cloud addresses were not added: {0}",
-    "далее: попытка →": "next: attempt →"
+    "далее: попытка →": "next: attempt →",
+    "точка доступа включена: DHCP/DNS оставляем ICS, поднимаем quasar на 80/443": "hotspot is on: DHCP/DNS left to ICS, quasar comes up on 80/443",
+    "службы перехвата работают": "interception services are running",
+    "службы перехвата запущены": "interception services started",
+    "поднимаю службы…": "starting services…",
+    "ошибка запуска: {0}": "start failed: {0}"
   },
   "_comment": "Все системные сообщения. Ключ — русский текст из кода (динамические части: {0}, {1}), значение — английский. Проверка: python tools/i18n_check.py",
   "en": {

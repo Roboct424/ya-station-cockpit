@@ -1216,41 +1216,21 @@ function selectAll(on) {
 
 async function applyAndRestart() {
   const online = document.querySelector('input[name=reg]:checked').value === 'online';
-  const fw = document.querySelector('input[name=fw]:checked');
-  const updating = $('ex_update').checked && fw;
-  const f = new URLSearchParams({
-    mode: online ? 'cloud' : 'offline',
-    via_register: online ? '1' : '0',
-    update: updating ? '1' : '0',
-    version: updating ? fw.value : '',
-    platform: LAST_PLATFORM || '',
+  // Один сервер на всё: quasar + 204 на 80/443, DNS/DHCP — у ICS, если
+  // включена точка. Так службы и точка живут вместе.
+  const body = new URLSearchParams({
+    mode: 'sync',
     link: $('link').value,
-    firmware_path: ''
+    adapter: $('adapter').value || 'Ethernet'
   });
-  if (($('model').value || '').includes('Hub')) {
-    $('btnApply').disabled = true;
-    $('apply_hint').textContent = 'включаю перехват для Хаба…';
-    const hub = await (await fetch('/api/hub/serve', {
-      method: 'POST',
-      body: 'mode=sync'
-    })).json();
-    $('btnApply').disabled = false;
-    if (hub.ok) { _applied = true; updateProgress(); }
-    $('apply_hint').textContent = hub.ok
-      ? 'перехват включён — передёрните питание Хаба'
-      : hub.text;
-    append(hub.ok ? 'Хаб: перехват включён' : 'Хаб: ' + hub.text);
-    if (hub.ok) document.querySelector('.tabs button[data-tab="s3"]').click();
-    return;
-  }
+  if (online) body.set('online', '1');
   $('btnApply').disabled = true;
-  $('apply_hint').textContent = 'перезапускаю стек…';
-  const r = await (await fetch('/api/restart', {method: 'POST', body: f})).json();
+  $('apply_hint').textContent = 'поднимаю службы…';
+  const r = await (await fetch('/api/hub/serve', {method: 'POST', body})).json();
   $('btnApply').disabled = false;
   if (r.ok) { _applied = true; updateProgress(); }
-  $('apply_hint').textContent = r.ok ? `стек работает: ${r.routes} маршрутов, pid ${r.pid}` : (r.text || 'ошибка');
-  append(r.ok ? 'стек перезапущен с новыми параметрами: ' + r.routes + ' маршрутов'
-              : 'ошибка запуска: ' + r.text);
+  $('apply_hint').textContent = r.ok ? 'службы перехвата работают' : (r.text || 'ошибка');
+  append(r.ok ? 'службы перехвата запущены' : 'ошибка запуска: ' + r.text);
   if (r.ok) document.querySelector('.tabs button[data-tab="s3"]').click();
 }
 

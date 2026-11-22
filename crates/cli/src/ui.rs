@@ -2717,14 +2717,12 @@ fn hub_stop() -> String {
 /// Локальный quasar на 443 встроен в бинарник (G-077); ICC/ICS
 /// выключается, чтобы Windows DHCP не конфликтовал с нашим (G-078).
 fn hub_serve(body: &str) -> String {
-    // Точка доступа Windows держит 53/67 через ICS: наш DNS/DHCP не
-    // поднимутся, а прежнее поведение ещё и гасило саму точку — станция
-    // теряла сеть прямо во время сопряжения.
-    if cockpit_net::hotspot_is_on() {
-        let text =
-            "точка доступа включена — сначала остановите её (шаг 2), потом запускайте службу Хаба";
-        push_log(format!("✗ {text}"));
-        return serde_json::json!({ "ok": false, "text": text }).to_string();
+    // Точка доступа и hub serve работают ВМЕСТЕ: ICS отдаёт станции
+    // DHCP/DNS/NAT, а мы — quasar и 204 на 80/443. Наши DNS (53) и
+    // DHCP (67) тогда просто не поднимутся, и это нормально.
+    let hotspot = cockpit_net::hotspot_is_on();
+    if hotspot {
+        push_log("точка доступа включена: DHCP/DNS оставляем ICS, поднимаем quasar на 80/443");
     }
     let mode = match field(body, "mode").as_str() {
         // base и setup — общие службы без перехвата адресов
@@ -2744,24 +2742,39 @@ fn hub_serve(body: &str) -> String {
         }
     };
     let safe_adapter = adapter.replace('\'', "''");
-    let cleanup = format!(
-        // G-078: гасим ICS целиком — и службу, и старую конфигурацию
-        // общего доступа. Иначе Windows держит Ethernet «частной сетью»
-        // ICS и точка доступа потом не получает DHCP/NAT.
-        "Stop-Service SharedAccess -Force -ErrorAction SilentlyContinue; \
-         $share = New-Object -ComObject HNetCfg.HNetShare -ErrorAction SilentlyContinue; \
-         if ($share) {{ foreach ($c in $share.EnumEveryConnection) {{ \
-           $cfg = $share.INetSharingConfigurationForINetConnection($c); \
-           if ($cfg.SharingEnabled) {{ $cfg.DisableSharing() }} }} }}; \
-         Set-NetIPInterface -InterfaceAlias '{safe_adapter}' -AddressFamily IPv4 -Forwarding Disabled -ErrorAction SilentlyContinue"
-    );
-    let _ = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-Command", &cleanup])
-        .output();
+    // При включённой точке ICS трогать нельзя: он раздаёт ей адреса и NAT.
+    if !hotspot {
+        let cleanup = format!(
+            // G-078: гасим ICS целиком — и службу, и старую конфигурацию
+            // общего доступа. Иначе Windows держит Ethernet «частной сетью»
+            // ICS и точка доступа потом не получает DHCP/NAT.
+            "Stop-Service SharedAccess -Force -ErrorAction SilentlyContinue; \
+             $share = New-Object -ComObject HNetCfg.HNetShare -ErrorAction SilentlyContinue; \
+             if ($share) {{ foreach ($c in $share.EnumEveryConnection) {{ \
+               $cfg = $share.INetSharingConfigurationForINetConnection($c); \
+               if ($cfg.SharingEnabled) {{ $cfg.DisableSharing() }} }} }}; \
+             Set-NetIPInterface -InterfaceAlias '{safe_adapter}' -AddressFamily IPv4 -Forwarding Disabled -ErrorAction SilentlyContinue"
+        );
+        let _ = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", &cleanup])
+            .output();
+    }
     kill_child(&HUB_CHILD);
     // Стек OTA и hub serve делят 80/443: второй не поднимется, пока жив
-    // первый. Режимы взаимоисключающие.
+    // первый. Оставляем один сервер перехвата.
     stop_stack();
+    // Wi-Fi AP: станция ходит в облако по настоящим адресам (ICS-DNS),
+    // поэтому вешаем их на ноутбук, иначе трафик уйдёт мимо нас (G-048).
+    if hotspot && field(body, "link") == "wifi" {
+        let ctx = ModuleCtx {
+            ethernet: adapter.clone(),
+            ..ModuleCtx::default()
+        };
+        match crate::modules::run("net.yandex-ips", &ctx) {
+            Ok(out) => push_log(format!("  адреса облака на ноутбуке: {}", out.trim())),
+            Err(error) => push_log(format!("  адреса облака не добавлены: {error}")),
+        }
+    }
 
     let online = field(body, "online") == "1";
     let exe = std::env::current_exe().unwrap_or_else(|_| "cockpit".into());
