@@ -2450,9 +2450,11 @@ fn hub_serve(body: &str) -> String {
         cmd.arg("--no-quasar");
         if std::net::TcpListener::bind(("0.0.0.0", 443)).is_err() {
             push_log("хаб: 443 занят — использую уже запущенный quasar");
-        } else if !std::path::Path::new("data/probe/quasar/fake-quasar.py").exists() {
-            push_log("хаб: нет data/probe/quasar/fake-quasar.py");
-        } else {
+        } else if let Some(quasar_dir) = ["data/probe/quasar", "packaging/quasar"]
+            .into_iter()
+            .map(std::path::PathBuf::from)
+            .find(|dir| dir.join("fake-quasar.py").exists())
+        {
             let qlog = std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
@@ -2460,8 +2462,7 @@ fn hub_serve(body: &str) -> String {
                 .ok();
             let qerr = qlog.as_ref().and_then(|f| f.try_clone().ok());
             let mut q = std::process::Command::new("python");
-            q.args(["-u", "fake-quasar.py"])
-                .current_dir("data/probe/quasar");
+            q.args(["-u", "fake-quasar.py"]).current_dir(&quasar_dir);
             if let Some(out) = qlog {
                 q.stdout(out);
             }
@@ -2482,6 +2483,8 @@ fn hub_serve(body: &str) -> String {
                 }
                 Err(e) => push_log(format!("хаб: quasar не запустился: {e}")),
             }
+        } else {
+            push_log("хаб: нет fake-quasar.py (data/probe/quasar или packaging/quasar)");
         }
     }
 
