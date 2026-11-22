@@ -17,8 +17,8 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const SERVER_IP: Ipv4Addr = Ipv4Addr::new(192, 168, 137, 1);
-const CLIENT_IP: Ipv4Addr = Ipv4Addr::new(192, 168, 137, 234);
+const SERVER_IP: Ipv4Addr = Ipv4Addr::new(192, 168, 138, 1);
+const CLIENT_IP: Ipv4Addr = Ipv4Addr::new(192, 168, 138, 234);
 const UPSTREAM_DNS: Ipv4Addr = Ipv4Addr::new(8, 8, 8, 8);
 
 /// Режим работы служб.
@@ -137,6 +137,50 @@ fn prepare_link() {
     ensure_private_profile();
     ensure_firewall_rule("cockpit-hub-udp", &["protocol=UDP", "localport=53,67,68"]);
     ensure_firewall_rule("cockpit-hub-tcp", &["protocol=TCP", "localport=80,443"]);
+    // Хотспот Windows (ICS) живёт в 192.168.137.0/24 и падает, если этот
+    // адрес уже висит на Ethernet. Убираем старый адрес и ставим свой.
+    drop_legacy_address();
+    ensure_server_address();
+}
+
+/// Снимает 192.168.137.1 с Ethernet (адрес старых версий и ICS).
+fn drop_legacy_address() {
+    let out = std::process::Command::new("netsh")
+        .args([
+            "interface",
+            "ipv4",
+            "delete",
+            "address",
+            "name=Ethernet",
+            "addr=192.168.137.1",
+        ])
+        .output();
+    if let Ok(out) = out {
+        if out.status.success() {
+            log("адрес 192.168.137.1 снят с Ethernet — он нужен точке доступа");
+        }
+    }
+}
+
+/// Гарантирует адрес шлюза на проводном адаптере.
+fn ensure_server_address() {
+    let out = std::process::Command::new("netsh")
+        .args([
+            "interface",
+            "ipv4",
+            "add",
+            "address",
+            "name=Ethernet",
+            &SERVER_IP.to_string(),
+            "255.255.255.0",
+        ])
+        .output();
+    match out {
+        Ok(out) if out.status.success() => {
+            log(&format!("Ethernet: адрес {SERVER_IP}/24 назначен"));
+        }
+        _ => {}
+    }
 }
 
 fn ensure_firewall_rule(name: &str, extra: &[&str]) {
@@ -203,12 +247,14 @@ fn ensure_private_profile() {
 // ---------------------------------------------------------------- DNS ------
 
 fn dns_loop(mode: Mode, alias: Ipv4Addr, online: bool) {
-    let Ok(sock) = UdpSocket::bind((SERVER_IP, 53)) else {
+    // 0.0.0.0: отвечаем и на проводном линке, и на точке доступа
+    // (там шлюз 192.168.137.1 от Windows ICS).
+    let Ok(sock) = UdpSocket::bind(("0.0.0.0", 53)) else {
         log("DNS: порт 53 занят");
         return;
     };
     sock.set_read_timeout(Some(Duration::from_secs(2))).ok();
-    log("DNS: слушаю 192.168.137.1:53");
+    log(&format!("DNS: слушаю 0.0.0.0:53 (ответ {alias})"));
     let mut buf = [0u8; 2048];
     loop {
         let Ok((len, peer)) = sock.recv_from(&mut buf) else {
@@ -343,10 +389,19 @@ fn sntp_tcp_loop() {
 
 fn sntp_loop(alias: Ipv4Addr) {
     // Отвечаем с того адреса, куда пришёл запрос: Хаб спрашивает
-    // 213.180.193.78 и ответ с 192.168.137.1 отвергает.
-    for ip in [alias, SERVER_IP] {
+    // 213.180.193.78 и ответ с 192.168.138.1 отвергает. Третий адрес —
+    // шлюз точки доступа Windows (ICS).
+    for ip in [alias, SERVER_IP, Ipv4Addr::new(192, 168, 138, 1)] {
+        if !local_ipv4(ip) {
+            continue;
+        }
         thread::spawn(move || sntp_serve(ip));
     }
+}
+
+/// Есть ли такой адрес на этой машине.
+fn local_ipv4(ip: Ipv4Addr) -> bool {
+    UdpSocket::bind((ip, 0)).is_ok()
 }
 
 fn sntp_serve(ip: Ipv4Addr) {
@@ -515,7 +570,7 @@ fn dhcp_reply(kind: u8, request: &[u8], mac: &[u8]) -> Vec<u8> {
     out.extend_from_slice(&SERVER_IP.octets());
     out.extend_from_slice(&[6, 4]);
     out.extend_from_slice(&SERVER_IP.octets());
-    out.extend_from_slice(&[28, 4, 192, 168, 137, 255]);
+    out.extend_from_slice(&[28, 4, 192, 168, 138, 255]);
     // Опция 42: NTP-сервер. Без неё Хаб живёт с часами 1970 года
     // и отвергает любой сертификат как «ещё не действительный».
     out.extend_from_slice(&[42, 4]);

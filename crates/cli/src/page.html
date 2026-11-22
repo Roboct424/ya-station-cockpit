@@ -267,7 +267,7 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
         </div>
         <div class="col">
           <label>Адрес порта (шлюз для станции)</label>
-          <input type="text" id="eth_ip" value="192.168.137.1" style="color:#9fb4cc">
+          <input type="text" id="eth_ip" value="192.168.138.1" style="color:#9fb4cc">
         </div>
       </div>
       <div class="row" style="gap:8px;align-items:center;margin-top:2px">
@@ -1051,6 +1051,15 @@ async function loadDevice() {
     modelSel.dispatchEvent(new Event('change'));
     onModelChange(want);
   }
+  // Верхняя строка: «Station Hub · 192.168.138.234».
+  if (want) {
+    DEVICE_MODEL = want;
+    const badge = $('b_station');
+    if (badge && j.station) {
+      badge.className = 'badge ok';
+      badge.textContent = want + ' · ' + j.station;
+    }
+  }
   renderMaint(j);
 }
 
@@ -1240,7 +1249,7 @@ async function pair() {
     const wired = $('pwired').checked;
     if (wired) {
       const station = ($('station_ip').value || '').trim();
-      const host = station && station !== '—' ? station : '192.168.137.234';
+      const host = station && station !== '—' ? station : '192.168.138.234';
       params.url = `http://${host}:8080`;
       // Сброс линка — то же, что выдернуть/воткнуть кабель. Без него
       // Хаб иногда не отдаёт /info до переподключения.
@@ -1348,6 +1357,8 @@ async function pingSession() {
   } catch (e) { /* сервер перезапускается — просто ждём */ }
 }
 
+let DEVICE_MODEL = '';
+
 async function state() {
   const j = await (await fetch('/api/state')).json();
   const set = (id, ok, text, cls) => {
@@ -1358,7 +1369,10 @@ async function state() {
   set('b_admin', j.admin, 'права: ' + (j.admin ? 'администратор' : 'обычные'));
   const hosts = j.checks.find(c => c.text.includes('hosts'));
   set('b_hosts', hosts && hosts.ok, 'hosts: ' + (hosts && hosts.ok ? 'чисто' : 'есть записи'));
-  set('b_station', !!j.station, 'станция: ' + (j.station || 'не найдена'), j.station ? 'ok' : 'wait');
+  // На верхней строке — что за устройство и где оно.
+  const where = j.station || 'не найдена';
+  const label = DEVICE_MODEL ? DEVICE_MODEL + ' · ' + where : 'станция: ' + where;
+  set('b_station', !!j.station, label, j.station ? 'ok' : 'wait');
 }
 
 async function init() {

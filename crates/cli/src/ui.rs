@@ -1406,7 +1406,7 @@ fn iface_ip(adapter: &str) -> String {
             "-NoProfile",
             "-Command",
             &format!(
-                "$ips = @(Get-NetIPAddress -InterfaceAlias '{adapter}' -AddressFamily IPv4 -ErrorAction SilentlyContinue | ForEach-Object IPAddress); if ($ips -contains '192.168.137.1') {{ '192.168.137.1' }} else {{ $ips | Select-Object -First 1 }}"
+                "$ips = @(Get-NetIPAddress -InterfaceAlias '{adapter}' -AddressFamily IPv4 -ErrorAction SilentlyContinue | ForEach-Object IPAddress); if ($ips -contains '192.168.138.1') {{ '192.168.138.1' }} else {{ $ips | Select-Object -First 1 }}"
             ),
         ])
         .output();
@@ -1436,10 +1436,10 @@ fn set_ethernet(body: &str) -> String {
         return serde_json::json!({ "ok": false, "text": format!("неверный адрес: {ip}") })
             .to_string();
     };
-    if addr.octets()[..3] != [192, 168, 137] {
+    if addr.octets()[..3] != [192, 168, 138] {
         return serde_json::json!({
             "ok": false,
-            "text": "адрес порта должен быть из 192.168.137.0/24"
+            "text": "адрес порта должен быть из 192.168.138.0/24"
         })
         .to_string();
     }
@@ -1461,10 +1461,10 @@ fn set_ethernet(body: &str) -> String {
             return serde_json::json!({ "ok": false, "text": format!("неверный адрес станции: {value}") })
                 .to_string();
         };
-        if station.octets()[..3] != [192, 168, 137] {
+        if station.octets()[..3] != [192, 168, 138] {
             return serde_json::json!({
                 "ok": false,
-                "text": "адрес станции должен быть из 192.168.137.0/24"
+                "text": "адрес станции должен быть из 192.168.138.0/24"
             })
             .to_string();
         }
@@ -2398,12 +2398,13 @@ fn hosts_status() -> (bool, String) {
             continue;
         }
         if in_block {
-            if trimmed.starts_with("192.168.137.1") {
+            if trimmed.starts_with("192.168.138.1") || trimmed.starts_with("192.168.137.1") {
                 continue;
             }
             in_block = false;
         }
-        let looks_like_redirect = (trimmed.contains("192.168.137.1")
+        let looks_like_redirect = (trimmed.contains("192.168.138.1")
+            || trimmed.contains("192.168.137.1")
             || trimmed.contains("127.0.0.1"))
             && (trimmed.contains("yandex") || trimmed.contains("ya.ru"));
         if looks_like_redirect {
@@ -2465,7 +2466,8 @@ fn cleanup_all(body: &str) -> String {
                     continue;
                 }
                 if skip {
-                    if trimmed.starts_with("192.168.137.1") {
+                    if trimmed.starts_with("192.168.138.1") || trimmed.starts_with("192.168.137.1")
+                    {
                         continue;
                     }
                     skip = false;

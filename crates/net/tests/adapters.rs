@@ -72,7 +72,7 @@ fn linux_hotspot_requires_workdir() {
 fn set_dns_builds_platform_command() {
     let dry = Arc::new(DryRunRunner::default());
     let net = platform_adapter(dry.clone());
-    net.set_dns("test0", "192.168.137.1".parse().unwrap())
+    net.set_dns("test0", "192.168.138.1".parse().unwrap())
         .unwrap();
 
     let commands = dry.commands();

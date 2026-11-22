@@ -103,7 +103,7 @@ enum Cmd {
         #[arg(long, default_value = "127.0.0.1:5353")]
         bind: String,
         /// Какой IPv4 отдавать
-        #[arg(long, default_value = "192.168.137.1")]
+        #[arg(long, default_value = "192.168.138.1")]
         answer: String,
         /// Остановиться через N секунд (0 = до Ctrl+C)
         #[arg(long, default_value_t = 0)]

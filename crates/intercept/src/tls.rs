@@ -872,7 +872,7 @@ fn resolve_upstream(host: &str, options: &ForwardOptions) -> Result<SocketAddr, 
     // случае спрашиваем настоящий DNS напрямую, обходя hosts.
     let looks_like_us = |ip: &std::net::IpAddr| {
         ip.is_loopback()
-            || matches!(ip, std::net::IpAddr::V4(v4) if v4.octets()[..3] == [192, 168, 137])
+            || matches!(ip, std::net::IpAddr::V4(v4) if (v4.octets()[..3] == [192, 168, 138] || v4.octets()[..3] == [192, 168, 137]))
     };
 
     if let Some(addr) = system {

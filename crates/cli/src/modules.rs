@@ -25,7 +25,7 @@ impl Default for ModuleCtx {
             adb: find_adb()
                 .map(|p| p.to_string_lossy().to_string())
                 .unwrap_or_else(|| "adb".to_string()),
-            addr: "192.168.137.217:5555".to_string(),
+            addr: "192.168.138.217:5555".to_string(),
             ssid: "YaRig".to_string(),
             password: "11111111".to_string(),
             ca_pem: PathBuf::from("data").join("ca.pem"),
@@ -195,7 +195,7 @@ pub fn find_station() -> Option<String> {
         .iter()
         .filter(|(mac, ip)| {
             (mac.starts_with("b8-87-6e") || mac.starts_with("3c-0b-4f"))
-                && ip.starts_with("192.168.137.")
+                && ip.starts_with("192.168.138.")
         })
         .map(|(_, ip)| ip.clone())
         .collect();
@@ -211,10 +211,10 @@ pub fn find_station() -> Option<String> {
 
     // 2) Остальные кандидаты: шлюз и широковещательный отбрасываем.
     // Станция живёт только в нашей сети (точка доступа или проводной порт):
-    // 192.168.137.0/24. Иначе в кандидаты попадут чужие устройства из Wi-Fi.
+    // 192.168.138.0/24. Иначе в кандидаты попадут чужие устройства из Wi-Fi.
     let candidates: Vec<String> = by_mac
         .values()
-        .filter(|ip| ip.starts_with("192.168.137."))
+        .filter(|ip| ip.starts_with("192.168.138."))
         .filter(|ip| !ip.ends_with(".1") && !ip.ends_with(".255"))
         .cloned()
         .collect();
@@ -593,12 +593,12 @@ fn env_cleanup() -> Result<String, String> {
                         return true;
                     }
                     if in_our_block {
-                        if line.starts_with("192.168.137.1") {
+                        if line.starts_with("192.168.138.1") {
                             return true;
                         }
                         in_our_block = false;
                     }
-                    let bad = (l.contains("192.168.137.1") || l.contains("127.0.0.1"))
+                    let bad = (l.contains("192.168.138.1") || l.contains("127.0.0.1"))
                         && (l.contains("yandex") || l.contains("ya.ru"));
                     !bad
                 })
@@ -936,7 +936,7 @@ fn net_names() -> Result<String, String> {
             continue;
         }
         if skip {
-            if trimmed.starts_with("192.168.137.1") {
+            if trimmed.starts_with("192.168.138.1") {
                 continue;
             }
             skip = false;
@@ -946,13 +946,13 @@ fn net_names() -> Result<String, String> {
     }
     out.push_str("# cockpit-names: имена станции -> наш сервер\n");
     for name in names {
-        out.push_str(&format!("192.168.137.1 {name}\n"));
+        out.push_str(&format!("192.168.138.1 {name}\n"));
     }
 
     std::fs::write(&hosts, out)
         .map_err(|e| format!("hosts не записался ({e}) — запустите от администратора"))?;
     Ok(format!(
-        "записей: {}\nимена теперь указывают на 192.168.137.1",
+        "записей: {}\nимена теперь указывают на 192.168.138.1",
         names.len()
     ))
 }
@@ -964,7 +964,7 @@ mount -o remount,rw / 2>/dev/null
 if grep -q "cockpit-static" "$C" 2>/dev/null; then
   echo "статика уже есть"
 else
-  printf '\n# cockpit-static: адрес выдан заранее\ninterface wlan0\nstatic ip_address=192.168.137.217/24\nstatic routers=192.168.137.1\nstatic domain_name_servers=192.168.137.1\n' >> "$C"
+  printf '\n# cockpit-static: адрес выдан заранее\ninterface wlan0\nstatic ip_address=192.168.138.217/24\nstatic routers=192.168.138.1\nstatic domain_name_servers=192.168.138.1\n' >> "$C"
   echo "статика добавлена"
 fi
 sync
@@ -989,10 +989,10 @@ for n in oauth.yandex.ru scbh.yandex.net quasar.yandex.ru quasar.yandex.net \
          ntp.yandex.net time1.yandex.net time2.yandex.net yandex.ru ya.ru \
          pool.ntp.org ru.pool.ntp.org 0.ru.pool.ntp.org 1.ru.pool.ntp.org \
          2.ru.pool.ntp.org 3.ru.pool.ntp.org europe.pool.ntp.org; do
-  grep -q "192.168.137.1 $n" $H 2>/dev/null || echo "192.168.137.1 $n" >> $H
+  grep -q "192.168.138.1 $n" $H 2>/dev/null || echo "192.168.138.1 $n" >> $H
 done
 sync
-echo "записей: $(grep -c 192.168.137.1 $H)"
+echo "записей: $(grep -c 192.168.138.1 $H)"
 "#;
     adb_script(ctx, "hosts_add.sh", script)
 }

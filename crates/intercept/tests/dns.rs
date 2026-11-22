@@ -50,7 +50,7 @@ fn malformed_packet_is_ignored() {
 fn server_answers_over_udp() {
     let cfg = DnsConfig::new(
         "127.0.0.1:0".parse().unwrap(),
-        Ipv4Addr::new(192, 168, 137, 1),
+        Ipv4Addr::new(192, 168, 138, 1),
     );
     let server = DnsServer::start(cfg).unwrap();
     let addr: SocketAddr = server.addr();
@@ -66,7 +66,7 @@ fn server_answers_over_udp() {
     let response = &buf[..len];
 
     assert_eq!(ancount(response), 1);
-    assert_eq!(&response[len - 4..], &[192, 168, 137, 1]);
+    assert_eq!(&response[len - 4..], &[192, 168, 138, 1]);
 
     server.stop();
 }
