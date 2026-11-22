@@ -131,7 +131,7 @@ pub fn about_version(port: u16) -> Option<String> {
 
 /// Открывает панель в браузере по умолчанию.
 pub fn open_browser(port: u16) {
-    let url = format!("http://127.0.0.1:{port}/");
+    let url = format!("http://127.0.0.1:{port}/?v={}", env!("CARGO_PKG_VERSION"));
     #[cfg(windows)]
     {
         let _ = std::process::Command::new("cmd")
@@ -145,6 +145,26 @@ pub fn open_browser(port: u16) {
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
+    }
+}
+
+/// Закрывает старую панель на порту, чтобы после обновления не
+/// оставалось окно прежней версии: новая занимает тот же порт.
+///
+/// Убивает только процесс `cockpit*`; чужие не трогаем.
+pub fn close_panel_on(port: u16) -> bool {
+    let script = format!(
+        "$c = Get-NetTCPConnection -LocalPort {port} -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1; \
+         if ($c) {{ $p = Get-Process -Id $c.OwningProcess -ErrorAction SilentlyContinue; \
+           if ($p -and $p.ProcessName -like 'cockpit*') {{ Stop-Process -Id $p.Id -Force; 'closed' }} \
+           else {{ 'foreign' }} }} else {{ 'none' }}"
+    );
+    let out = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-Command", &script])
+        .output();
+    match out {
+        Ok(out) => String::from_utf8_lossy(&out.stdout).trim() == "closed",
+        Err(_) => false,
     }
 }
 

@@ -136,6 +136,7 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
 
 <header>
   <h1>cockpit · получение ADB</h1>
+  <span id="b_ver" class="badge" title="версия программы">v?</span>
   <span id="b_admin" class="badge">права: ?</span>
   <span id="b_hosts" class="badge">hosts: ?</span>
   <span id="b_station" class="badge">станция: ?</span>
@@ -756,6 +757,11 @@ async function loadAbout() {
   try {
     const a = await (await fetch('/api/about')).json();
     const el = $('about');
+    const ver = $('b_ver');
+    if (ver) {
+      ver.textContent = 'v' + a.version;
+      ver.title = 'версия программы (в шапке видно, какая панель открыта)';
+    }
     if (el) {
       el.textContent = 'cockpit ' + a.version +
         ' · ' + a.profile + ' · ' + a.os + '/' + a.arch +

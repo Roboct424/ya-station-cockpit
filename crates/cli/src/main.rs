@@ -790,9 +790,9 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
             if !ui::ensure_admin() {
                 return Ok(ExitCode::SUCCESS);
             }
-            // Порт занят: если это та же версия — открываем её. Если старая
-            // панель — поднимаем новую на следующем свободном порту, иначе
-            // пользователь так и видит старый интерфейс.
+            // Порт занят: если та же версия — открываем её. Если старая
+            // панель — закрываем и занимаем порт: иначе пользователь
+            // продолжает смотреть в старое окно и не видит изменений.
             if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
                 let same = ui::about_version(port)
                     .map(|version| version == env!("CARGO_PKG_VERSION"))
@@ -801,11 +801,22 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
                     ui::open_browser(port);
                     return Ok(ExitCode::SUCCESS);
                 }
+                if ui::close_panel_on(port) {
+                    i18n::say(format!("старая панель на {port} закрыта"));
+                    for _ in 0..30 {
+                        if std::net::TcpStream::connect(("127.0.0.1", port)).is_err() {
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    }
+                }
+            }
+            if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
                 match (8791u16..=8809)
                     .find(|p| std::net::TcpStream::connect(("127.0.0.1", *p)).is_err())
                 {
                     Some(free) => {
-                        i18n::say(format!("старая панель на {port}; новая на {free}"));
+                        i18n::say(format!("порт {port} занят; панель на {free}"));
                         port = free;
                     }
                     None => {

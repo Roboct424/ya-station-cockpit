@@ -72,7 +72,10 @@
     "AP: /connect — станция может думать до 30 секунд": "AP: /connect — the station may take up to 30 seconds",
     "стек: маршрутов {0}, прошивка {1}, платформа {2}, сертификатов {3}": "stack: {0} routes, firmware {1}, platform {2}, {3} certificates",
     "/check_updates → обновлений нет (станции нет в манифесте)": "/check_updates → no updates (station is not in the manifest)",
-    "стек остановлен": "stack stopped"
+    "стек остановлен": "stack stopped",
+    "старая панель на {0} закрыта": "old panel on {0} closed",
+    "порт {0} занят; панель на {1}": "port {0} is busy; panel on {1}",
+    "версия программы (в шапке видно, какая панель открыта)": "program version (the header shows which panel is open)"
   },
   "_comment": "Все системные сообщения. Ключ — русский текст из кода (динамические части: {0}, {1}), значение — английский. Проверка: python tools/i18n_check.py",
   "en": {
