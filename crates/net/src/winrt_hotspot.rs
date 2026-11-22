@@ -82,6 +82,10 @@ pub fn start(cfg: &ApConfig) -> Result<String, NetError> {
     // тогда телефон подключается к сети и не получает адрес. Настраиваем
     // сами: uplink — публичный, интерфейс точки — частный.
     let ics = ensure_ics();
+    // IPv6 на точке выключаем: ICS-DNS отдаёт станции настоящие IPv6-адреса,
+    // и она уходит в облако по IPv6 мимо наших IPv4-адресов. Без IPv6
+    // остаётся только IPv4, где мы всё перехватываем (G-056).
+    let ipv6 = disable_ipv6_on_ap();
 
     // Читаем назад: Windows иногда оставляет прежний SSID/пароль (G-064).
     let mut applied = String::new();
@@ -106,7 +110,46 @@ pub fn start(cfg: &ApConfig) -> Result<String, NetError> {
         }
     }
 
-    Ok(format!("{band_name}; {ics}; {applied}"))
+    Ok(format!("{band_name}; {ics}; {ipv6}; {applied}"))
+}
+
+/// Выключает IPv6 на интерфейсе точки доступа.
+fn disable_ipv6_on_ap() -> String {
+    let script = r#"
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+$ErrorActionPreference = 'SilentlyContinue'
+$ap = (Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -eq '192.168.137.1' } | Select-Object -First 1).InterfaceAlias
+if (-not $ap) { 'точка без адреса'; exit 0 }
+$b = Get-NetAdapterBinding -Name $ap -ComponentID ms_tcpip6 -ErrorAction SilentlyContinue
+Set-NetIPInterface -InterfaceAlias $ap -AddressFamily IPv6 -RouterDiscovery Disabled -AdvertiseDefaultRoute Disabled -Forwarding Disabled -ErrorAction SilentlyContinue
+Disable-NetAdapterBinding -Name $ap -ComponentID ms_tcpip6 -ErrorAction SilentlyContinue
+Start-Sleep -Milliseconds 800
+$b = Get-NetAdapterBinding -Name $ap -ComponentID ms_tcpip6 -ErrorAction SilentlyContinue
+if ($b -and -not $b.Enabled) {
+  'IPv6 на точке выключен'
+} else {
+  'IPv6 на точке остался (нужны права администратора)'
+}
+"#;
+    let out = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ])
+        .output();
+    match out {
+        Ok(out) => format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+        .trim()
+        .to_string(),
+        Err(error) => format!("IPv6: {error}"),
+    }
 }
 
 /// Включена ли точка доступа прямо сейчас.

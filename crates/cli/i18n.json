@@ -86,7 +86,12 @@
     "службы перехвата работают": "interception services are running",
     "службы перехвата запущены": "interception services started",
     "поднимаю службы…": "starting services…",
-    "ошибка запуска: {0}": "start failed: {0}"
+    "ошибка запуска: {0}": "start failed: {0}",
+    "точка доступа: DHCP/DNS/NAT у ICS, свои 53/67 не поднимаем": "hotspot: DHCP/DNS/NAT belong to ICS, our 53/67 stay down",
+    "IPv6 на точке выключен": "IPv6 is off on the hotspot",
+    "IPv6 на точке остался (нужны права администратора)": "IPv6 is still on the hotspot (administrator rights required)",
+    "IPv6 на точке уже выключен": "IPv6 is already off on the hotspot",
+    "точка без адреса": "hotspot has no address yet"
   },
   "_comment": "Все системные сообщения. Ключ — русский текст из кода (динамические части: {0}, {1}), значение — английский. Проверка: python tools/i18n_check.py",
   "en": {

@@ -2765,7 +2765,7 @@ fn hub_serve(body: &str) -> String {
     stop_stack();
     // Wi-Fi AP: станция ходит в облако по настоящим адресам (ICS-DNS),
     // поэтому вешаем их на ноутбук, иначе трафик уйдёт мимо нас (G-048).
-    if hotspot && field(body, "link") == "wifi" {
+    if hotspot || field(body, "link") == "wifi" {
         let ctx = ModuleCtx {
             ethernet: adapter.clone(),
             ..ModuleCtx::default()

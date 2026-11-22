@@ -66,9 +66,17 @@ pub fn serve(mode: Mode, alias: Ipv4Addr, online: bool, quasar: bool) -> Result<
         log("DNS: внешние имена не разрешаются — оффлайн, наружу ничего не уходит");
     }
 
-    spawn("dns", move || dns_loop(mode, alias, online));
+    // Точка доступа Windows: DHCP/DNS/NAT у ICS. Наши сокеты на 53/67
+    // всё равно не встанут, а wildcard-DHCP ещё и перехватит запросы
+    // чужих клиентов точки (телефон). Поэтому не поднимаем их вовсе.
+    let hotspot = cockpit_net::hotspot_is_on();
+    if hotspot {
+        log("точка доступа: DHCP/DNS/NAT у ICS, свои 53/67 не поднимаем");
+    } else {
+        spawn("dns", move || dns_loop(mode, alias, online));
+        spawn("dhcp", dhcp_loop);
+    }
     spawn("http", http_loop);
-    spawn("dhcp", dhcp_loop);
     spawn("sntp", move || sntp_loop(alias));
     spawn("sntp-tcp", sntp_tcp_loop);
     if mode == Mode::Sync && quasar {
