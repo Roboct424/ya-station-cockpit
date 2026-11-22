@@ -31,7 +31,10 @@ jobs:
       - name: package (windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: Compress-Archive -Path target/release/cockpit.exe -DestinationPath cockpit-windows-x86_64.zip
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/cockpit | Out-Null
+          Copy-Item target/release/cockpit.exe, cockpit.cmd, cockpit.ps1, packaging/windows/README.txt dist/cockpit
+          Compress-Archive -Path dist/cockpit/* -DestinationPath cockpit-windows-x86_64.zip
 
       - name: package (linux)
         if: runner.os == 'Linux'

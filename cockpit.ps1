@@ -1,6 +1,10 @@
 ﻿$ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $exe = Join-Path $root 'bin\cockpit.exe'
+if (-not (Test-Path $exe)) {
+    # Плоская раскладка релизного zip: cockpit.exe рядом с лаунчером.
+    $exe = Join-Path $root 'cockpit.exe'
+}
 $port = 8790
 $url = "http://127.0.0.1:$port/"
 try {
