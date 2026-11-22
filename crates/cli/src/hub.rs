@@ -602,13 +602,14 @@ fn load_cert_chain() -> Result<
     (),
 > {
     use rustls::pki_types::pem::PemObject;
-    let certs: Vec<_> =
-        rustls::pki_types::CertificateDer::pem_file_iter("data/certs/p384_wide_sha384.chain")
-            .map_err(|_| ())?
-            .filter_map(Result::ok)
-            .collect();
-    let key = rustls::pki_types::PrivateKeyDer::from_pem_file("data/certs/p384_wide_sha384.key")
-        .map_err(|_| ())?;
+    // Сертификат и ключ вшиты в бинарник: релиз не зависит от внешних
+    // файлов и Python-скрипта. Это те же p384_wide_sha384, что и раньше.
+    const CHAIN: &[u8] = include_bytes!("../../../packaging/quasar/quasar-chain.pem");
+    const KEY: &[u8] = include_bytes!("../../../packaging/quasar/quasar-leaf.key");
+    let certs: Vec<_> = rustls::pki_types::CertificateDer::pem_slice_iter(CHAIN)
+        .filter_map(Result::ok)
+        .collect();
+    let key = rustls::pki_types::PrivateKeyDer::from_pem_slice(KEY).map_err(|_| ())?;
     if certs.is_empty() {
         return Err(());
     }

@@ -2390,7 +2390,6 @@ fn percent_decode(s: &str) -> String {
 // ------------------------------------------------------------ Хаб ---------
 
 static HUB_CHILD: std::sync::Mutex<Option<std::process::Child>> = std::sync::Mutex::new(None);
-static QUASAR_CHILD: std::sync::Mutex<Option<std::process::Child>> = std::sync::Mutex::new(None);
 /// Режим последнего запуска hub serve: "setup" или "sync".
 static HUB_MODE: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 
@@ -2406,7 +2405,6 @@ fn kill_child(slot: &'static std::sync::Mutex<Option<std::process::Child>>) {
 /// Останавливает службы Хаба и внешний quasar.
 fn hub_stop() -> String {
     kill_child(&HUB_CHILD);
-    kill_child(&QUASAR_CHILD);
     if let Ok(mut mode) = HUB_MODE.lock() {
         mode.clear();
     }
@@ -2430,7 +2428,6 @@ fn hub_serve(body: &str) -> String {
         *current = mode.to_string();
     }
     kill_child(&HUB_CHILD);
-    kill_child(&QUASAR_CHILD);
 
     let online = field(body, "online") == "1";
     let exe = std::env::current_exe().unwrap_or_else(|_| "cockpit".into());
@@ -2444,48 +2441,6 @@ fn hub_serve(body: &str) -> String {
     }
     if !alias.is_empty() {
         cmd.args(["--alias", &alias]);
-    }
-
-    if !online && mode == "sync" {
-        cmd.arg("--no-quasar");
-        if std::net::TcpListener::bind(("0.0.0.0", 443)).is_err() {
-            push_log("хаб: 443 занят — использую уже запущенный quasar");
-        } else if let Some(quasar_dir) = ["data/probe/quasar", "packaging/quasar"]
-            .into_iter()
-            .map(std::path::PathBuf::from)
-            .find(|dir| dir.join("fake-quasar.py").exists())
-        {
-            let qlog = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open("data/fake-quasar.log")
-                .ok();
-            let qerr = qlog.as_ref().and_then(|f| f.try_clone().ok());
-            let mut q = std::process::Command::new("python");
-            q.args(["-u", "fake-quasar.py"]).current_dir(&quasar_dir);
-            if let Some(out) = qlog {
-                q.stdout(out);
-            }
-            if let Some(e) = qerr {
-                q.stderr(e);
-            }
-            match q.spawn() {
-                Ok(mut child) => {
-                    std::thread::sleep(std::time::Duration::from_millis(600));
-                    if let Ok(Some(status)) = child.try_wait() {
-                        push_log(format!("хаб: quasar (OpenSSL) завершился: {status}"));
-                    } else {
-                        if let Ok(mut guard) = QUASAR_CHILD.lock() {
-                            *guard = Some(child);
-                        }
-                        push_log("хаб: quasar (OpenSSL) на 443 запущен");
-                    }
-                }
-                Err(e) => push_log(format!("хаб: quasar не запустился: {e}")),
-            }
-        } else {
-            push_log("хаб: нет fake-quasar.py (data/probe/quasar или packaging/quasar)");
-        }
     }
 
     if let Some(out) = log {
@@ -2596,14 +2551,7 @@ fn hub_status() -> String {
         })
         .unwrap_or(false);
     let mode = HUB_MODE.lock().map(|mode| mode.clone()).unwrap_or_default();
-    let quasar_child = QUASAR_CHILD
-        .lock()
-        .map(|mut guard| match guard.as_mut() {
-            Some(child) => matches!(child.try_wait(), Ok(None)),
-            None => false,
-        })
-        .unwrap_or(false);
-    let quasar = quasar_child || std::net::TcpStream::connect(("127.0.0.1", 443)).is_ok();
+    let quasar = std::net::TcpStream::connect(("127.0.0.1", 443)).is_ok();
     serde_json::json!({
         "ok": true,
         "running": running,

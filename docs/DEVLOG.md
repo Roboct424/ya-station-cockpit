@@ -1041,3 +1041,12 @@ http=200 size=577
   elevated-процесс стартовал из `C:\Windows\System32` и не видел `data/`.
 * В Windows-zip и Linux-tar добавлены `data/probe/quasar/*`; в README
   релиза указано, что нужен Python 3 (панель запускает fake-quasar.py).
+
+## 2026-11-22 - v1.2.8: quasar встроен в Rust, Python убран
+
+* `load_cert_chain` читает `packaging/quasar/quasar-chain.pem` и
+  `quasar-leaf.key` через `include_bytes!`.
+* `hub_serve` больше не передаёт `--no-quasar` и не запускает внешний
+  `fake-quasar.py`; локальный quasar на 443 — часть `hub serve`.
+* Из релизного zip убраны `data/probe/quasar` и требование Python 3.
+* G-067/G-076 остаются историей; актуальная архитектура — G-077.

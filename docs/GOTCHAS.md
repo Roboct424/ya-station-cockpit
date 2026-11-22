@@ -1047,3 +1047,21 @@ quasar даже при наличии файлов.
 **Исправление.** В Windows-zip и Linux-tar добавлены файлы
 `data/probe/quasar/*`; `ensure_admin` передаёт текущий каталог в
 `-WorkingDirectory`. Для запуска quasar нужен Python 3 в PATH.
+
+---
+
+## G-077. Python-обвязка quasar убрана: локальный сервер встроен в Rust
+
+**Что было.** В релизе лежал `fake-quasar.py` и требовался Python 3. Это
+был временный обход старого TLS-стека Хаба: внешний OpenSSL-сервер
+поднимался рядом с `cockpit.exe`.
+
+**Что сделано.** quasar на 443 теперь встроен в бинарник:
+- `quasar-chain.pem` и `quasar-leaf.key` вшиты через `include_bytes!`;
+- `hub serve` запускается без `--no-quasar` и поднимает встроенный
+  TLS 1.2 сервер (`crates/cli/src/hub.rs::quasar_loop`);
+- в релизном zip больше нет `data/probe/quasar` и нет зависимости от
+  Python; `ensure_admin` по-прежнему сохраняет рабочий каталог.
+
+**Если Хаб не принимает встроенный rustls**, нужен нативный TLS-бэкенд
+(OpenSSL/Schannel), но не Python-скрипт. Это отдельная задача.
