@@ -13,9 +13,9 @@
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const SERVER_IP: Ipv4Addr = Ipv4Addr::new(192, 168, 138, 1);
 const CLIENT_IP: Ipv4Addr = Ipv4Addr::new(192, 168, 138, 234);
@@ -839,7 +839,6 @@ fn quasar_loop() {
         names.join(", ")
     ));
     let index = Arc::new(AtomicUsize::new(0));
-    let last_switch = Arc::new(Mutex::new(Instant::now() - Duration::from_secs(60)));
     let working = Arc::new(AtomicBool::new(false));
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
@@ -850,7 +849,6 @@ fn quasar_loop() {
         });
         let certs = Arc::clone(&certs);
         let index = Arc::clone(&index);
-        let last_switch = Arc::clone(&last_switch);
         let working = Arc::clone(&working);
         thread::spawn(move || {
             let peer = stream
@@ -878,19 +876,12 @@ fn quasar_loop() {
                         && certs.len() > 1
                         && !working.load(Ordering::Relaxed)
                     {
-                        if let Ok(mut switched) = last_switch.lock() {
-                            // Станция открывает несколько соединений сразу:
-                            // переключаемся не чаще раза в 2 секунды.
-                            if switched.elapsed() >= Duration::from_secs(2) {
-                                *switched = Instant::now();
-                                let next = index.fetch_add(1, Ordering::Relaxed) + 1;
-                                let next = next % certs.len();
-                                log(&format!(
-                                    "quasar: {} отвергнут, следующий — {}",
-                                    cert.name, certs[next].name
-                                ));
-                            }
-                        }
+                        let next = index.fetch_add(1, Ordering::Relaxed) + 1;
+                        let next = next % certs.len();
+                        log(&format!(
+                            "quasar: {} отвергнут, следующий — {}",
+                            cert.name, certs[next].name
+                        ));
                     }
                     return;
                 }
@@ -1032,6 +1023,13 @@ fn handle_quasar(stream: &mut (impl Read + Write)) -> std::io::Result<()> {
                 .then(|| value.trim().to_string())
         })
         .unwrap_or_default();
+    // Станция открывает /uni.ws как WebSocket. На 200 JSON её клиент
+    // считает backend недоступным и объявляет «нет интернета», поэтому
+    // отвечаем настоящим 101 и держим соединение (G-101).
+    if path.contains("/uni.ws") && is_websocket_upgrade(&text) {
+        log("  -> websocket 101 (uni.ws)");
+        return serve_websocket(stream, &text);
+    }
     // Тело запроса: нужно для разбора регистрации.
     let length = text
         .lines()
@@ -1081,6 +1079,9 @@ fn handle_quasar(stream: &mut (impl Read + Write)) -> std::io::Result<()> {
         cockpit_ota::sync_info_json()
     } else if path.contains("/check_updates") {
         br#"{"hasUpdate":false}"#.to_vec()
+    } else if path.contains("/register") {
+        // Hub-у хватало {"status":"ok"}, Mini 3 ждёт поля активации.
+        br#"{"status":"ok","remoteActivation":true,"hasCriticalUpdate":false}"#.to_vec()
     } else if path.contains("/token") {
         // Без OAuth-ответа станция не завершает регистрацию (G-080).
         log("  -> OAuth token");
@@ -1089,6 +1090,187 @@ fn handle_quasar(stream: &mut (impl Read + Write)) -> std::io::Result<()> {
         br#"{"status":"ok"}"#.to_vec()
     };
     respond(stream, 200, &body)
+}
+
+/// Станция просит Upgrade: websocket (без этого /uni.ws не считается живым).
+fn is_websocket_upgrade(head: &str) -> bool {
+    head.lines().any(|line| {
+        line.split_once(':')
+            .map(|(name, value)| {
+                name.eq_ignore_ascii_case("upgrade")
+                    && value.trim().eq_ignore_ascii_case("websocket")
+            })
+            .unwrap_or(false)
+    })
+}
+
+fn header_value<'a>(head: &'a str, wanted: &str) -> Option<&'a str> {
+    head.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.eq_ignore_ascii_case(wanted).then(|| value.trim())
+    })
+}
+
+/// Завершает WebSocket-рукопожатие и держит канал открытым.
+///
+/// Станция открывает `/uni.ws` с `Sec-WebSocket-Key`. Если ответить
+/// обычным HTTP 200, её WebSocket-клиент считает облако недоступным и
+/// голосом сообщает «нет интернета» (G-101). Отвечаем 101 и отвечаем
+/// на ping/pong, пока станция не закроет канал.
+fn serve_websocket(stream: &mut (impl Read + Write), head: &str) -> std::io::Result<()> {
+    let Some(key) = header_value(head, "sec-websocket-key") else {
+        return respond(stream, 200, br#"{"status":"ok"}"#);
+    };
+    let mut data = key.as_bytes().to_vec();
+    data.extend_from_slice(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
+    let accept = {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.encode(sha1(&data))
+    };
+    let reply = format!(
+        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
+    );
+    stream.write_all(reply.as_bytes())?;
+    stream.flush()?;
+
+    let mut buf: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        let n = match stream.read(&mut chunk) {
+            Ok(0) => return Ok(()),
+            Ok(n) => n,
+            Err(_) => return Ok(()),
+        };
+        buf.extend_from_slice(&chunk[..n]);
+        while let Some((opcode, payload)) = take_ws_frame(&mut buf) {
+            match opcode {
+                0x8 => {
+                    let _ = ws_send(stream, 0x8, &[]);
+                    return Ok(());
+                }
+                0x9 => {
+                    let _ = ws_send(stream, 0xA, &payload);
+                }
+                // Hello/прочие команды: соединение живое, этого достаточно,
+                // чтобы backend считался доступным.
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Достаёт один кадр из буфера; `None`, если кадр ещё не пришёл целиком.
+fn take_ws_frame(buf: &mut Vec<u8>) -> Option<(u8, Vec<u8>)> {
+    if buf.len() < 2 {
+        return None;
+    }
+    let opcode = buf[0] & 0x0f;
+    let masked = buf[1] & 0x80 != 0;
+    let mut len = (buf[1] & 0x7f) as usize;
+    let mut pos = 2;
+    if len == 126 {
+        if buf.len() < 4 {
+            return None;
+        }
+        len = u16::from_be_bytes([buf[2], buf[3]]) as usize;
+        pos = 4;
+    } else if len == 127 {
+        if buf.len() < 10 {
+            return None;
+        }
+        len = u64::from_be_bytes(buf[2..10].try_into().ok()?) as usize;
+        pos = 10;
+    }
+    let mask_len = if masked { 4 } else { 0 };
+    if buf.len() < pos + mask_len + len {
+        return None;
+    }
+    let mask: Vec<u8> = buf[pos..pos + mask_len].to_vec();
+    let start = pos + mask_len;
+    let mut payload = buf[start..start + len].to_vec();
+    if masked {
+        for (i, byte) in payload.iter_mut().enumerate() {
+            *byte ^= mask[i % 4];
+        }
+    }
+    buf.drain(..start + len);
+    Some((opcode, payload))
+}
+
+fn ws_send(stream: &mut impl Write, opcode: u8, payload: &[u8]) -> std::io::Result<()> {
+    let mut frame = Vec::with_capacity(payload.len() + 10);
+    frame.push(0x80 | opcode);
+    let len = payload.len();
+    if len < 126 {
+        frame.push(len as u8);
+    } else if len <= u16::MAX as usize {
+        frame.push(126);
+        frame.extend_from_slice(&(len as u16).to_be_bytes());
+    } else {
+        frame.push(127);
+        frame.extend_from_slice(&(len as u64).to_be_bytes());
+    }
+    frame.extend_from_slice(payload);
+    stream.write_all(&frame)?;
+    stream.flush()
+}
+
+/// SHA-1 для `Sec-WebSocket-Accept` (RFC 6455). Свой, чтобы не тащить
+/// криптобиблиотеку ради 20 байт.
+fn sha1(data: &[u8]) -> [u8; 20] {
+    let mut h: [u32; 5] = [
+        0x6745_2301,
+        0xEFCD_AB89,
+        0x98BA_DCFE,
+        0x1032_5476,
+        0xC3D2_E1F0,
+    ];
+    let bits = (data.len() as u64) * 8;
+    let mut msg = data.to_vec();
+    msg.push(0x80);
+    while msg.len() % 64 != 56 {
+        msg.push(0);
+    }
+    msg.extend_from_slice(&bits.to_be_bytes());
+    for chunk in msg.chunks(64) {
+        let mut w = [0u32; 80];
+        for (i, word) in chunk.chunks(4).enumerate() {
+            w[i] = u32::from_be_bytes([word[0], word[1], word[2], word[3]]);
+        }
+        for i in 16..80 {
+            w[i] = (w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16]).rotate_left(1);
+        }
+        let (mut a, mut b, mut c, mut d, mut e) = (h[0], h[1], h[2], h[3], h[4]);
+        for (i, word) in w.iter().enumerate() {
+            let (f, k) = match i {
+                0..=19 => ((b & c) | ((!b) & d), 0x5A82_7999u32),
+                20..=39 => (b ^ c ^ d, 0x6ED9_EBA1),
+                40..=59 => ((b & c) | (b & d) | (c & d), 0x8F1B_BCDC),
+                _ => (b ^ c ^ d, 0xCA62_C1D6),
+            };
+            let temp = a
+                .rotate_left(5)
+                .wrapping_add(f)
+                .wrapping_add(e)
+                .wrapping_add(k)
+                .wrapping_add(*word);
+            e = d;
+            d = c;
+            c = b.rotate_left(30);
+            b = a;
+            a = temp;
+        }
+        h[0] = h[0].wrapping_add(a);
+        h[1] = h[1].wrapping_add(b);
+        h[2] = h[2].wrapping_add(c);
+        h[3] = h[3].wrapping_add(d);
+        h[4] = h[4].wrapping_add(e);
+    }
+    let mut out = [0u8; 20];
+    for (i, word) in h.iter().enumerate() {
+        out[i * 4..i * 4 + 4].copy_from_slice(&word.to_be_bytes());
+    }
+    out
 }
 
 /// Запоминает `device_id`/прошивку/платформу из строки запроса quasar.
@@ -1114,35 +1296,19 @@ fn remember_from_query(path: &str) {
     crate::station::remember(&id, &version, &param("platform"));
 }
 
-/// OAuth-ответ для `/token`: access/refresh JWT без подписи.
+/// OAuth-ответ для `/token`.
+///
+/// Станции ждут **непрозрачный** токен `y0__…` и `uid`, как отдавал
+/// старый рабочий стек. На JWT (`eyJ…`) клиент считает токен внешним и
+/// бесконечно меняет его через `grant_type=x-token` (G-102).
 fn oauth_token_json() -> Vec<u8> {
-    use base64::Engine;
-    let encode = |value: serde_json::Value| {
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(value.to_string().as_bytes())
-    };
-    let now = std::time::SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let exp = now + 31_536_000;
-    let header = encode(serde_json::json!({ "alg": "none", "typ": "JWT" }));
-    let access = format!(
-        "{header}.{}.cockpit",
-        encode(serde_json::json!({
-            "iss": "cockpit", "sub": "offline", "iat": now, "exp": exp
-        }))
-    );
-    let refresh = format!(
-        "{header}.{}.cockpit",
-        encode(serde_json::json!({
-            "iss": "cockpit", "typ": "refresh", "iat": now, "exp": exp
-        }))
-    );
     let body = serde_json::json!({
-        "access_token": access,
-        "token_type": "bearer",
+        "access_token": "y0__localCockpit",
         "expires_in": 31_536_000,
-        "refresh_token": refresh,
+        "token_type": "bearer",
+        "uid": 1_000_000_001u64,
+        "login": "offline",
+        "refresh_token": "local:refresh:0",
         "scope": "quasar"
     });
     serde_json::to_vec(&body).unwrap_or_default()
@@ -1204,6 +1370,23 @@ fn auto_grab() {
 mod tests {
     use super::*;
 
+    #[test]
+    fn sha1_matches_rfc3174() {
+        let digest = sha1(b"abc");
+        let text: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(text, "a9993e364706816aba3e25717850c26c9cd0d89d");
+    }
+
+    #[test]
+    fn websocket_accept_for_known_key() {
+        let key = "dGhlIHNhbXBsZSBub25jZQ==";
+        let mut data = key.as_bytes().to_vec();
+        data.extend_from_slice(b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11");
+        use base64::Engine;
+        let accept = base64::engine::general_purpose::STANDARD.encode(sha1(&data));
+        assert_eq!(accept, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
+    }
+
     /// G-082: сертификат для quasar выпускает наш CA, а не чужой ключ.
     /// Проверяем, что лист выдаётся и что CA постоянный.
     #[test]
@@ -1220,8 +1403,10 @@ mod tests {
     fn oauth_token_has_both_tokens() {
         let body: serde_json::Value = serde_json::from_slice(&oauth_token_json()).expect("json");
         assert_eq!(body["token_type"], "bearer");
-        assert!(body["access_token"].as_str().unwrap().contains('.'));
-        assert!(body["refresh_token"].as_str().unwrap().contains('.'));
+        // Станции ждут непрозрачный токен y0__…, а не JWT.
+        assert!(body["access_token"].as_str().unwrap().starts_with("y0__"));
+        assert!(body["refresh_token"].is_string());
+        assert_eq!(body["uid"], 1_000_000_001u64);
         assert_eq!(body["expires_in"], 31_536_000);
     }
 }

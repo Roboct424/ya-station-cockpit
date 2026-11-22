@@ -1257,3 +1257,25 @@ http=200 size=577
   `data/attempts/attempt-001.log`) входит в перебор наравне с
   `p384_wide_root` и `p256_wide_root`.
 * `data/certs/last_ok.txt` — какой набор приняла станция.
+
+## 2026-11-23 - v1.6.7: WebSocket на /uni.ws
+
+* Станция открывает `/uni.ws` как WebSocket; `200 {"status":"ok"}`
+  приводил к «нет интернета» и блокировал `/register` (G-101).
+* `handle_quasar` отвечает `101 Switching Protocols`
+  (`Sec-WebSocket-Accept` по RFC 6455), держит канал и отвечает на ping.
+* SHA-1 свой, без новой зависимости; тесты на RFC 3174 и на эталонный
+  ключ WebSocket.
+
+## 2026-11-23 - v1.6.7 (продолжение): opaque-токен и Mini 3
+
+* После `/register` Mini 3 уходила в бесконечный `x-token`: JWT
+  воспринимался как внешний токен. `oauth_token_json` теперь отдаёт
+  непрозрачный `y0__localCockpit` + `uid` + `refresh_token`, как
+  старый рабочий стек (G-102).
+* `/register` отвечает
+  `{"status":"ok","remoteActivation":true,"hasCriticalUpdate":false}`;
+  станция делает `/push_subscribe?uuid=1000000001` и завершает
+  регистрацию.
+* Формат общий для Hub и Mini 2: Mini 2 разблокировалась на таком же
+  непрозрачном токене, отдельная ветка по модели не нужна.
