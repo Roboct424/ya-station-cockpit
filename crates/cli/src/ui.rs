@@ -105,6 +105,25 @@ fn push_log(line: impl Into<String>) {
 }
 
 /// Поднимает права: если мы не администратор — перезапускает себя через UAC.
+/// Открывает панель в браузере по умолчанию.
+pub fn open_browser(port: u16) {
+    let url = format!("http://127.0.0.1:{port}/");
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("cmd")
+            .args(["/C", "start", "", &url])
+            .spawn();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open").arg(&url).spawn();
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
+    }
+}
+
 pub fn ensure_admin() -> bool {
     if is_admin() {
         return true;
@@ -1372,6 +1391,40 @@ fn set_ethernet(body: &str) -> String {
         })
         .to_string();
     }
+    // Автоопределение адреса станции включено по умолчанию. При ручном
+    // режиме проверяем адрес и запоминаем его в data/station_ip.
+    let auto = field(body, "auto") != "0";
+    let station_text = field(body, "station_ip");
+    let mut station_addr: Option<std::net::Ipv4Addr> = None;
+    if !auto {
+        let value = station_text.trim();
+        if value.is_empty() || value == "—" {
+            return serde_json::json!({
+                "ok": false,
+                "text": "укажите адрес станции или включите автоопределение"
+            })
+            .to_string();
+        }
+        let Ok(station) = value.parse::<std::net::Ipv4Addr>() else {
+            return serde_json::json!({ "ok": false, "text": format!("неверный адрес станции: {value}") })
+                .to_string();
+        };
+        if station.octets()[..3] != [192, 168, 137] {
+            return serde_json::json!({
+                "ok": false,
+                "text": "адрес станции должен быть из 192.168.137.0/24"
+            })
+            .to_string();
+        }
+        if station == addr {
+            return serde_json::json!({
+                "ok": false,
+                "text": "адрес станции не должен совпадать с адресом порта"
+            })
+            .to_string();
+        }
+        station_addr = Some(station);
+    }
     let script = format!(
         "$has = @(Get-NetIPAddress -InterfaceAlias '{adapter}' -AddressFamily IPv4 -ErrorAction SilentlyContinue | ForEach-Object IPAddress); \
          if ($has -contains '{ip}') {{ 'already' }} \
@@ -1382,9 +1435,21 @@ fn set_ethernet(body: &str) -> String {
         .output();
     match out {
         Ok(res) if res.status.success() => {
+            let path = std::path::PathBuf::from("data").join("station_ip");
+            if auto {
+                let _ = std::fs::remove_file(&path);
+            } else if let Some(station) = station_addr {
+                let _ = std::fs::create_dir_all("data");
+                let _ = std::fs::write(&path, station.to_string());
+                push_log(format!("ethernet: станция вручную {station}"));
+            }
             push_log(format!("ethernet: {adapter} → {ip}"));
-            serde_json::json!({ "ok": true, "text": format!("{adapter}: адрес {ip} назначен") })
-                .to_string()
+            let mode = if auto { "авто" } else { "вручную" };
+            serde_json::json!({
+                "ok": true,
+                "text": format!("{adapter}: адрес {ip} назначен, станция — {mode}")
+            })
+            .to_string()
         }
         Ok(res) => serde_json::json!({
             "ok": false,
@@ -1504,7 +1569,9 @@ fn last_peer_ip() -> Option<String> {
 }
 
 fn station_ip() -> Option<String> {
-    last_peer_ip().or_else(crate::modules::find_station)
+    crate::modules::manual_station_ip()
+        .or_else(last_peer_ip)
+        .or_else(crate::modules::find_station)
 }
 
 fn device_json() -> String {

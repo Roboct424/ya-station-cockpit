@@ -38,6 +38,21 @@ cargo run -- journal tail           # что произошло
 в `data/` рядом. `bin/cockpit.exe` — текущая сборка (пересобрать:
 `cargo build --release --bin cockpit`, затем скопировать в `bin/`).
 
+В релизном zip достаточно запустить **`cockpit.exe` без аргументов**: он
+поднимет панель на 8790 и откроет браузер. Справка CLI — `cockpit --help`,
+принудительный запуск панели — `cockpit ui --port 8790`.
+
+### Шаг 2 «Настройка»
+
+Тип подключения и его настройка перенесены сюда, в общий конфиг:
+
+- **Wi-Fi** — SSID/пароль точки доступа станции;
+- **Проводное** — сетевой адаптер, кнопка **«Обновить»** (если Ethernet
+  подключили уже после запуска), общий доступ (DHCP);
+- **«Автоопределение адреса устройства»** включено по умолчанию: поля
+  «Адрес станции» и «Адрес порта» заблокированы. Снимите галочку, чтобы
+  задать адреса вручную; при применении они сохраняются в `data/station_ip`.
+
 ### Команды
 
 | Команда | Назначение |
@@ -159,6 +174,21 @@ Double-click **`cockpit.cmd`** in the project folder:
 If the panel is already running, the script just opens the tab. Logs and data
 live in `data/`. `bin/cockpit.exe` is the current build (rebuild with
 `cargo build --release --bin cockpit`, then copy it to `bin/`).
+
+In the release zip, just run **`cockpit.exe` with no arguments**: it starts the
+panel on 8790 and opens the browser. CLI help: `cockpit --help`; force the
+panel: `cockpit ui --port 8790`.
+
+### Step 2 “Setup”
+
+The connection type and its settings are part of the common config here:
+
+- **Wi-Fi** — the station access point SSID/password;
+- **Wired** — network adapter, a **Refresh** button (for Ethernet plugged in
+  after startup), internet sharing (DHCP);
+- **“Auto-detect the device address”** is on by default: the station address
+  and gateway fields are disabled. Clear it to enter them manually; they are
+  saved to `data/station_ip` when applied.
 
 ### Commands
 

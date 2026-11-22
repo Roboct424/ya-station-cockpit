@@ -5,7 +5,22 @@
     "платформа: {0}": "platform: {0}",
     "ADB: {0}": "ADB: {0}",
     "службы: {0}": "services: {0}",
-    "станция: {0} · ADB: {1} · службы: {2}": "station: {0} · ADB: {1} · services: {2}"
+    "станция: {0} · ADB: {1} · службы: {2}": "station: {0} · ADB: {1} · services: {2}",
+    "1. Подключение": "1. Connection",
+    "Способ подключения станции — часть общего конфига. Настройка выбранного способа — ниже.": "The station connection method is part of the common config. Configure the selected method below.",
+    "2. Точка доступа для станции": "2. Access point for the station",
+    "2. Проводное подключение": "2. Wired connection",
+    "Обновить": "Refresh",
+    "Обновить список сетевых адаптеров": "Refresh the network adapter list",
+    "Автоопределение адреса устройства": "Auto-detect the device address",
+    "Адрес станции": "Station address",
+    "укажите адрес шлюза": "specify the gateway address",
+    "укажите адрес станции": "specify the station address",
+    "адаптеры обновлены": "adapters refreshed",
+    "не удалось обновить адаптеры": "could not refresh adapters",
+    "адрес станции должен быть из 192.168.137.0/24": "the station address must be in 192.168.137.0/24",
+    "адрес станции не должен совпадать с адресом порта": "the station address must differ from the port address",
+    "Подсказки по результатам попытки — раскрыть": "Hints from the attempt — expand"
   },
   "_comment": "Все системные сообщения. Ключ — русский текст из кода (динамические части: {0}, {1}), значение — английский. Проверка: python tools/i18n_check.py",
   "en": {

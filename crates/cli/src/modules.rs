@@ -127,8 +127,24 @@ fn adb_ensure() -> Result<String, String> {
     ))
 }
 
+/// Ручной адрес станции (`data/station_ip`), если автоопределение выключено.
+pub fn manual_station_ip() -> Option<String> {
+    let path = std::path::PathBuf::from("data").join("station_ip");
+    let text = std::fs::read_to_string(path).ok()?;
+    let ip = text.trim();
+    if ip.parse::<std::net::Ipv4Addr>().is_ok() {
+        Some(ip.to_string())
+    } else {
+        None
+    }
+}
+
 /// Ищет станцию в ARP-таблице по её MAC (b8:87:6e).
 pub fn find_station() -> Option<String> {
+    // Ручной адрес важнее автоопределения.
+    if let Some(ip) = manual_station_ip() {
+        return Some(ip);
+    }
     let out = if cfg!(windows) {
         Command::new("arp").args(["-a"]).output().ok()?
     } else {

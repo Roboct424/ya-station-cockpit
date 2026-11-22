@@ -18,11 +18,14 @@ header h1{font-size:14px;margin:0;font-weight:600;white-space:nowrap}
 .tabs button{padding:8px 10px;border:1px solid #232a34;border-radius:10px;background:#161b22;color:#8b97a8;
  cursor:pointer;font-size:13px;font-weight:600;text-align:center;white-space:nowrap}
 .tabs button.on{background:#22303f;color:#e8ecf1;border-color:#33465c}
-.apply{width:100%;padding:14px;font-size:15px;border-radius:12px;margin-top:4px}
+.apply{width:100%;padding:12px;font-size:15px;border-radius:12px;margin-top:4px}
 .tabs button.on{background:#22303f;color:#e8ecf1}
-main{padding:12px 16px;width:100%;max-width:1320px;margin:0 auto;flex:1 1 auto;min-height:0;overflow:auto;display:flex;flex-direction:column}
+main{padding:8px 16px;width:100%;max-width:1320px;margin:0 auto;flex:1 1 auto;min-height:0;overflow:auto;display:flex;flex-direction:column}
 section{display:none}
-section.on{display:flex;flex-direction:column;flex:1 1 auto;min-height:0}
+/* Шаги 1–2 растут по содержимому, прокрутка — у main. Иначе на большом
+   экране карточки вылезают за пределы секции и накладываются. */
+section.on{display:flex;flex-direction:column;flex:0 0 auto;min-height:0}
+#s3.on{flex:1 1 auto}
 .row{display:flex;gap:12px;flex-wrap:wrap;align-items:flex-start}
 .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;align-items:start}
 .rec{background:#14211a;border-left:4px solid #3aa0ff;padding:8px 10px;border-radius:8px;margin-top:10px;font-size:13px;color:#dfe7f2;line-height:1.35}
@@ -36,14 +39,19 @@ section.on{display:flex;flex-direction:column;flex:1 1 auto;min-height:0}
 .cs-list li:hover{background:#1d2633}
 .cs-list li.on{background:#22303f;color:#9fd0ff}
 .card.done{border-color:#2f9e5f !important;box-shadow:0 0 0 1px #2f9e5f inset}
-#s2 .card,#s3 .card{padding:8px 10px}
+#s2 .card{padding:4px 8px;margin-bottom:3px}
+#s2 .cols .card{margin-bottom:0}
+#s3 .card{padding:8px 10px}
 #s2 h2,#s3 h2{font-size:13px;margin:0 0 4px}
-#s2 .hint,#s3 .hint{font-size:11px;line-height:1.25;margin:3px 0}
+#s2 .hint,#s3 .hint{font-size:11px;line-height:1.22;margin:2px 0 4px}
 #s2 .cols{gap:8px}
-#s2 label{margin:3px 0 1px;font-size:11px}
-#s2 input,#s2 select{height:26px;padding:2px 6px}
+#s2 label{margin:2px 0 1px;font-size:11px}
+#s2 input,#s2 select{height:24px;padding:2px 6px}
 #s2 .check{margin:3px 0;font-size:12px}
-#s2 button.act,#s3 button.act{margin-top:4px}
+#s2 button.act,#s3 button.act{margin-top:3px}
+.conn-grid{display:grid;grid-template-columns:minmax(230px,0.72fr) minmax(0,1.28fr);gap:8px;align-items:start;margin-bottom:3px}
+.conn-grid .card{margin-bottom:0}
+@media (max-width:900px){.conn-grid{grid-template-columns:1fr}}
 #s2 details{margin:0}
 #s3 .split{flex:1 1 auto;height:auto;min-height:320px}
 #progress{height:6px;background:#1d2430;margin:0 16px 8px;border-radius:99px;overflow:hidden}
@@ -188,13 +196,7 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
         <label>Своя прошивка (если нет в списке)</label>
         <input type="text" id="profile_fw_custom" placeholder="например 0.369.1.50.1234567890.20260101.1">
       </div>
-      <div class="col">
-        <label>Тип подключения</label>
-        <select id="link" onchange="toggleLink()">
-          <option value="wifi">Wi-Fi (точка доступа)</option>
-          <option value="ethernet">Проводное (Ethernet)</option>
-        </select>
-      </div>
+
     </div>
     <button class="act" onclick="saveProfile()">Сохранить профиль</button>
     <button class="act ghost" id="btnBle" onclick="bleScan()">Определить модель по Bluetooth</button>
@@ -204,8 +206,25 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
 
   </div>
 
+  </div>
+  <div style="margin-top:12px;display:flex;justify-content:flex-end"><button class="act" onclick="goTab('s2')">Далее: настройка →</button></div>
+</section>
+
+<section id="s2">
+  <div class="conn-grid">
+  <div class="card" id="conn_card">
+    <h2>1. Подключение</h2>
+    <p class="hint">Способ подключения станции — часть общего конфига.
+    Настройка выбранного способа — ниже.</p>
+    <label>Тип подключения</label>
+    <select id="link" onchange="toggleLink()">
+      <option value="wifi">Wi-Fi (точка доступа)</option>
+      <option value="ethernet">Проводное (Ethernet)</option>
+    </select>
+  </div>
+
   <div class="card" id="ap_card">
-    <h2>3. Точка доступа для станции</h2>
+    <h2>2. Точка доступа для станции</h2>
     <p class="hint">Станция подключится к этой сети после звукового кода.
     Адрес выдаётся автоматически, вводить ничего не нужно.</p>
     <div class="row">
@@ -220,47 +239,57 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
   </div>
 
   <div class="card" id="eth_card" style="display:none">
-    <h2>3. Проводное подключение</h2>
+    <h2>2. Проводное подключение</h2>
     <p class="hint">Станция подключается кабелем к сетевой карте ноутбука.
     Назначаем карте адрес — станция получит его как шлюз.</p>
-    <div class="row">
-      <div class="col">
-        <label>Сетевой адаптер</label>
-        <select id="adapter"><option value="">загружаю…</option></select>
-        <button class="act" id="btnShare" onclick="enableShare()">Включить общий доступ (DHCP)</button>
-        <label>Адрес станции — определяется сам</label>
-        <input type="text" id="station_ip" value="—" readonly style="color:#7ee2a8">
-        <label>Адрес порта (шлюз для станции)</label>
-        <input type="text" id="eth_ip" value="192.168.137.1" readonly style="color:#9fb4cc">
-        <button class="act" id="btnEth" onclick="setEthernet()">Назначить адрес</button>
-        <span id="r_eth" class="chip wait">не выполнялось</span>
-
-      </div>
-      <div class="col"><p class="hint" id="eth_hint"></p></div>
+    <label>Сетевой адаптер</label>
+    <div class="row" style="gap:8px;margin:0">
+      <select id="adapter" style="flex:1"><option value="">загружаю…</option></select>
+      <button class="act ghost" id="btnAdapters" onclick="refreshAdapters()"
+        title="Обновить список сетевых адаптеров">Обновить</button>
     </div>
+    <label class="check" style="margin-top:4px">
+      <input type="checkbox" id="eth_auto" checked onchange="toggleEthAuto()">
+      <span>Автоопределение адреса устройства</span>
+    </label>
+    <div class="row" style="gap:8px">
+      <div class="col">
+        <label>Адрес станции</label>
+        <input type="text" id="station_ip" value="—" disabled style="color:#7ee2a8">
+      </div>
+      <div class="col">
+        <label>Адрес порта (шлюз для станции)</label>
+        <input type="text" id="eth_ip" value="192.168.137.1" disabled style="color:#9fb4cc">
+      </div>
+    </div>
+    <div class="row" style="gap:8px;align-items:center;margin-top:2px">
+      <button class="act" id="btnShare" onclick="enableShare()">Включить общий доступ (DHCP)</button>
+      <button class="act" id="btnEth" onclick="setEthernet()">Назначить адрес</button>
+      <span id="r_eth" class="chip wait">не выполнялось</span>
+    </div>
+    <p class="hint" id="eth_hint"></p>
   </div>
   </div>
-  <div style="margin-top:12px;display:flex;justify-content:flex-end"><button class="act" onclick="goTab('s2')">Далее: настройка →</button></div>
-</section>
 
-<section id="s2">
   <details class="card">
     <summary style="cursor:pointer;color:#b9c6d6;font-size:13px">
-      1. Пресет перехвата (одинаков для всех станций) — раскрыть
+      Пресет перехвата (одинаков для всех станций) — раскрыть
     </summary>
     <p class="hint">Эти ответы не меняются от колонки к колонке. По умолчанию
     <b>ни один пакет не уходит в облако</b>.</p>
     <div id="preset" class="muted">…</div>
   </details>
 
-  <div class="card">
-    <h2>Подсказки по результатам попытки</h2>
+  <details class="card">
+    <summary style="cursor:pointer;color:#b9c6d6;font-size:13px">
+      Подсказки по результатам попытки — раскрыть
+    </summary>
     <div id="hints" class="muted">пока нет данных — выполните попытку на третьем шаге</div>
-  </div>
+  </details>
 
   <div class="cols">
   <div class="card">
-    <h2>2. Регистрация</h2>
+    <h2>3. Регистрация</h2>
     <div class="check"><input type="radio" name="reg" value="offline" checked>
       <span><b>Оффлайн</b> — токен и регистрация локальные, облако не участвует</span></div>
     <div class="check"><input type="radio" name="reg" value="online">
@@ -268,7 +297,7 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
   </div>
 
   <div class="card">
-    <h2>3. Сертификаты</h2>
+    <h2>4. Сертификаты</h2>
     <p class="hint">Станция принимает только те цепочки, которым доверяет. Отметьте
     активные: если выбрано несколько — сервер будет перебирать их при отказе,
     пока станция не согласится.</p>
@@ -286,7 +315,7 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
   </div>
 
   <div class="card">
-    <h2>4. Обновление</h2>
+    <h2>5. Обновление</h2>
     <div class="check" style="margin-bottom:8px"><input type="checkbox" id="ex_update" onchange="allowUpdate(this.checked)">
       <span><b>Разрешить обновление</b> на выбранную прошивку</span></div>
     <p class="hint">По умолчанию выключено: без разрешения станция получает
@@ -792,21 +821,51 @@ function toggleLink() {
   }
 }
 
+function toggleEthAuto() {
+  const auto = $('eth_auto').checked;
+  $('station_ip').disabled = auto;
+  $('eth_ip').disabled = auto;
+  if (auto) {
+    // Возвращаем адрес порта, который выдал общий доступ, и автоадрес станции.
+    refreshIface($('adapter').value);
+    state();
+  }
+}
+
+async function refreshAdapters() {
+  const btn = $('btnAdapters');
+  if (btn) btn.disabled = true;
+  try {
+    await loadAdapters();
+    chip('r_eth', true, 'адаптеры обновлены');
+  } catch (e) {
+    chip('r_eth', false, 'не удалось обновить адаптеры');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 async function loadAdapters() {
   const j = await (await fetch('/api/adapters')).json();
   const sel = $('adapter');
+  const keep = sel.value;
   if (!j.items.length) { sel.innerHTML = '<option value="">адаптеры не найдены</option>'; return; }
   sel.innerHTML = j.items.map(a => `<option value="${a.name}">${a.name} — ${a.desc}</option>`).join('');
-  // По умолчанию — проводной адаптер, иначе легко выбрать Wi-Fi и получить ошибку ICS.
-  const wired = j.items.find(a => /ethernet|локальн/i.test(a.name) || /ethernet/i.test(a.desc));
-  if (wired) sel.value = wired.name;
+  // По умолчанию — физический проводной адаптер, а не vEthernet/Hyper-V/VPN.
+  const virtual = a => /vEthernet|hyper-v|virtual|tailscale|vpn|tunnel|loopback/i.test(a.name + ' ' + a.desc);
+  const wired = j.items.find(a => /^ethernet$/i.test(a.name))
+    || j.items.find(a => !virtual(a) && /ethernet/i.test(a.desc))
+    || j.items.find(a => !virtual(a) && /ethernet|локальн/i.test(a.name));
+  if (keep && j.items.some(a => a.name === keep)) sel.value = keep;
+  else if (wired) sel.value = wired.name;
   sel.dispatchEvent(new Event('change'));
 }
 
 async function refreshIface(adapter) {
   const j = await (await fetch('/api/iface?adapter=' + encodeURIComponent(adapter))).json();
   if (j.ip) {
-    $('eth_ip').value = j.ip;
+    // При ручном режиме не перетираем введённый шлюз.
+    if ($('eth_auto').checked) $('eth_ip').value = j.ip;
     return j.ip;
   }
   return '';
@@ -820,7 +879,7 @@ async function enableShare() {
   chip('r_eth', r.ok, r.ok ? 'общий доступ включён' : 'ошибка');
   $('eth_hint').textContent = r.text || '';
   if (r.ok) { _shareOk = true; syncEth(); }
-  // Адрес порта подхватываем сами — руками вводить не нужно.
+  // Адрес порта подхватываем сами, если включено автоопределение.
   if (r.ok) {
     const ip = await refreshIface(adapter);
     if (ip) append('ethernet: ' + adapter + ' получил адрес ' + ip);
@@ -828,18 +887,28 @@ async function enableShare() {
 }
 
 async function setEthernet() {
+  const auto = $('eth_auto').checked;
   const ip = $('eth_ip').value;
+  const station = $('station_ip').value;
   if (!ip || ip === '—') {
-    chip('r_eth', false, 'сначала включите общий доступ');
+    chip('r_eth', false, auto ? 'сначала включите общий доступ' : 'укажите адрес шлюза');
+    return;
+  }
+  if (!auto && (!station || station === '—')) {
+    chip('r_eth', false, 'укажите адрес станции');
     return;
   }
   $('btnEth').disabled = true; chip('r_eth', false, 'назначаю…');
   const r = await (await fetch('/api/ethernet', {method: 'POST', body: new URLSearchParams({
-    adapter: $('adapter').value, ip: $('eth_ip').value})})).json();
+    adapter: $('adapter').value,
+    ip: ip,
+    station_ip: auto ? '' : station,
+    auto: auto ? '1' : '0'
+  })})).json();
   $('btnEth').disabled = false;
   chip('r_eth', r.ok, r.ok ? 'адрес назначен' : 'ошибка');
   $('eth_hint').textContent = r.text || '';
-  if (r.ok) { _ethOk = true; markDone('eth_card'); }
+  if (r.ok) { _ethOk = true; markDone('eth_card'); state(); }
 }
 
 async function bleScan() {
@@ -994,7 +1063,10 @@ async function loadDevice() {
   if (j.recommend) html += `<p class="hint" style="margin-top:8px">${j.recommend}</p>`;
   $('dev').innerHTML = html;
   const stationField = $('station_ip');
-  if (stationField) stationField.value = j.station || '—';
+  // В ручном режиме не перетираем введённый адрес станции.
+  if (stationField && (!$('eth_auto') || $('eth_auto').checked)) {
+    stationField.value = j.station || '—';
+  }
 }
 
 async function restartStack() {

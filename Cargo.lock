@@ -235,7 +235,7 @@ checksum = "e0921b3876b3a1df8a1c9f912e7f94342458022c2e84288015893d83c4d62a79"
 
 [[package]]
 name = "cockpit-capture"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -245,7 +245,7 @@ dependencies = [
 
 [[package]]
 name = "cockpit-cli"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "aes-gcm",
  "base64",
@@ -275,7 +275,7 @@ dependencies = [
 
 [[package]]
 name = "cockpit-config"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "arc-swap",
  "cockpit-core",
@@ -286,7 +286,7 @@ dependencies = [
 
 [[package]]
 name = "cockpit-core"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "chrono",
  "serde",
@@ -296,7 +296,7 @@ dependencies = [
 
 [[package]]
 name = "cockpit-device"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "cockpit-core",
  "cockpit-net",
@@ -306,7 +306,7 @@ dependencies = [
 
 [[package]]
 name = "cockpit-doctor"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "cockpit-config",
  "cockpit-core",
@@ -316,7 +316,7 @@ dependencies = [
 
 [[package]]
 name = "cockpit-intercept"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "chrono",
  "rcgen",
@@ -331,7 +331,7 @@ dependencies = [
 
 [[package]]
 name = "cockpit-net"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "thiserror",
  "windows",
@@ -339,7 +339,7 @@ dependencies = [
 
 [[package]]
 name = "cockpit-ota"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -349,7 +349,7 @@ dependencies = [
 
 [[package]]
 name = "cockpit-pairing"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "base64",
  "rand",
@@ -361,7 +361,7 @@ dependencies = [
 
 [[package]]
 name = "cockpit-scenarios"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "cockpit-core",
  "serde",

@@ -35,7 +35,7 @@ struct Cli {
     config: Option<PathBuf>,
 
     #[command(subcommand)]
-    cmd: Cmd,
+    cmd: Option<Cmd>,
 }
 
 #[derive(Subcommand)]
@@ -212,7 +212,7 @@ enum Cmd {
     },
     /// Локальная веб-панель (мастер + журнал + диагностика)
     Ui {
-        #[arg(long, default_value_t = 8899)]
+        #[arg(long, default_value_t = 8790)]
         port: u16,
     },
     /// Версия
@@ -571,7 +571,10 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
     let cfg = Config::load(&cfg_path)?;
     init_logging(&cfg);
 
-    match cli.cmd {
+    // Без аргументов запускаем панель: двойной клик по cockpit.exe должен
+    // открывать UI, а не печатать справку и закрываться.
+    let cmd = cli.cmd.unwrap_or(Cmd::Ui { port: 8790 });
+    match cmd {
         Cmd::Doctor { json } => run_doctor(&cfg, json),
 
         Cmd::Config { cmd } => match cmd {
@@ -763,6 +766,17 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
             if !ui::ensure_admin() {
                 return Ok(ExitCode::SUCCESS);
             }
+            // Если панель уже запущена — не падаем с «порт занят», а
+            // просто открываем её в браузере.
+            if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+                ui::open_browser(port);
+                return Ok(ExitCode::SUCCESS);
+            }
+            let browser_port = port;
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(700));
+                ui::open_browser(browser_port);
+            });
             ui::serve(port).map_err(|e| CockpitError::Internal(format!("панель {port}: {e}")))?;
             Ok(ExitCode::SUCCESS)
         }
