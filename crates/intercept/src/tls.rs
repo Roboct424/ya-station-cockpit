@@ -235,19 +235,35 @@ impl FixedCert {
     }
 
     fn config(&self) -> Result<Arc<ServerConfig>, TlsError> {
+        self.config_with(false)
+    }
+
+    /// Тот же готовый сертификат, но только TLS 1.2 (нужно старым
+    /// клиентам станций, которые не разбирают TLS 1.3).
+    pub fn config_for_tls12(&self) -> Result<Arc<ServerConfig>, TlsError> {
+        self.config_with(true)
+    }
+
+    fn config_with(&self, tls12_only: bool) -> Result<Arc<ServerConfig>, TlsError> {
+        let key = if tls12_only { "tls12" } else { "*" };
         if let Ok(cache) = self.cache.lock() {
-            if let Some(cfg) = cache.get("*") {
+            if let Some(cfg) = cache.get(key) {
                 return Ok(cfg.clone());
             }
         }
-        let config =
-            ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
-                .with_safe_default_protocol_versions()?
-                .with_no_client_auth()
-                .with_single_cert(self.chain.clone(), self.key.clone_key())?;
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let builder = ServerConfig::builder_with_provider(provider);
+        let builder = if tls12_only {
+            builder.with_protocol_versions(&[&rustls::version::TLS12])?
+        } else {
+            builder.with_safe_default_protocol_versions()?
+        };
+        let config = builder
+            .with_no_client_auth()
+            .with_single_cert(self.chain.clone(), self.key.clone_key())?;
         let config = Arc::new(config);
         if let Ok(mut cache) = self.cache.lock() {
-            cache.insert("*".to_string(), config.clone());
+            cache.insert(key.to_string(), config.clone());
         }
         Ok(config)
     }

@@ -669,29 +669,81 @@ fn http_loop() {
 
 // ------------------------------------------------------------- quasar ------
 
-fn quasar_loop() {
-    // Свой локальный CA: ключ генерируется на этой машине (`data/ca.key`),
-    // лист для quasar.yandex.net подписывается им же. Чужих ключей в
-    // бинарнике нет, Python и внешние файлы не нужны (G-082).
+/// Конфиг TLS для quasar.
+///
+/// Сначала пробуем готовый сертификат, выбранный пользователем в панели
+/// (`data/certs/active.txt`): станции, которые проверяют цепочку, без
+/// такого сертификата не пустят нас на первом сопряжении. Если его нет —
+/// выпускаем лист нашим локальным CA (G-082).
+fn quasar_config() -> Option<Arc<rustls::ServerConfig>> {
+    if let Some(config) = fixed_cert_config() {
+        return Some(config);
+    }
     let ca = match cockpit_intercept::tls::CertAuthority::load_or_create(std::path::Path::new(
         "data/ca.key",
     )) {
         Ok(ca) => ca,
         Err(error) => {
             log(&format!("quasar: CA не создан: {error}"));
-            return;
+            return None;
         }
     };
     // Тот же CA ставится на станцию кнопкой «Установить наш CA».
     if let Err(error) = std::fs::write("data/ca.pem", ca.ca_pem()) {
         log(&format!("quasar: data/ca.pem: {error}"));
     }
-    let config = match ca.config_for_tls12("quasar.yandex.net") {
-        Ok(config) => config,
+    match ca.config_for_tls12("quasar.yandex.net") {
+        Ok(config) => Some(config),
         Err(error) => {
             log(&format!("quasar: конфиг TLS: {error}"));
-            return;
+            None
         }
+    }
+}
+
+/// Готовый сертификат из `data/certs`, выбранный в панели.
+fn fixed_cert_config() -> Option<Arc<rustls::ServerConfig>> {
+    use cockpit_intercept::tls::FixedCert;
+
+    let active = std::fs::read_to_string("data/certs/active.txt").ok()?;
+    for line in active.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let pem = if line.starts_with("data/") {
+            std::path::PathBuf::from(line)
+        } else {
+            std::path::Path::new("data/certs").join(line)
+        };
+        if !pem.exists() {
+            continue;
+        }
+        let chain = pem.with_extension("chain");
+        let key = pem.with_extension("key");
+        if !chain.exists() || !key.exists() {
+            continue;
+        }
+        match FixedCert::load(&chain, &key) {
+            Ok(fixed) => match fixed.config_for_tls12() {
+                Ok(config) => {
+                    log(&format!(
+                        "quasar: сертификат {} (выбран в панели)",
+                        fixed.name
+                    ));
+                    return Some(config);
+                }
+                Err(error) => log(&format!("quasar: {}: {error}", fixed.name)),
+            },
+            Err(error) => log(&format!("quasar: {} пропущен: {error}", chain.display())),
+        }
+    }
+    None
+}
+
+fn quasar_loop() {
+    let Some(config) = quasar_config() else {
+        return;
     };
     let Ok(listener) = TcpListener::bind(("0.0.0.0", 443)) else {
         log("quasar: порт 443 занят");
