@@ -169,7 +169,7 @@ fn dns_loop(mode: Mode, alias: Ipv4Addr, online: bool) {
         match forward(query) {
             Some(reply) => {
                 log(&format!("SNTP: ответ для {peer}"));
-        let _ = sock.send_to(&reply, peer);
+                let _ = sock.send_to(&reply, peer);
             }
             None => log(&format!("DNS: {name} не разрешился")),
         }
@@ -587,11 +587,7 @@ fn quasar_loop() {
                 }
             }
             let mut tls = rustls::StreamOwned::new(conn, stream);
-            let sni = tls
-                .conn
-                .server_name()
-                .unwrap_or("(без SNI)")
-                .to_string();
+            let sni = tls.conn.server_name().unwrap_or("(без SNI)").to_string();
             log(&format!("quasar: подключение SNI={sni}"));
             let _ = handle_quasar(&mut tls);
         });
