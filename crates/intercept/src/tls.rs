@@ -202,6 +202,14 @@ pub fn leaf_from_ca(
     let issuer = CertificateParams::from_ca_cert_pem(ca_cert_pem)?.self_signed(&ca_key)?;
     let mut params = CertificateParams::new(vec![host.to_string()])?;
     params.distinguished_name.push(DnType::CommonName, host);
+    // Без EKU serverAuth и KeyUsage станция отвергает лист как чужой
+    // («unknown ca»), даже если цепочка ведёт к публичному корню.
+    params.is_ca = IsCa::NoCa;
+    params.key_usages = vec![
+        rcgen::KeyUsagePurpose::DigitalSignature,
+        rcgen::KeyUsagePurpose::KeyEncipherment,
+    ];
+    params.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
     // Станция стартует с часами 1970 года: окно должно быть широким.
     params.not_before = rcgen::date_time_ymd(2020, 1, 1);
     params.not_after = rcgen::date_time_ymd(2049, 12, 31);
