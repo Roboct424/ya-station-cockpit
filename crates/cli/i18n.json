@@ -96,7 +96,8 @@
     "Перезапустить службы": "Restart services",
     "службы перезапущены": "services restarted",
     "перезапускаю…": "restarting…",
-    "точка доступа: DNS перехватываем на 192.168.137.1, DHCP/NAT у ICS": "hotspot: intercepting DNS on 192.168.137.1, DHCP/NAT left to ICS"
+    "точка доступа: DNS перехватываем на 192.168.137.1, DHCP/NAT у ICS": "hotspot: intercepting DNS on 192.168.137.1, DHCP/NAT left to ICS",
+    "Обновить список": "Refresh list"
   },
   "_comment": "Все системные сообщения. Ключ — русский текст из кода (динамические части: {0}, {1}), значение — английский. Проверка: python tools/i18n_check.py",
   "en": {

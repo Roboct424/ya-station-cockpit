@@ -2860,6 +2860,9 @@ fn about_json() -> String {
         "routes": routes,
         "certs": active_certs().len(),
         "lang": crate::i18n::lang().code(),
+        "data": std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default(),
         "station": crate::modules::find_station()
     })
     .to_string()

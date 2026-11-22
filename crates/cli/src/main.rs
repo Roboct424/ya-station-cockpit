@@ -550,7 +550,39 @@ enum NetCmd {
     HotspotStop,
 }
 
+/// Постоянный каталог данных (см. комментарий в `main`).
+fn ensure_data_root() {
+    if let Ok(dir) = std::env::var("COCKPIT_DATA_DIR") {
+        let base = std::path::PathBuf::from(dir);
+        let _ = std::fs::create_dir_all(base.join("data"));
+        let _ = std::env::set_current_dir(&base);
+        return;
+    }
+    let Ok(cwd) = std::env::current_dir() else {
+        return;
+    };
+    let cwd_text = cwd.to_string_lossy().to_lowercase();
+    let in_temp = cwd_text.contains("\\appdata\\local\\temp\\") || cwd_text.contains("/tmp/");
+    let portable = cwd.join("data").is_dir();
+    if in_temp || !portable {
+        let Ok(local) = std::env::var("LOCALAPPDATA") else {
+            return;
+        };
+        let base = std::path::PathBuf::from(local).join("cockpit");
+        if std::fs::create_dir_all(base.join("data")).is_ok() {
+            let _ = std::env::set_current_dir(&base);
+        }
+    }
+}
+
 fn main() -> ExitCode {
+    // Каталог данных должен быть постоянным. Если exe запустили прямо из
+    // zip (Windows распаковывает во временную папку), относительный
+    // `data/` живёт в этой временной папке и пропадает: сертификаты,
+    // журналы и адрес станции каждый раз новые. Уводим такие запуски в
+    // %LOCALAPPDATA%\cockpit, а портативные (рядом есть data/) не трогаем.
+    ensure_data_root();
+
     // Язык сообщений: переменная окружения важнее сохранённого выбора.
     let lang = match std::env::var("COCKPIT_LANG") {
         Ok(value) => i18n::Lang::parse(&value),
