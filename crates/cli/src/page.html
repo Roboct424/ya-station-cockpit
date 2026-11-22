@@ -263,10 +263,13 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
       </div>
     </div>
     <div class="row" style="gap:8px;align-items:center;margin-top:2px">
-      <button class="act" id="btnShare" onclick="enableShare()">Включить общий доступ (DHCP)</button>
+      <button class="act ghost" id="btnLink" onclick="resetLink()">Перезапустить линк</button>
       <button class="act" id="btnEth" onclick="setEthernet()">Назначить адрес</button>
       <span id="r_eth" class="chip wait">не выполнялось</span>
     </div>
+    <p class="hint">Общий доступ Windows (ICS) не нужен: DHCP и локальный
+    quasar поднимает hub serve. Если Ethernet подключили после запуска —
+    «Обновить» в списке адаптеров, затем «Перезапустить линк».</p>
     <p class="hint" id="eth_hint"></p>
   </div>
   </div>
@@ -879,6 +882,18 @@ async function enableShare() {
   }
 }
 
+async function resetLink() {
+  chip('r_eth', false, 'перезапускаю линк…');
+  const r = await (await fetch('/api/link-reset', {
+    method: 'POST',
+    body: new URLSearchParams({adapter: $('adapter').value || 'Ethernet'})
+  })).json();
+  chip('r_eth', r.ok, r.ok ? 'линк перезапущен' : 'ошибка');
+  $('eth_hint').textContent = r.text || '';
+  await loadAdapters();
+  await refreshIface($('adapter').value);
+}
+
 async function setEthernet() {
   const auto = $('eth_auto').checked;
   const ip = $('eth_ip').value;
@@ -1205,16 +1220,24 @@ async function pair() {
       const station = ($('station_ip').value || '').trim();
       const host = station && station !== '—' ? station : '192.168.137.234';
       params.url = `http://${host}:8080`;
-      // Перед проводным /connect поднимаем локальный sync/quasar, иначе
-      // Хаб после перехода на Ethernet уходит в «нет интернета».
-      const st = await (await fetch('/api/hub/status')).json();
-      if (!st.running || st.mode !== 'sync' || !st.quasar) {
-        chip('r_pair', false, 'поднимаю локальный сервер…');
-        await fetch('/api/hub/serve', {
-          method: 'POST', body: new URLSearchParams({mode: 'sync'})
-        });
-        await new Promise((resolve) => setTimeout(resolve, 1500));
-      }
+      // Сброс линка — то же, что выдернуть/воткнуть кабель. Без него
+      // Хаб иногда не отдаёт /info до переподключения.
+      chip('r_pair', false, 'перезапускаю линк…');
+      await fetch('/api/link-reset', {
+        method: 'POST',
+        body: new URLSearchParams({adapter: $('adapter').value || 'Ethernet'})
+      });
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+      // После сброса линка заново поднимаем sync/quasar (и alias).
+      chip('r_pair', false, 'поднимаю локальный сервер…');
+      await fetch('/api/hub/serve', {
+        method: 'POST',
+        body: new URLSearchParams({
+          mode: 'sync',
+          adapter: $('adapter').value || 'Ethernet'
+        })
+      });
+      await new Promise((resolve) => setTimeout(resolve, 1500));
     } else {
       params.url = 'http://192.168.43.1:8080';
     }
@@ -1226,7 +1249,17 @@ async function pair() {
     params.tones = 'standard';
     params.preroll = $('preroll').value;
   }
-  const r = await (await fetch('/api/pair', {method: 'POST', body: new URLSearchParams(params)})).json();
+  let r = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    r = await (await fetch('/api/pair', {
+      method: 'POST', body: new URLSearchParams(params)
+    })).json();
+    if (r.ok) break;
+    if (attempt < 2) {
+      chip('r_pair', false, (r.text || 'ошибка') + ' — повтор…');
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+    }
+  }
   $('btnPair').disabled = false;
   chip('r_pair', r.ok, r.text);
 }

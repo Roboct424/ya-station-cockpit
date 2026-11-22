@@ -430,6 +430,7 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
         ("GET", "/api/ble") => (200, "application/json", ble_json()),
         ("POST", "/api/device-map") => (200, "application/json", set_device_map(body)),
         ("POST", "/api/ethernet") => (200, "application/json", set_ethernet(body)),
+        ("POST", "/api/link-reset") => (200, "application/json", reset_link(body)),
         ("GET", "/api/iface") => {
             let adapter = query(path, "adapter").unwrap_or_else(|| "Ethernet".to_string());
             let ip = iface_ip(&adapter);
@@ -437,6 +438,19 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
             (200, "application/json", json.to_string())
         }
         ("POST", "/api/share") => {
+            // G-078: ICS (общий доступ Windows) поднимает второй DHCP и NAT
+            // наружу. С hub serve это конфликт и не оффлайн.
+            if hub_running() {
+                return (
+                    200,
+                    "application/json",
+                    serde_json::json!({
+                        "ok": false,
+                        "text": "общий доступ Windows не нужен и конфликтует с hub serve: DHCP и quasar уже подняты"
+                    })
+                    .to_string(),
+                );
+            }
             let adapter = field(body, "adapter");
             let mut ctx = ctx_from(body);
             if !adapter.is_empty() {
@@ -1493,6 +1507,40 @@ fn set_ethernet(body: &str) -> String {
     }
 }
 
+/// Перезапускает линк адаптера — то же, что выдернуть и воткнуть кабель.
+fn reset_link(body: &str) -> String {
+    let adapter = field(body, "adapter");
+    let adapter = if adapter.is_empty() {
+        "Ethernet".to_string()
+    } else {
+        adapter
+    };
+    let safe = adapter.replace('\'', "''");
+    let script = format!(
+        "$ErrorActionPreference='SilentlyContinue'; \
+         Disable-NetAdapter -Name '{safe}' -Confirm:$false; \
+         Start-Sleep -Milliseconds 800; \
+         Enable-NetAdapter -Name '{safe}' -Confirm:$false; \
+         Start-Sleep -Seconds 2; 'ok'"
+    );
+    let out = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-Command", &script])
+        .output();
+    match out {
+        Ok(res) if res.status.success() => {
+            push_log(format!("ethernet: линк {adapter} перезапущен"));
+            serde_json::json!({ "ok": true, "text": format!("{adapter}: линк перезапущен") })
+                .to_string()
+        }
+        Ok(res) => serde_json::json!({
+            "ok": false,
+            "text": String::from_utf8_lossy(&res.stderr).trim().to_string()
+        })
+        .to_string(),
+        Err(e) => serde_json::json!({ "ok": false, "text": format!("{e}") }).to_string(),
+    }
+}
+
 /// Анализ лога и рекомендации: что подсветить на втором шаге.
 fn advice_json() -> String {
     let log = std::fs::read_to_string("data/ota.log").unwrap_or_default();
@@ -2402,7 +2450,17 @@ fn kill_child(slot: &'static std::sync::Mutex<Option<std::process::Child>>) {
     }
 }
 
-/// Останавливает службы Хаба и внешний quasar.
+fn hub_running() -> bool {
+    HUB_CHILD
+        .lock()
+        .map(|mut guard| match guard.as_mut() {
+            Some(child) => matches!(child.try_wait(), Ok(None)),
+            None => false,
+        })
+        .unwrap_or(false)
+}
+
+/// Останавливает службы Хаба.
 fn hub_stop() -> String {
     kill_child(&HUB_CHILD);
     if let Ok(mut mode) = HUB_MODE.lock() {
@@ -2414,10 +2472,8 @@ fn hub_stop() -> String {
 
 /// Запускает службы разблокировки Хаба отдельным процессом.
 ///
-/// GOTCHA: G-067 — встроенный quasar (rustls) не устраивает TLS-стек Хаба,
-/// поэтому в оффлайн-режиме поднимаем внешний OpenSSL-сервер
-/// (`data/probe/quasar/fake-quasar.py`) на 443, а `hub serve` идёт
-/// с `--no-quasar`.
+/// Локальный quasar на 443 встроен в бинарник (G-077); ICC/ICS
+/// выключается, чтобы Windows DHCP не конфликтовал с нашим (G-078).
 fn hub_serve(body: &str) -> String {
     let mode = match field(body, "mode").as_str() {
         // base и setup — общие службы без перехвата адресов
@@ -2427,6 +2483,23 @@ fn hub_serve(body: &str) -> String {
     if let Ok(mut current) = HUB_MODE.lock() {
         *current = mode.to_string();
     }
+    // Гасим ICS/forwarding: второй DHCP и NAT наружу ломают оффлайн.
+    let adapter = {
+        let value = field(body, "adapter");
+        if value.is_empty() {
+            "Ethernet".to_string()
+        } else {
+            value
+        }
+    };
+    let safe_adapter = adapter.replace('\'', "''");
+    let cleanup = format!(
+        "Stop-Service SharedAccess -Force -ErrorAction SilentlyContinue; \
+         Set-NetIPInterface -InterfaceAlias '{safe_adapter}' -AddressFamily IPv4 -Forwarding Disabled -ErrorAction SilentlyContinue"
+    );
+    let _ = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-Command", &cleanup])
+        .output();
     kill_child(&HUB_CHILD);
 
     let online = field(body, "online") == "1";

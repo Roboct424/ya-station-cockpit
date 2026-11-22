@@ -1050,3 +1050,12 @@ http=200 size=577
   `fake-quasar.py`; локальный quasar на 443 — часть `hub serve`.
 * Из релизного zip убраны `data/probe/quasar` и требование Python 3.
 * G-067/G-076 остаются историей; актуальная архитектура — G-077.
+
+## 2026-11-22 - v1.2.9: ICS убран, линк перезапускается сам
+
+* `/api/share` больше не включает ICS при работающем `hub serve`;
+  `hub_serve` гасит SharedAccess/forwarding перед стартом.
+* В карточке Ethernet вместо ICS — «Перезапустить линк» (`/api/link-reset`).
+* `pair()` для провода: reset link -> sync/quasar -> 3 попытки `/connect`.
+* Это лечит зависание `/info` до переподключения кабеля и убирает
+  конфликт двух DHCP.

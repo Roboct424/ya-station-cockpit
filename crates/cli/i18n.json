@@ -20,7 +20,12 @@
     "не удалось обновить адаптеры": "could not refresh adapters",
     "адрес станции должен быть из 192.168.137.0/24": "the station address must be in 192.168.137.0/24",
     "адрес станции не должен совпадать с адресом порта": "the station address must differ from the port address",
-    "Подсказки по результатам попытки — раскрыть": "Hints from the attempt — expand"
+    "Подсказки по результатам попытки — раскрыть": "Hints from the attempt — expand",
+    "Перезапустить линк": "Restart link",
+    "перезапускаю линк…": "restarting link…",
+    "линк перезапущен": "link restarted",
+    "Общий доступ Windows (ICS) не нужен: DHCP и локальный quasar поднимает hub serve. Если Ethernet подключили после запуска — «Обновить» в списке адаптеров, затем «Перезапустить линк».": "Windows Internet Connection Sharing (ICS) is not needed: hub serve provides DHCP and the local quasar. If Ethernet was plugged in after startup, use Refresh in the adapter list, then Restart link.",
+    "общий доступ Windows не нужен и конфликтует с hub serve: DHCP и quasar уже подняты": "Windows ICS is not needed and conflicts with hub serve: DHCP and quasar are already running"
   },
   "_comment": "Все системные сообщения. Ключ — русский текст из кода (динамические части: {0}, {1}), значение — английский. Проверка: python tools/i18n_check.py",
   "en": {
