@@ -2083,6 +2083,14 @@ fn start_stack(body: &str) -> String {
     }
 
     if !std::path::Path::new("data/manifests.json").exists() {
+        // Свежая установка: кладём встроенный снимок манифеста. Он нужен
+        // стеку OTA, чтобы отвечать на /check_updates. Обновлять базу
+        // прошивок будет отдельная программа.
+        const DEFAULT_MANIFEST: &str = include_str!("../assets/manifests.json");
+        let _ = std::fs::create_dir_all("data");
+        let _ = std::fs::write("data/manifests.json", DEFAULT_MANIFEST);
+    }
+    if !std::path::Path::new("data/manifests.json").exists() {
         let text = "нет data/manifests.json — положите снимок манифеста рядом с программой";
         push_log(format!("✗ стек: {text}"));
         return serde_json::json!({ "ok": false, "text": text }).to_string();
