@@ -428,6 +428,8 @@ document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
   if (bar) bar.style.display = b.dataset.tab === 's1' ? 'block' : 'none';
   updateProgress();
   state(); stackState(); loadDevice(); loadAdvice(); loadAbout();
+  // Терминал должен начать жить сразу, а не через секунду.
+  poll(); pollHub(); pollStack();
 });
 
 const ACTIONS = [
@@ -1071,6 +1073,7 @@ async function loadDevice() {
       badge.textContent = want + ' · ' + j.station;
     }
   }
+  if (j.platform) LAST_PLATFORM = j.platform;
   renderMaint(j);
 }
 
@@ -1189,6 +1192,7 @@ async function applyAndRestart() {
     via_register: online ? '1' : '0',
     update: updating ? '1' : '0',
     version: updating ? fw.value : '',
+    platform: LAST_PLATFORM || '',
     firmware_path: ''
   });
   if (($('model').value || '').includes('Hub')) {
@@ -1308,10 +1312,22 @@ async function pair() {
 pairMode();
 
 let tailCursor = 0;
+let hubCursor = 0;
 
 function terminalVisible() {
   const el = $('s3');
   return el && el.classList.contains('on');
+}
+
+async function pollHub() {
+  if (!terminalVisible()) return;
+  try {
+    const r = await (await fetch('/api/hub/log?after=' + hubCursor)).json();
+    hubCursor = r.next;
+    if (r.text) append(r.text.trimEnd());
+  } catch (e) {
+    /* hub serve ещё не пишет лог */
+  }
 }
 
 async function poll() {
@@ -1390,6 +1406,7 @@ async function pingSession() {
 }
 
 let DEVICE_MODEL = '';
+let LAST_PLATFORM = '';
 
 async function state() {
   const j = await (await fetch('/api/state')).json();
@@ -1408,24 +1425,33 @@ async function state() {
 }
 
 async function init() {
-  try {
-  ITEMS = (await (await fetch('/api/items')).json()).items;
-  renderPreset();
-  loadCerts();
+  // Каждый шаг сам по себе: одна упавшая загрузка не должна ломать
+  // живой лог и опрос состояния.
+  const step = async (name, fn) => {
+    try { await fn(); } catch (e) { append(name + ': ' + e); }
+  };
+  await step('items', async () => {
+    ITEMS = (await (await fetch('/api/items')).json()).items;
+  });
+  await step('preset', async () => renderPreset());
+  await step('certs', async () => loadCerts());
   // Профиль и устройство — по очереди: иначе ответ профиля перетирает
   // определённую модель и сбрасывает способ сопряжения.
-  await loadProfile();
-  await loadDevice();
-  loadFirmwares();
-  loadAdvice();
-  state(); stackState();
-  toggleEthAuto();
+  await step('profile', async () => loadProfile());
+  await step('device', async () => loadDevice());
+  await step('firmwares', async () => loadFirmwares());
+  await step('advice', async () => loadAdvice());
+  await step('state', async () => { await state(); await stackState(); });
+  await step('ethernet', async () => toggleEthAuto());
+
+  // Опрос — вне try: терминал обязан обновляться в реальном времени,
+  // даже если что-то из загрузки выше не удалось.
   setInterval(pingSession, 5000);
-  setInterval(poll, 2000);
-  setInterval(pollStack, 2000);
-  } catch (e) { append('ошибка инициализации: ' + e); }
-  // Опрос логов запускаем всегда, даже если что-то выше упало.
+  setInterval(poll, 1000);
+  setInterval(pollHub, 1000);
+  setInterval(pollStack, 1000);
   poll();
+  pollHub();
   pollStack();
   pingSession();
 }

@@ -415,6 +415,14 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
             let json = serde_json::json!({ "next": next, "lines": lines });
             (200, "application/json", json.to_string())
         }
+        ("GET", "/api/hub/log") => {
+            // Живой лог самого hub serve (DNS, DHCP, quasar): станция
+            // присылает запросы туда, и без него терминал молчит.
+            let after = query(path, "after")
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(0);
+            (200, "application/json", hub_log_json(after))
+        }
         ("GET", "/api/stack") => (200, "application/json", stack_json()),
         ("GET", "/api/ping") => {
             let json = serde_json::json!({ "session": session_id() });
@@ -629,6 +637,7 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
                     },
                 };
                 push_log(format!("▶ AP: {url}, запрос /info"));
+                push_log("AP: /connect — станция может думать до 30 секунд");
                 let answer = match cockpit_pairing::ap::pair(&url, &creds, wired, bind) {
                     Ok((info, result)) => {
                         push_log(format!(
@@ -872,6 +881,25 @@ fn certs_json_items(body: &str) -> Vec<(String, bool)> {
 
 /// Идентификатор запуска мастера: по нему страница понимает, что сервер
 /// перезапустился, и перезагружается сама (G-044).
+/// Хвост лога `hub serve` для терминала панели.
+///
+/// `after` — байтовое смещение. Если файл перезаписан (hub serve
+/// перезапустили), отдаём с начала.
+fn hub_log_json(after: u64) -> String {
+    let data = std::fs::read("data/rushub.log").unwrap_or_default();
+    let len = data.len() as u64;
+    let mut start = if after <= len { after as usize } else { 0 };
+    if after == 0 && data.len() > 200_000 {
+        let mut begin = data.len() - 200_000;
+        while begin < data.len() && data[begin] != b'\n' {
+            begin += 1;
+        }
+        start = begin;
+    }
+    let text = String::from_utf8_lossy(&data[start..]).to_string();
+    serde_json::json!({ "next": len, "text": text }).to_string()
+}
+
 fn session_id() -> &'static str {
     static SESSION: OnceLock<String> = OnceLock::new();
     SESSION.get_or_init(|| chrono::Utc::now().format("%Y%m%d%H%M%S").to_string())
@@ -2075,6 +2103,16 @@ fn start_stack(body: &str) -> String {
         }
     };
     let update_enabled = field(body, "update") == "1";
+    // Платформа приходит из /api/device: у Mini 3 она своя, и манифест
+    // для yandexmini_2 к ней не подходит.
+    let platform = {
+        let value = field(body, "platform");
+        if value.is_empty() {
+            "yandexmini_2".to_string()
+        } else {
+            value
+        }
+    };
     let firmware = {
         let off = format!("firmware/{version}.zip.off");
         let zip = format!("firmware/{version}.zip");
@@ -2154,7 +2192,7 @@ fn start_stack(body: &str) -> String {
         .collect::<Vec<_>>()
         .join(",");
     push_log(format!(
-        "▶ стек: маршрутов {count}, прошивка {version}, сертификатов {certs}"
+        "▶ стек: маршрутов {count}, прошивка {version}, платформа {platform}, сертификатов {certs}"
     ));
 
     let exe = std::env::current_exe().unwrap_or_else(|_| "cockpit".into());
@@ -2171,7 +2209,7 @@ fn start_stack(body: &str) -> String {
         "--manifest",
         "data/manifests.json",
         "--platform",
-        "yandexmini_2",
+        &platform,
         "--version",
         &version,
         "--http-bind",
@@ -2651,6 +2689,9 @@ fn hub_serve(body: &str) -> String {
         .args(["-NoProfile", "-Command", &cleanup])
         .output();
     kill_child(&HUB_CHILD);
+    // Стек OTA и hub serve делят 80/443: второй не поднимется, пока жив
+    // первый. Режимы взаимоисключающие.
+    stop_stack();
 
     let online = field(body, "online") == "1";
     let exe = std::env::current_exe().unwrap_or_else(|_| "cockpit".into());

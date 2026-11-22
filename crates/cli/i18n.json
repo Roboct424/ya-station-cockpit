@@ -68,7 +68,11 @@
     "в ключе CA нет закрытого ключа": "the CA key contains no private key",
     "не получилось: {0}": "failed: {0}",
     "сертификаты: скачиваю публичный CA и собираю лист": "certificates: downloading a public CA and building the leaf",
-    "сертификаты: {0}": "certificates: {0}"
+    "сертификаты: {0}": "certificates: {0}",
+    "AP: /connect — станция может думать до 30 секунд": "AP: /connect — the station may take up to 30 seconds",
+    "стек: маршрутов {0}, прошивка {1}, платформа {2}, сертификатов {3}": "stack: {0} routes, firmware {1}, platform {2}, {3} certificates",
+    "/check_updates → обновлений нет (станции нет в манифесте)": "/check_updates → no updates (station is not in the manifest)",
+    "стек остановлен": "stack stopped"
   },
   "_comment": "Все системные сообщения. Ключ — русский текст из кода (динамические части: {0}, {1}), значение — английский. Проверка: python tools/i18n_check.py",
   "en": {

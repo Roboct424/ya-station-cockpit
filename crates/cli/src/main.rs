@@ -1068,12 +1068,12 @@ fn run_local_ota(
 
     let base = cockpit_ota::Manifest::load(manifest)
         .map_err(|e| CockpitError::Config(format!("{}: {e}", manifest.display())))?;
+    // Платформы может не быть в снимке (новая станция, другой профиль):
+    // это не повод не поднимать стек. Тогда просто «обновлений нет».
     let entry = base
         .entries(platform)
-        .map_err(|e| CockpitError::Config(e.to_string()))?
-        .get(version)
-        .ok_or_else(|| CockpitError::Config(format!("нет {platform} {version} в манифесте")))?
-        .clone();
+        .ok()
+        .and_then(|entries| entries.get(version).cloned());
 
     // Файл прошивки нужен только когда обновления реально отдаются.
     // Без него стек всё равно поднимается и отвечает «обновлений нет».
@@ -1115,9 +1115,15 @@ fn run_local_ota(
     let firmware_rule = firmware
         .as_ref()
         .map(|(path, name)| (path.clone(), name.clone()));
+    // Если станции нет в манифесте — отвечаем «обновлений нет», но стек
+    // и sync-конфиг всё равно работают.
+    let updates_json = match &entry {
+        Some(entry) => cockpit_ota::check_updates_json(entry, &download_url),
+        None => br#"{"hasUpdate":false}"#.to_vec(),
+    };
     let mut rules = match cockpit_intercept::tls::load_rules(
         routes_file,
-        Some(cockpit_ota::check_updates_json(&entry, &download_url)),
+        Some(updates_json.clone()),
         Some(cockpit_ota::sync_info_json()),
         firmware_rule.clone(),
     ) {
@@ -1131,7 +1137,7 @@ fn run_local_ota(
         }
         Err(_) => cockpit_intercept::tls::standard_rules(
             true,
-            Some(cockpit_ota::check_updates_json(&entry, &download_url)),
+            Some(updates_json),
             Some(cockpit_ota::sync_info_json()),
             firmware_rule,
         ),
@@ -1163,11 +1169,14 @@ fn run_local_ota(
     let server = TlsInterceptor::start_local(addr, ca, routes)
         .map_err(|e| CockpitError::Internal(format!("local-ota {addr}: {e}")))?;
     i18n::say(format!("локальный OTA/sync на {}", server.addr()));
-    println!(
-        "  /check_updates → {} ({})",
-        entry.version,
-        entry.crc32.map(|c| format!("{c:08x}")).unwrap_or_default()
-    );
+    match &entry {
+        Some(entry) => println!(
+            "  /check_updates → {} ({})",
+            entry.version,
+            entry.crc32.map(|c| format!("{c:08x}")).unwrap_or_default()
+        ),
+        None => println!("  /check_updates → обновлений нет (станции нет в манифесте)"),
+    }
     println!("  /get_sync_info → adbd.network = true");
     match &firmware {
         Some((path, name)) => println!("  /firmware/{name} → {}", path.display()),
