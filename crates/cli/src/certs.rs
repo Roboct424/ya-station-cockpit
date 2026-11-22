@@ -3,8 +3,93 @@
 //! Нужна как запасной путь: если готовый архив с сертификатами уберут,
 //! пользователь скачивает их сам из публичного источника и кладёт в
 //! `data/certs/`. Ссылка задаётся явно — встроенного адреса нет.
+//!
+//! Второй путь — `harvest`: тянет ключ промежуточного CA из открытого
+//! PoC-репозитория и собирает из него готовый набор для станции.
 
 use std::path::{Path, PathBuf};
+
+/// Публичный корень AAA Certificate Services (Comodo). Сертификат, не
+/// ключ: он и так есть в хранилищах всех станций.
+const AAA_ROOT: &str = include_str!("../assets/aaa-root.pem");
+
+/// Имя набора, который собирает `harvest`.
+const HARVEST_NAME: &str = "emudhra-quasar";
+
+/// Скачивает публичный ключ промежуточного CA и собирает из него
+/// сертификат для `quasar.yandex.net`.
+///
+/// Это единственный шаг программы, который ходит в интернет по своей
+/// инициативе, и только по нажатию кнопки. Нужен станциям, которые
+/// проверяют цепочку: наш CA им не доверен, пока ADB закрыт.
+pub fn harvest() -> Result<String, String> {
+    let dir = Path::new("data").join("certs");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+
+    // Источник: публичный PoC с восстановленным ключом eMudhra.
+    const BASE: &str = "https://raw.githubusercontent.com/Fluepke/emudrahahahahaha/main/";
+    let cert_name = "CN=EM OV TLS CA - G3C,O=eMudhra Inc,C=US.pem";
+    let key_name = "CN=EM OV TLS CA - G3C,O=eMudhra Inc,C=US.key";
+    let cert_url = format!("{BASE}{}", encode_path(cert_name));
+    let key_url = format!("{BASE}{}", encode_path(key_name));
+
+    let tmp = std::env::temp_dir();
+    let tmp_cert = tmp.join("cockpit-ca-cert.pem");
+    let tmp_key = tmp.join("cockpit-ca-key.pem");
+    let _ = std::fs::remove_file(&tmp_cert);
+    let _ = std::fs::remove_file(&tmp_key);
+
+    download(&cert_url, &tmp_cert.to_string_lossy())?;
+    download(&key_url, &tmp_key.to_string_lossy())?;
+
+    let ca_pem = std::fs::read_to_string(&tmp_cert).map_err(|e| format!("CA-сертификат: {e}"))?;
+    let ca_key = std::fs::read_to_string(&tmp_key).map_err(|e| format!("CA-ключ: {e}"))?;
+    let _ = std::fs::remove_file(&tmp_cert);
+    let _ = std::fs::remove_file(&tmp_key);
+
+    // Лист под квазар: наша пара ключей, подпись — ключом CA.
+    let (leaf_pem, leaf_key) =
+        cockpit_intercept::tls::leaf_from_ca(&ca_pem, &ca_key, "quasar.yandex.net")
+            .map_err(|e| format!("сборка листа: {e}"))?;
+
+    // Цепочка: лист → промежуточный CA → публичный корень.
+    let mut chain = String::new();
+    for part in [leaf_pem.trim_end(), ca_pem.trim_end(), AAA_ROOT.trim_end()] {
+        chain.push_str(part);
+        chain.push('\n');
+    }
+
+    let leaf_path = dir.join(format!("{HARVEST_NAME}.pem"));
+    let key_path = dir.join(format!("{HARVEST_NAME}.key"));
+    let chain_path = dir.join(format!("{HARVEST_NAME}.chain"));
+    std::fs::write(&leaf_path, leaf_pem.trim_end().to_string() + "\n")
+        .map_err(|e| format!("{}: {e}", leaf_path.display()))?;
+    std::fs::write(&key_path, leaf_key).map_err(|e| format!("{}: {e}", key_path.display()))?;
+    std::fs::write(&chain_path, chain).map_err(|e| format!("{}: {e}", chain_path.display()))?;
+
+    // Сразу выбираем собранный набор: панель и quasar читают active.txt.
+    let active = dir.join("active.txt");
+    std::fs::write(&active, format!("data/certs/{HARVEST_NAME}.pem\n"))
+        .map_err(|e| format!("{}: {e}", active.display()))?;
+
+    Ok(format!(
+        "сертификат собран: data/certs/{HARVEST_NAME}.pem (лист + промежуточный CA + корень) и выбран для quasar"
+    ))
+}
+
+/// Процентное кодирование имени файла в пути URL.
+fn encode_path(name: &str) -> String {
+    let mut out = String::with_capacity(name.len() * 3);
+    for ch in name.chars() {
+        match ch {
+            '=' => out.push_str("%3D"),
+            ',' => out.push_str("%2C"),
+            ' ' => out.push_str("%20"),
+            other => out.push(other),
+        }
+    }
+    out
+}
 
 /// Скачивает zip по ссылке и кладёт сертификаты в `dir`.
 ///

@@ -55,7 +55,20 @@
     "диапазон {0}": "band {0}",
     "2.4 ГГц": "2.4 GHz",
     "quasar: CA не создан: {0}": "quasar: CA was not created: {0}",
-    "точка доступа не включилась (состояние {0}). Проверьте, что адаптер Wi-Fi умеет мобильный хотспот и не занят другим подключением": "access point did not start (state {0}). Check that the Wi-Fi adapter supports mobile hotspot and is not busy with another connection"
+    "точка доступа не включилась (состояние {0}). Проверьте, что адаптер Wi-Fi умеет мобильный хотспот и не занят другим подключением": "access point did not start (state {0}). Check that the Wi-Fi adapter supports mobile hotspot and is not busy with another connection",
+    "Собрать сертификаты": "Build certificates",
+    "Скачиваю и собираю…": "Downloading and building…",
+    "скачиваю и собираю…": "downloading and building…",
+    "Сертификаты для станции": "Station certificates",
+    "Собрать сертификат: скачать публичный CA и подписать им лист quasar": "Build a certificate: download a public CA and sign a quasar leaf with it",
+    "сертификат собран: data/certs/{0}.pem (лист + промежуточный CA + корень) и выбран для quasar": "certificate built: data/certs/{0}.pem (leaf + intermediate CA + root) and selected for quasar",
+    "сборка листа: {0}": "leaf build: {0}",
+    "CA-сертификат: {0}": "CA certificate: {0}",
+    "CA-ключ: {0}": "CA key: {0}",
+    "в ключе CA нет закрытого ключа": "the CA key contains no private key",
+    "не получилось: {0}": "failed: {0}",
+    "сертификаты: скачиваю публичный CA и собираю лист": "certificates: downloading a public CA and building the leaf",
+    "сертификаты: {0}": "certificates: {0}"
   },
   "_comment": "Все системные сообщения. Ключ — русский текст из кода (динамические части: {0}, {1}), значение — английский. Проверка: python tools/i18n_check.py",
   "en": {

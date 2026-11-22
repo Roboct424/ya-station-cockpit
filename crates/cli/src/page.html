@@ -209,7 +209,18 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
 
   </div>
 
+  <div class="card" id="cert_harvest_card">
+    <h2>3. Сертификаты для станции</h2>
+    <p class="hint">Станции проверяют цепочку: наш CA они не примут, пока закрыт ADB.
+    Кнопка скачивает публичный CA из открытого PoC-репозитория и собирает из него
+    лист для <b>quasar.yandex.net</b> — в <code>data/certs/</code> появятся
+    лист, ключ и цепочка (лист + промежуточный CA + корень). Это единственный
+    шаг программы, который ходит в интернет, и только по нажатию.</p>
+    <button class="act" id="btnHarvest" onclick="harvestCerts()">Собрать сертификаты</button>
+    <span id="r_harvest" class="chip wait">не выполнялось</span>
+    <p class="hint" id="harvest_hint"></p>
   </div>
+
   <div style="margin-top:12px;display:flex;justify-content:flex-end"><button class="act" onclick="goTab('s2')">Далее: настройка →</button></div>
 </section>
 
@@ -1323,6 +1334,27 @@ async function stackState() {
   if (el) {
     el.className = 'badge ' + (j.running ? 'ok' : '');
     el.textContent = j.running ? `стек: работает · ${j.routes} маршрутов` : 'стек: остановлен';
+  }
+}
+
+async function harvestCerts() {
+  const btn = $('btnHarvest');
+  if (btn) btn.disabled = true;
+  chip('r_harvest', false, 'скачиваю и собираю…');
+  try {
+    const r = await (await fetch('/api/certs/harvest', {method: 'POST', body: ''})).json();
+    chip('r_harvest', r.ok, r.ok ? 'готово' : 'ошибка');
+    $('harvest_hint').textContent = r.text || '';
+    if (r.ok) {
+      await loadCerts();
+      loadAdvice();
+      markDone('cert_harvest_card');
+    }
+  } catch (e) {
+    chip('r_harvest', false, 'ошибка');
+    $('harvest_hint').textContent = String(e);
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 

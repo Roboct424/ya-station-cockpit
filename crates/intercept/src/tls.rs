@@ -188,6 +188,84 @@ impl CertAuthority {
     }
 }
 
+/// Собирает лист для `host`, подписанный готовым внешним CA.
+///
+/// Нужно для станций, которые проверяют цепочку: ADB ещё закрыт, наш CA
+/// им не доверен. Ключ и сертификат CA берутся из публичного источника
+/// (см. `certs::harvest`) и в бинарник не вшиваются.
+pub fn leaf_from_ca(
+    ca_cert_pem: &str,
+    ca_key_pem: &str,
+    host: &str,
+) -> Result<(String, String), TlsError> {
+    let ca_key = load_external_key(ca_key_pem)?;
+    let issuer = CertificateParams::from_ca_cert_pem(ca_cert_pem)?.self_signed(&ca_key)?;
+    let mut params = CertificateParams::new(vec![host.to_string()])?;
+    params.distinguished_name.push(DnType::CommonName, host);
+    // Станция стартует с часами 1970 года: окно должно быть широким.
+    params.not_before = rcgen::date_time_ymd(2020, 1, 1);
+    params.not_after = rcgen::date_time_ymd(2049, 12, 31);
+    let leaf_key = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P384_SHA384)?;
+    let leaf = params.signed_by(&leaf_key, &issuer, &ca_key)?;
+    Ok((leaf.pem(), leaf_key.serialize_pem()))
+}
+
+/// Читает внешний ключ CA.
+///
+/// Публичные PoC выкладывают его в SEC1 (`BEGIN EC PRIVATE KEY`), а
+/// ring-бэкенд rcgen понимает только PKCS#8 — оборачиваем по дороге.
+fn load_external_key(pem: &str) -> Result<KeyPair, TlsError> {
+    if let Ok(key) = KeyPair::from_pem(pem) {
+        return Ok(key);
+    }
+    let der = rustls_pemfile::private_key(&mut pem.as_bytes())?.ok_or_else(|| {
+        TlsError::Io(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "в ключе CA нет закрытого ключа",
+        ))
+    })?;
+    let pkcs8 = match der {
+        PrivateKeyDer::Sec1(sec1) => wrap_sec1_in_pkcs8(sec1.secret_sec1_der())?,
+        PrivateKeyDer::Pkcs8(pkcs8) => pkcs8.secret_pkcs8_der().to_vec(),
+        _ => {
+            return Err(TlsError::Rcgen(rcgen::Error::CouldNotParseKeyPair));
+        }
+    };
+    let key = PrivatePkcs8KeyDer::from(pkcs8);
+    KeyPair::from_pkcs8_der_and_sign_algo(&key, &rcgen::PKCS_ECDSA_P384_SHA384)
+        .map_err(TlsError::Rcgen)
+}
+
+/// Оборачивает SEC1 EC-ключ (secp384r1) в PKCS#8 PrivateKeyInfo.
+fn wrap_sec1_in_pkcs8(sec1: &[u8]) -> Result<Vec<u8>, TlsError> {
+    // AlgorithmIdentifier: id-ecPublicKey (1.2.840.10045.2.1) + secp384r1.
+    const ALG: [u8; 18] = [
+        0x30, 0x10, 0x06, 0x07, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02, 0x01, 0x06, 0x05, 0x2B, 0x81,
+        0x04, 0x00, 0x22,
+    ];
+    let mut body = Vec::with_capacity(sec1.len() + 32);
+    body.extend_from_slice(&[0x02, 0x01, 0x00]); // version = 0
+    body.extend_from_slice(&ALG);
+    body.push(0x04); // OCTET STRING
+    push_der_len(&mut body, sec1.len());
+    body.extend_from_slice(sec1);
+    let mut out = Vec::with_capacity(body.len() + 4);
+    out.push(0x30);
+    push_der_len(&mut out, body.len());
+    out.extend_from_slice(&body);
+    Ok(out)
+}
+
+fn push_der_len(out: &mut Vec<u8>, len: usize) {
+    if len < 0x80 {
+        out.push(len as u8);
+    } else if len <= 0xFF {
+        out.extend_from_slice(&[0x81, len as u8]);
+    } else {
+        out.extend_from_slice(&[0x82, (len >> 8) as u8, (len & 0xFF) as u8]);
+    }
+}
+
 /// Готовый сертификат с цепочкой: отдаём как есть, без подписи нашим CA.
 ///
 /// Нужен, когда у нас есть сертификат от публичного CA: станция доверяет ему
@@ -1428,4 +1506,39 @@ fn write_firmware(
         data,
         Some("Accept-Ranges: bytes\r\n"),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rcgen::{BasicConstraints, IsCa};
+
+    /// G-085: лист, собранный из внешнего CA, должен давать рабочую
+    /// цепочку: лист + сертификат CA + ключ листа.
+    #[test]
+    fn leaf_from_external_ca_builds_chain() {
+        let ca_key = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P384_SHA384).unwrap();
+        let mut params = CertificateParams::new(vec!["test-ca".to_string()]).unwrap();
+        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        let ca = params.self_signed(&ca_key).unwrap();
+
+        let (leaf_pem, key_pem) =
+            leaf_from_ca(&ca.pem(), &ca_key.serialize_pem(), "quasar.yandex.net").unwrap();
+        let leaf: Vec<_> = rustls_pemfile::certs(&mut leaf_pem.as_bytes())
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(leaf.len(), 1, "ровно один лист");
+        let key = rustls_pemfile::private_key(&mut key_pem.as_bytes())
+            .unwrap()
+            .expect("ключ листа");
+        let mut chain = leaf;
+        chain.push(ca.der().clone());
+        let config =
+            ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
+                .with_protocol_versions(&[&rustls::version::TLS12])
+                .unwrap()
+                .with_no_client_auth()
+                .with_single_cert(chain, key);
+        assert!(config.is_ok(), "цепочка не собралась");
+    }
 }

@@ -248,6 +248,8 @@ enum HubCmd {
 
 #[derive(Subcommand)]
 enum CertsCmd {
+    /// Собрать сертификат: скачать публичный CA и подписать им лист quasar
+    Harvest,
     /// Скачать zip с набором сертификатов и распаковать в data/certs
     Fetch {
         /// Ссылка на архив (http/https)
@@ -738,6 +740,16 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
         Cmd::Module { cmd } => run_module_cmd(cmd),
         Cmd::Ble { cmd } => run_ble(cmd),
         Cmd::Certs { cmd } => match cmd {
+            CertsCmd::Harvest => match certs::harvest() {
+                Ok(text) => {
+                    println!("{text}");
+                    Ok(ExitCode::SUCCESS)
+                }
+                Err(error) => {
+                    println!("не получилось: {error}");
+                    Ok(ExitCode::FAILURE)
+                }
+            },
             CertsCmd::Fetch { url, dir } => match certs::fetch(&url, &dir) {
                 Ok(text) => {
                     println!("{text}");

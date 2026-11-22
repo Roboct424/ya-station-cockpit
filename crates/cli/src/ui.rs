@@ -539,6 +539,26 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
         ("GET", "/api/certs") => (200, "application/json", certs_json()),
         ("POST", "/api/certs") => (200, "application/json", set_certs(body)),
         ("POST", "/api/certs/fetch") => (200, "application/json", fetch_certs(body)),
+        ("POST", "/api/certs/harvest") => {
+            // Единственный шаг, который сам ходит в интернет: тянет
+            // публичный CA и собирает сертификат для quasar.
+            push_log("? сертификаты: скачиваю публичный CA и собираю лист");
+            let (ok, text) = match crate::certs::harvest() {
+                Ok(text) => {
+                    push_log(format!("  {text}"));
+                    (true, text)
+                }
+                Err(error) => {
+                    push_log(format!("✗ сертификаты: {error}"));
+                    (false, error)
+                }
+            };
+            (
+                200,
+                "application/json",
+                serde_json::json!({ "ok": ok, "text": text }).to_string(),
+            )
+        }
         ("POST", "/api/cleanup") => {
             let ctx = ctx_from(body);
             let result = run_module("env.cleanup", ctx);

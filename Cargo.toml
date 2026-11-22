@@ -15,7 +15,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.4.3"
+version = "1.5.0"
 edition = "2021"
 license = "MIT"
 authors = ["Roboct424"]
@@ -32,7 +32,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde_yaml = "0.9"
 notify = "8"
-rcgen = "0.13"
+rcgen = { version = "0.13", features = ["x509-parser"] }
 rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
 webpki-roots = "1"
 sha2 = "0.10"
