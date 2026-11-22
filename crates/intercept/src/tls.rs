@@ -277,6 +277,43 @@ fn push_der_len(out: &mut Vec<u8>, len: usize) {
     }
 }
 
+/// Делит содержимое одного PEM-блока на отдельные DER-сертификаты.
+///
+/// Готовые цепочки иногда склеены так, что внутри одного блока
+/// `BEGIN/END CERTIFICATE` лежит два сертификата подряд. `rustls_pemfile`
+/// отдаёт такую склейку одним куском, и клиент станции отвечает
+/// `DecodeError` — он не может разобрать Certificate-сообщение (G-099).
+fn split_der_certs(mut der: &[u8], out: &mut Vec<CertificateDer<'static>>) {
+    while !der.is_empty() {
+        let Some(len) = der_cert_len(der) else { break };
+        out.push(CertificateDer::from(der[..len].to_vec()));
+        der = &der[len..];
+    }
+}
+
+/// Длина одного DER-сертификата в начале среза.
+fn der_cert_len(der: &[u8]) -> Option<usize> {
+    if der.len() < 2 || der[0] != 0x30 {
+        return None;
+    }
+    let (len, header) = match der[1] {
+        n if n & 0x80 == 0 => (n as usize, 2),
+        n => {
+            let count = (n & 0x7f) as usize;
+            if count == 0 || count > 4 || der.len() < 2 + count {
+                return None;
+            }
+            let mut value = 0usize;
+            for byte in &der[2..2 + count] {
+                value = (value << 8) | *byte as usize;
+            }
+            (value, 2 + count)
+        }
+    };
+    let total = header.checked_add(len)?;
+    (total <= der.len()).then_some(total)
+}
+
 /// Готовый сертификат с цепочкой: отдаём как есть, без подписи нашим CA.
 ///
 /// Нужен, когда у нас есть сертификат от публичного CA: станция доверяет ему
@@ -295,11 +332,16 @@ impl FixedCert {
         key_path: &std::path::Path,
     ) -> Result<Self, TlsError> {
         let chain_bytes = std::fs::read(chain_path)?;
-        let chain: Vec<CertificateDer<'static>> =
+        let blocks: Vec<CertificateDer<'static>> =
             rustls_pemfile::certs(&mut &chain_bytes[..]).collect::<Result<Vec<_>, _>>()?;
-        // В PoC-цепочках корень продублирован. Старый клиент станции на
-        // такой Certificate-месседж отвечает DecodeError, поэтому
-        // оставляем каждый сертификат ровно один раз.
+        // В PoC-цепочках бывает два дефекта: корень продублирован и в
+        // одном PEM-блоке склеены два сертификата. Старый клиент станции
+        // на такой Certificate-месседж отвечает DecodeError, поэтому
+        // разбираем блоки на отдельные DER и оставляем каждый ровно раз.
+        let mut chain = Vec::new();
+        for block in blocks {
+            split_der_certs(block.as_ref(), &mut chain);
+        }
         let mut seen = std::collections::HashSet::new();
         let chain: Vec<CertificateDer<'static>> = chain
             .into_iter()
@@ -1559,5 +1601,27 @@ mod tests {
                 .with_no_client_auth()
                 .with_single_cert(chain, key);
         assert!(config.is_ok(), "цепочка не собралась");
+    }
+
+    /// G-099: два сертификата, склеенные в одном PEM-блоке, должны
+    /// разойтись на два DER, иначе станция отвечает DecodeError.
+    #[test]
+    fn split_glued_pem_block() {
+        let key = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P384_SHA384).unwrap();
+        let first = CertificateParams::new(vec!["one".to_string()])
+            .unwrap()
+            .self_signed(&key)
+            .unwrap();
+        let second = CertificateParams::new(vec!["two".to_string()])
+            .unwrap()
+            .self_signed(&key)
+            .unwrap();
+        let mut glued = first.der().to_vec();
+        glued.extend_from_slice(second.der());
+        let mut out = Vec::new();
+        split_der_certs(&glued, &mut out);
+        assert_eq!(out.len(), 2, "склейка должна распасться");
+        assert_eq!(out[0].as_ref(), first.der().as_ref());
+        assert_eq!(out[1].as_ref(), second.der().as_ref());
     }
 }

@@ -12,10 +12,10 @@
 
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream, UdpSocket};
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const SERVER_IP: Ipv4Addr = Ipv4Addr::new(192, 168, 138, 1);
 const CLIENT_IP: Ipv4Addr = Ipv4Addr::new(192, 168, 138, 234);
@@ -702,10 +702,95 @@ fn http_loop() {
 /// (`data/certs/active.txt`): станции, которые проверяют цепочку, без
 /// такого сертификата не пустят нас на первом сопряжении. Если его нет —
 /// выпускаем лист нашим локальным CA (G-082).
-fn quasar_config() -> Option<Arc<rustls::ServerConfig>> {
-    if let Some(config) = fixed_cert_config() {
-        return Some(config);
+///
+/// Раньше конфиг был один. Теперь панель отдаёт следующий набор, если
+/// станция отвергла предыдущий: старый стек так и работал (`CertPool`),
+/// и это единственный способ перебрать цепочки без ручных кнопок
+/// (G-100).
+struct QuasarCert {
+    name: String,
+    config: Arc<rustls::ServerConfig>,
+}
+
+fn quasar_configs() -> Vec<QuasarCert> {
+    let mut out: Vec<QuasarCert> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    if let Ok(active) = std::fs::read_to_string("data/certs/active.txt") {
+        for line in active.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let pem = if line.starts_with("data/") {
+                std::path::PathBuf::from(line)
+            } else {
+                std::path::Path::new("data/certs").join(line)
+            };
+            load_fixed_cert(&pem, &mut out, &mut seen);
+        }
     }
+
+    if let Ok(entries) = std::fs::read_dir("data/certs") {
+        let mut pems: Vec<std::path::PathBuf> = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().and_then(|e| e.to_str()) == Some("pem"))
+            .collect();
+        pems.sort();
+        for pem in pems {
+            load_fixed_cert(&pem, &mut out, &mut seen);
+        }
+    }
+
+    if std::path::Path::new("data/ca.key").exists() || out.is_empty() {
+        if let Some(config) = local_ca_config() {
+            out.push(QuasarCert {
+                name: "локальный CA".to_string(),
+                config,
+            });
+        }
+    }
+    out
+}
+
+fn load_fixed_cert(
+    pem: &std::path::Path,
+    out: &mut Vec<QuasarCert>,
+    seen: &mut std::collections::HashSet<String>,
+) {
+    use cockpit_intercept::tls::FixedCert;
+
+    if !pem.exists() {
+        return;
+    }
+    let chain = pem.with_extension("chain");
+    let key = pem.with_extension("key");
+    if !chain.exists() || !key.exists() {
+        return;
+    }
+    let name = pem
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("fixed")
+        .to_string();
+    if !seen.insert(name.clone()) {
+        return;
+    }
+    match FixedCert::load(&chain, &key) {
+        Ok(fixed) => match fixed.config_for_tls12() {
+            Ok(config) => {
+                log(&format!("quasar: кандидат {name}"));
+                out.push(QuasarCert { name, config });
+            }
+            Err(error) => log(&format!("quasar: {name}: {error}")),
+        },
+        Err(error) => log(&format!("quasar: {} пропущен: {error}", chain.display())),
+    }
+}
+
+/// Лист от нашего CA — запасной вариант, если готовых наборов нет.
+fn local_ca_config() -> Option<Arc<rustls::ServerConfig>> {
     let ca = match cockpit_intercept::tls::CertAuthority::load_or_create(std::path::Path::new(
         "data/ca.key",
     )) {
@@ -728,58 +813,45 @@ fn quasar_config() -> Option<Arc<rustls::ServerConfig>> {
     }
 }
 
-/// Готовый сертификат из `data/certs`, выбранный в панели.
-fn fixed_cert_config() -> Option<Arc<rustls::ServerConfig>> {
-    use cockpit_intercept::tls::FixedCert;
-
-    let active = std::fs::read_to_string("data/certs/active.txt").ok()?;
-    for line in active.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let pem = if line.starts_with("data/") {
-            std::path::PathBuf::from(line)
-        } else {
-            std::path::Path::new("data/certs").join(line)
-        };
-        if !pem.exists() {
-            continue;
-        }
-        let chain = pem.with_extension("chain");
-        let key = pem.with_extension("key");
-        if !chain.exists() || !key.exists() {
-            continue;
-        }
-        match FixedCert::load(&chain, &key) {
-            Ok(fixed) => match fixed.config_for_tls12() {
-                Ok(config) => {
-                    log(&format!(
-                        "quasar: сертификат {} (выбран в панели)",
-                        fixed.name
-                    ));
-                    return Some(config);
-                }
-                Err(error) => log(&format!("quasar: {}: {error}", fixed.name)),
-            },
-            Err(error) => log(&format!("quasar: {} пропущен: {error}", chain.display())),
-        }
-    }
-    None
+/// Станция отвергла сертификат (а не сломала соединение по другой причине).
+fn is_cert_rejection(error: &std::io::Error) -> bool {
+    let text = error.to_string();
+    text.contains("alert")
+        || text.contains("UnknownCA")
+        || text.contains("DecodeError")
+        || text.contains("certificate")
 }
 
 fn quasar_loop() {
-    let Some(config) = quasar_config() else {
+    let certs = Arc::new(quasar_configs());
+    if certs.is_empty() {
+        log("quasar: нет конфигурации TLS");
         return;
-    };
+    }
     let Ok(listener) = TcpListener::bind(("0.0.0.0", 443)) else {
         log("quasar: порт 443 занят");
         return;
     };
-    log("quasar: TLS на 0.0.0.0:443 (rustls)");
+    let names: Vec<&str> = certs.iter().map(|c| c.name.as_str()).collect();
+    log(&format!(
+        "quasar: TLS на 0.0.0.0:443 (rustls), кандидатов {}: {}",
+        certs.len(),
+        names.join(", ")
+    ));
+    let index = Arc::new(AtomicUsize::new(0));
+    let last_switch = Arc::new(Mutex::new(Instant::now() - Duration::from_secs(60)));
+    let working = Arc::new(AtomicBool::new(false));
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
-        let config = Arc::clone(&config);
+        let chosen = index.load(Ordering::Relaxed) % certs.len();
+        let cert = Arc::new(QuasarCert {
+            name: certs[chosen].name.clone(),
+            config: Arc::clone(&certs[chosen].config),
+        });
+        let certs = Arc::clone(&certs);
+        let index = Arc::clone(&index);
+        let last_switch = Arc::clone(&last_switch);
+        let working = Arc::clone(&working);
         thread::spawn(move || {
             let peer = stream
                 .peer_addr()
@@ -788,7 +860,7 @@ fn quasar_loop() {
             // ClientHello нужен только для разбора отказов: peek ничего
             // не съедает из сокета.
             let hello = peek_client_hello(&stream);
-            let mut conn = match rustls::ServerConnection::new(config) {
+            let mut conn = match rustls::ServerConnection::new(Arc::clone(&cert.config)) {
                 Ok(conn) => conn,
                 Err(error) => {
                     log(&format!("quasar: конфиг TLS: {error}"));
@@ -802,10 +874,40 @@ fn quasar_loop() {
                     if let Some(hello) = &hello {
                         log(&format!("quasar: ClientHello от {peer}: {hello}"));
                     }
+                    if is_cert_rejection(&error)
+                        && certs.len() > 1
+                        && !working.load(Ordering::Relaxed)
+                    {
+                        if let Ok(mut switched) = last_switch.lock() {
+                            // Станция открывает несколько соединений сразу:
+                            // переключаемся не чаще раза в 2 секунды.
+                            if switched.elapsed() >= Duration::from_secs(2) {
+                                *switched = Instant::now();
+                                let next = index.fetch_add(1, Ordering::Relaxed) + 1;
+                                let next = next % certs.len();
+                                log(&format!(
+                                    "quasar: {} отвергнут, следующий — {}",
+                                    cert.name, certs[next].name
+                                ));
+                            }
+                        }
+                    }
                     return;
                 }
             }
-            log(&format!("quasar: подключение {peer}"));
+            log(&format!(
+                "quasar: подключение {peer} (сертификат {})",
+                cert.name
+            ));
+            // Проверка «с ноутбука» (127.0.0.1) не должна закреплять
+            // сертификат: его принял не станция, а наш же клиент.
+            if !peer.starts_with("127.") && !peer.starts_with("::1") {
+                working.store(true, Ordering::Relaxed);
+                let last_ok = "data/certs/last_ok.txt";
+                if std::fs::read_to_string(last_ok).ok().as_deref() != Some(cert.name.as_str()) {
+                    let _ = std::fs::write(last_ok, &cert.name);
+                }
+            }
             let mut tls = rustls::StreamOwned::new(conn, stream);
             let _ = handle_quasar(&mut tls);
         });
