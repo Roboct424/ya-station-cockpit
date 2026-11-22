@@ -166,9 +166,9 @@ impl NetAdapter for WindowsAdapter {
         #[cfg(windows)]
         {
             match winrt_hotspot::start(cfg) {
-                Ok(state) => {
+                Ok(band) => {
                     return Ok(ApHandle {
-                        iface: format!("mobile-hotspot ({state})"),
+                        iface: format!("диапазон {band}"),
                     })
                 }
                 Err(winrt_err) => {

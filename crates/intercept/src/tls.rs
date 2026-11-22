@@ -134,8 +134,25 @@ impl CertAuthority {
 
     /// Конфиг сервера для конкретного имени хоста (с кэшем).
     pub fn config_for(&self, host: &str) -> Result<Arc<ServerConfig>, TlsError> {
+        self.config_with(host, false)
+    }
+
+    /// То же, но только TLS 1.2.
+    ///
+    /// Старый клиент Хаба присылает TLS 1.3 ClientHello, а разбирает
+    /// ответ с `decode_error`; TLS 1.2 он понимает (G-079).
+    pub fn config_for_tls12(&self, host: &str) -> Result<Arc<ServerConfig>, TlsError> {
+        self.config_with(host, true)
+    }
+
+    fn config_with(&self, host: &str, tls12_only: bool) -> Result<Arc<ServerConfig>, TlsError> {
+        let cache_key = if tls12_only {
+            format!("tls12:{host}")
+        } else {
+            host.to_string()
+        };
         if let Ok(cache) = self.cache.lock() {
-            if let Some(cfg) = cache.get(host) {
+            if let Some(cfg) = cache.get(&cache_key) {
                 return Ok(cfg.clone());
             }
         }
@@ -154,15 +171,18 @@ impl CertAuthority {
         let chain = vec![leaf.der().clone(), self.ca_cert.der().clone()];
         let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(leaf_key.serialize_der()));
 
-        let config =
-            ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
-                .with_safe_default_protocol_versions()?
-                .with_no_client_auth()
-                .with_single_cert(chain, key)?;
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let builder = ServerConfig::builder_with_provider(provider);
+        let builder = if tls12_only {
+            builder.with_protocol_versions(&[&rustls::version::TLS12])?
+        } else {
+            builder.with_safe_default_protocol_versions()?
+        };
+        let config = builder.with_no_client_auth().with_single_cert(chain, key)?;
 
         let config = Arc::new(config);
         if let Ok(mut cache) = self.cache.lock() {
-            cache.insert(host.to_string(), config.clone());
+            cache.insert(cache_key, config.clone());
         }
         Ok(config)
     }

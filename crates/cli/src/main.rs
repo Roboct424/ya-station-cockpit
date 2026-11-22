@@ -16,6 +16,7 @@ mod hub;
 mod i18n;
 mod modules;
 mod selfcheck;
+mod station;
 mod ui;
 
 #[derive(Parser)]
@@ -160,8 +161,10 @@ enum Cmd {
         platform: String,
         #[arg(long)]
         version: String,
+        /// Файл прошивки. Необязателен: без него стек работает, но
+        /// обновление не отдаёт (полезно, когда файла рядом нет).
         #[arg(long)]
-        firmware: PathBuf,
+        firmware: Option<PathBuf>,
         #[arg(long, default_value_t = 0)]
         seconds: u64,
         /// Отдавать незахваченные запросы в реальное облако.
@@ -634,25 +637,33 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
             NetCmd::Hotspot { ssid, password } => {
                 let adapter = cockpit_net::default_adapter();
                 match adapter.start_hotspot(&cockpit_net::ApConfig::new(ssid, password)) {
-                    Ok(h) => i18n::say(format!("точка доступа: SSID задан, состояние {}", h.iface)),
+                    Ok(h) => {
+                        i18n::say(format!("точка доступа включена: {}", h.iface));
+                        Ok(ExitCode::SUCCESS)
+                    }
                     Err(e) => {
                         i18n::say(format!("не удалось: {e}"));
                         if let Some(hint) = e.hint() {
                             i18n::say(format!("  подсказка: {hint}"));
                         }
+                        Ok(ExitCode::FAILURE)
                     }
                 }
-                Ok(ExitCode::SUCCESS)
             }
             NetCmd::HotspotStop => {
                 let adapter = cockpit_net::default_adapter();
                 match adapter.stop_hotspot(&cockpit_net::ApHandle {
                     iface: "mobile-hotspot".into(),
                 }) {
-                    Ok(()) => i18n::say("точка доступа остановлена"),
-                    Err(e) => i18n::say(format!("не удалось: {e}")),
+                    Ok(()) => {
+                        i18n::say("точка доступа остановлена");
+                        Ok(ExitCode::SUCCESS)
+                    }
+                    Err(e) => {
+                        i18n::say(format!("не удалось: {e}"));
+                        Ok(ExitCode::FAILURE)
+                    }
                 }
-                Ok(ExitCode::SUCCESS)
             }
             NetCmd::Info => {
                 let adapter = cockpit_net::default_adapter();
@@ -699,7 +710,7 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
             &manifest,
             &platform,
             &version,
-            &firmware,
+            firmware.as_deref(),
             seconds,
             forward,
             &http_bind,
@@ -1030,7 +1041,7 @@ fn run_local_ota(
     manifest: &Path,
     platform: &str,
     version: &str,
-    firmware: &Path,
+    firmware: Option<&Path>,
     seconds: u64,
     forward: bool,
     http_bind: &str,
@@ -1052,18 +1063,25 @@ fn run_local_ota(
         .ok_or_else(|| CockpitError::Config(format!("нет {platform} {version} в манифесте")))?
         .clone();
 
-    if !firmware.exists() {
-        return Err(CockpitError::Config(format!(
-            "нет файла прошивки: {}",
-            firmware.display()
-        )));
-    }
-
-    let name = firmware
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("firmware.zip")
-        .to_string();
+    // Файл прошивки нужен только когда обновления реально отдаются.
+    // Без него стек всё равно поднимается и отвечает «обновлений нет».
+    let firmware = match firmware {
+        Some(path) if path.exists() => {
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("firmware.zip")
+                .to_string();
+            Some((path.to_path_buf(), name))
+        }
+        Some(path) => {
+            return Err(CockpitError::Config(format!(
+                "нет файла прошивки: {} — положите .zip в папку firmware рядом с программой",
+                path.display()
+            )))
+        }
+        None => None,
+    };
 
     let ca = std::sync::Arc::new(load_cert_pool(certs)?);
 
@@ -1078,12 +1096,18 @@ fn run_local_ota(
         i18n::say(format!("корневой CA: {}", path.display()));
     }
 
-    let download_url = format!("https://quasar.yandex.net/firmware/{name}");
+    let download_url = match &firmware {
+        Some((_, name)) => format!("https://quasar.yandex.net/firmware/{name}"),
+        None => "https://quasar.yandex.net/firmware/".to_string(),
+    };
+    let firmware_rule = firmware
+        .as_ref()
+        .map(|(path, name)| (path.clone(), name.clone()));
     let mut rules = match cockpit_intercept::tls::load_rules(
         routes_file,
         Some(cockpit_ota::check_updates_json(&entry, &download_url)),
         Some(cockpit_ota::sync_info_json()),
-        Some((firmware.to_path_buf(), name.clone())),
+        firmware_rule.clone(),
     ) {
         Ok(rules) => {
             i18n::say(format!(
@@ -1097,7 +1121,7 @@ fn run_local_ota(
             true,
             Some(cockpit_ota::check_updates_json(&entry, &download_url)),
             Some(cockpit_ota::sync_info_json()),
-            Some((firmware.to_path_buf(), name.clone())),
+            firmware_rule,
         ),
     };
     if !forward {
@@ -1133,7 +1157,10 @@ fn run_local_ota(
         entry.crc32.map(|c| format!("{c:08x}")).unwrap_or_default()
     );
     println!("  /get_sync_info → adbd.network = true");
-    println!("  /firmware/{name} → {}", firmware.display());
+    match &firmware {
+        Some((path, name)) => println!("  /firmware/{name} → {}", path.display()),
+        None => println!("  /firmware/* → файла прошивки нет, обновления не отдаются"),
+    }
     // Смотрим, что реально стоит в запасном правиле `*`, а не только флаг forward.
     let rest_action = std::fs::read_to_string(routes_file)
         .ok()
@@ -1636,6 +1663,11 @@ fn run_pair(cmd: PairCmd) -> cockpit_core::Result<ExitCode> {
             i18n::say(format!("AP: адрес {url}, облако не используется"));
             if info_only {
                 let info = cockpit_pairing::ap::info(&url, bind).map_err(fail)?;
+                crate::station::remember(
+                    &info.uuid,
+                    &info.version,
+                    crate::station::platform_for(&info.uuid),
+                );
                 i18n::say(format!(
                     "uuid: {}  version: {}  mac: {}",
                     info.uuid, info.version, info.mac
@@ -1645,6 +1677,11 @@ fn run_pair(cmd: PairCmd) -> cockpit_core::Result<ExitCode> {
             }
             let (info, result) =
                 cockpit_pairing::ap::pair(&url, &creds, wired, bind).map_err(fail)?;
+            crate::station::remember(
+                &info.uuid,
+                &info.version,
+                crate::station::platform_for(&info.uuid),
+            );
             i18n::say(format!(
                 "uuid: {}  version: {}  mac: {}",
                 info.uuid, info.version, info.mac

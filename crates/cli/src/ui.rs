@@ -612,6 +612,11 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
                             "AP: uuid={} version={} mac={}",
                             info.uuid, info.version, info.mac
                         ));
+                        crate::station::remember(
+                            &info.uuid,
+                            &info.version,
+                            crate::station::platform_for(&info.uuid),
+                        );
                         push_log(format!("AP ответ: {} {}", result.status, result.data));
                         let text = if result.status == "ok" {
                             "готово: устройство подключается к сети".to_string()
@@ -1695,6 +1700,44 @@ fn device_json() -> String {
         .map(|rest| rest.split('&').next().unwrap_or("").to_string())
         .unwrap_or_default();
 
+    // Свежие данные о станции: шаг 3 (`/info`) и запросы самого Хаба к
+    // локальному quasar. Они важнее старых строк `ota.log`, иначе карточка
+    // «Станция» показывала «модель не определена».
+    let remembered = crate::station::load();
+    let field_of = |key: &str| -> String {
+        remembered
+            .get(key)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    let device_id = {
+        let fresh = field_of("device_id");
+        if fresh.is_empty() {
+            device_id
+        } else {
+            fresh
+        }
+    };
+    let version = {
+        let fresh = field_of("firmware");
+        if fresh.is_empty() {
+            version
+        } else {
+            fresh
+        }
+    };
+    let platform = {
+        let fresh = field_of("platform");
+        if fresh.is_empty() {
+            platform
+        } else {
+            fresh
+        }
+    };
+    let family = crate::station::family(&device_id);
+    let arch = station_arch(station.as_deref());
+
     // Что мы знаем про эту платформу: только проверенные прошивки.
     let known = known_firmware(&platform);
     let good: Vec<String> = known
@@ -1719,14 +1762,11 @@ fn device_json() -> String {
         format!("неизвестно — проверенная рабочая: {}", good.join(", "))
     };
 
-    let model = if device_id.starts_with("S006NQ") {
-        "Station Hub (Yandex Saturn)".to_string()
-    } else if device_id.starts_with("M00GDW") {
-        "Station Mini 2 (YNDX-00020)".to_string()
-    } else if device_id.is_empty() {
-        "не определена".to_string()
-    } else {
-        device_id.clone()
+    let model = match family {
+        "hub" => "Station Hub (Yandex Saturn)".to_string(),
+        "mini2" => "Station Mini 2 (YNDX-00020)".to_string(),
+        _ if device_id.is_empty() => "не определена".to_string(),
+        _ => device_id.clone(),
     };
 
     // Предлагаем прошивку только если платформа известна, версия не проверена
@@ -1838,6 +1878,9 @@ fn device_json() -> String {
         "device_id": device_id,
         "platform": platform,
         "model": model,
+        "family": family,
+        "arch": arch,
+        "maint": maint_json(family, &arch),
         "firmware": version,
         "adb": adb_open,
         "unlock": unlock,
@@ -1880,6 +1923,70 @@ fn known_firmware(platform: &str) -> Vec<(String, bool, bool)> {
         out.push((version.to_string(), adb, local));
     }
     out
+}
+
+/// Архитектура станции (`armv7l`, `aarch64`) — нужна на шаге 4.
+fn station_arch(station: Option<&str>) -> String {
+    let Some(ip) = station else {
+        return String::new();
+    };
+    let adb = std::path::Path::new("data/adb/adb.exe");
+    if !adb.exists() {
+        return String::new();
+    }
+    let out = std::process::Command::new(adb)
+        .args(["-s", &format!("{ip}:5555"), "shell", "uname -m"])
+        .output();
+    let Ok(out) = out else {
+        return String::new();
+    };
+    if !out.status.success() {
+        return String::new();
+    }
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if text.is_empty() || text.contains(' ') || text.contains("not found") {
+        String::new()
+    } else {
+        text
+    }
+}
+
+/// Действия шага 4 для конкретного семейства станции.
+///
+/// Hub и Mini 2 — разные железки: отличаются пути, набор скриптов и то,
+/// что вообще имеет смысл трогать. Поэтому набор приходит с сервера, а не
+/// зашит в страницу.
+fn maint_json(family: &str, _arch: &str) -> serde_json::Value {
+    let name = crate::station::family_title(family);
+    if name.is_empty() {
+        return serde_json::json!([]);
+    }
+    let (backup, guard, ca, cleanup) = match family {
+        "hub" => (
+            "/data/quasar, /etc/hosts, /etc/dhcpcd.conf",
+            "S99adbguard и S98netillusion",
+            "системный якорь (SATURN)",
+            "снять сторож, вернуть /etc и hosts",
+        ),
+        "mini2" => (
+            "/data/quasar, /etc/hosts",
+            "S99adbguard (Mini 2)",
+            "системный якорь (MINI 2)",
+            "снять сторож, вернуть /etc и hosts",
+        ),
+        _ => (
+            "/data/quasar, /etc/hosts",
+            "S99adbguard",
+            "системный якорь",
+            "снять сторож, вернуть /etc и hosts",
+        ),
+    };
+    serde_json::json!([
+        {"id": "backup", "title": format!("Снять бэкап · {name}"), "hint": backup},
+        {"id": "guard", "title": format!("Закрепить ADB · {name}"), "hint": guard},
+        {"id": "ca", "title": format!("Установить наш CA · {name}"), "hint": ca},
+        {"id": "cleanup", "title": format!("Убрать всё за собой · {name}"), "hint": cleanup},
+    ])
 }
 
 fn stack_json() -> String {
@@ -1944,6 +2051,7 @@ fn start_stack(body: &str) -> String {
             value
         }
     };
+    let update_enabled = field(body, "update") == "1";
     let firmware = {
         let off = format!("firmware/{version}.zip.off");
         let zip = format!("firmware/{version}.zip");
@@ -1956,8 +2064,10 @@ fn start_stack(body: &str) -> String {
         }
     };
 
-    if !std::path::Path::new(&firmware).exists() {
-        let text = format!("нет файла прошивки: {firmware} — укажите путь в блоке «Экстра»");
+    // Файл прошивки обязателен только когда обновление разрешено. Иначе
+    // стек поднимается без него и просто отвечает «обновлений нет».
+    if firmware.is_empty() && update_enabled {
+        let text = "обновление разрешено, но файла прошивки нет — положите .zip в папку firmware рядом с программой";
         push_log(format!("✗ стек: {text}"));
         return serde_json::json!({ "ok": false, "text": text }).to_string();
     }
@@ -1978,7 +2088,6 @@ fn start_stack(body: &str) -> String {
         return serde_json::json!({ "ok": false, "text": text }).to_string();
     }
 
-    let update_enabled = field(body, "update") == "1";
     let _ = std::fs::write("data/allow_update", if update_enabled { "1" } else { "0" });
     rotate_attempt(&version, update_enabled);
     let mut routes = build_routes(
@@ -2034,14 +2143,15 @@ fn start_stack(body: &str) -> String {
         "yandexmini_2",
         "--version",
         &version,
-        "--firmware",
-        &firmware,
         "--http-bind",
         "0.0.0.0:80",
         // Оффлайн-активатор наружу не выпускает ничего: форвард только в облаке.
         "--forward",
         if cloud { "true" } else { "false" },
     ]);
+    if !firmware.is_empty() {
+        cmd.args(["--firmware", &firmware]);
+    }
     let certs = active_certs()
         .iter()
         .map(|p| p.to_string_lossy().to_string())

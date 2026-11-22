@@ -19,6 +19,9 @@ header h1{font-size:14px;margin:0;font-weight:600;white-space:nowrap}
  cursor:pointer;font-size:13px;font-weight:600;text-align:center;white-space:nowrap}
 .tabs button.on{background:#22303f;color:#e8ecf1;border-color:#33465c}
 .apply{width:100%;padding:12px;font-size:15px;border-radius:12px;margin-top:4px}
+/* Главное действие блока: «Перезапустить линк» на шаге 2. */
+button.act.primary{padding:10px 18px;font-size:14px;border-radius:11px;background:#2f6ee0;
+ box-shadow:0 0 0 1px #4f8cff inset}
 .tabs button.on{background:#22303f;color:#e8ecf1}
 main{padding:8px 16px;width:100%;max-width:1320px;margin:0 auto;flex:1 1 auto;min-height:0;overflow:auto;display:flex;flex-direction:column}
 section{display:none}
@@ -181,7 +184,7 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
     <div class="row">
       <div class="col">
         <label>Модель</label>
-        <select id="model" onchange="checkMic(this.value)">
+        <select id="model" onchange="onModelChange(this.value)">
           <option value="">—</option>
           <option value="Station Hub">Hub</option>
           <option>Station Midi</option>
@@ -248,24 +251,28 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
       <button class="act ghost" id="btnAdapters" onclick="refreshAdapters()"
         title="Обновить список сетевых адаптеров">Обновить</button>
     </div>
-    <label class="check" style="margin-top:4px">
+    <div class="row" style="gap:8px;align-items:center;margin-top:8px">
+      <button class="act primary" id="btnLink" onclick="resetLink()">Перезапустить линк</button>
+      <span id="r_eth" class="chip wait">не выполнялось</span>
+    </div>
+    <label class="check" style="margin-top:6px">
       <input type="checkbox" id="eth_auto" checked onchange="toggleEthAuto()">
       <span>Автоопределение адреса устройства</span>
     </label>
-    <div class="row" style="gap:8px">
-      <div class="col">
-        <label>Адрес станции</label>
-        <input type="text" id="station_ip" value="—" disabled style="color:#7ee2a8">
+    <div id="eth_manual" style="display:none">
+      <div class="row" style="gap:8px">
+        <div class="col">
+          <label>Адрес станции</label>
+          <input type="text" id="station_ip" value="—" style="color:#7ee2a8">
+        </div>
+        <div class="col">
+          <label>Адрес порта (шлюз для станции)</label>
+          <input type="text" id="eth_ip" value="192.168.137.1" style="color:#9fb4cc">
+        </div>
       </div>
-      <div class="col">
-        <label>Адрес порта (шлюз для станции)</label>
-        <input type="text" id="eth_ip" value="192.168.137.1" disabled style="color:#9fb4cc">
+      <div class="row" style="gap:8px;align-items:center;margin-top:2px">
+        <button class="act" id="btnEth" onclick="setEthernet()">Назначить адрес</button>
       </div>
-    </div>
-    <div class="row" style="gap:8px;align-items:center;margin-top:2px">
-      <button class="act ghost" id="btnLink" onclick="resetLink()">Перезапустить линк</button>
-      <button class="act" id="btnEth" onclick="setEthernet()">Назначить адрес</button>
-      <span id="r_eth" class="chip wait">не выполнялось</span>
     </div>
     <p class="hint">Общий доступ Windows (ICS) не нужен: DHCP и локальный
     quasar поднимает hub serve. Если Ethernet подключили после запуска —
@@ -308,13 +315,8 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
     <button class="act" id="btnCerts" onclick="saveCerts()">Применить выбор</button>
     <span id="r_certs" class="chip wait">не выполнялось</span>
     <p class="hint" id="cert_hint"></p>
-    <div class="row" style="margin-top:8px">
-      <input type="text" id="certs_url" style="flex:1;min-width:220px"
-        value="https://github.com/Roboct424/ya-station-cockpit/releases/latest/download/cockpit-data.zip">
-      <button class="act" id="btnCertsFetch" onclick="fetchCerts()">Загрузить по ссылке</button>
-    </div>
-    <p class="hint">Набор обычно уже лежит рядом с программой. Ссылка по умолчанию —
-    последний релиз; если архив уберут или он изменится, подставьте свою.</p>
+    <p class="hint">Набор сертификатов уже лежит рядом с программой; загрузкой
+    новых наборов занимается отдельная программа.</p>
   </div>
 
   <div class="card">
@@ -324,10 +326,6 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
     <p class="hint">По умолчанию выключено: без разрешения станция получает
     «обновлений нет». «Проверена» — есть в базе и открывает ADB.</p>
     <div id="fwlistbox" class="muted">…</div>
-    <label>Скачать базу прошивок по ссылке (JSON)</label>
-    <input type="text" id="dburl" placeholder="https://…/firmware-db.json">
-    <button class="act ghost" onclick="fetchDb()">Скачать базу</button>
-    <span id="r_db" class="chip wait">не выполнялось</span>
     <p class="hint" id="fw_hint"></p>
   </div>
   </div>
@@ -368,9 +366,6 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
         </div>
         <button class="act" id="btnPair" onclick="pair()">Проиграть код</button>
         <span id="r_pair" class="chip wait">не выполнялось</span>
-        <p class="hint" id="nomichint" style="color:#ffce6a;display:none">
-          У этой модели нет микрофона — звуковой код не сработает. Подключайте по Ethernet или Bluetooth.
-        </p>
       </div>
 
       <div class="card" id="station_card">
@@ -379,8 +374,7 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
         <div>
           <button class="act ghost" onclick="restartStack()">Перезапустить стек</button>
           <button class="act ghost" onclick="stopStack()">Остановить</button>
-          <button class="act ghost" onclick="hubGrab()">Подключить ADB (root)</button>
-          <button class="act ghost" onclick="hubStop()">Остановить службы</button>
+          <button class="act" onclick="hubServe('sync')">Запустить службу</button>
         </div>
         <div style="margin-top:8px">
           <span id="r_hub" class="chip wait">службы не запущены</span>
@@ -400,16 +394,12 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
 <section id="s4">
   <div class="card">
     <h2>Обслуживание — только после разблокировки</h2>
-    <p class="hint">Всё, что делается через ADB, живёт здесь: снять бэкап,
-    закрепить ADB и поставить наш сертификат.</p>
-    <button class="act" id="btnB" onclick="backup()">Снять бэкап</button>
-    <span id="r_backup" class="chip wait">не выполнялось</span>
-    <button class="act" id="btnG" onclick="guard()">Закрепить ADB (сторож)</button>
-    <span id="r_guard" class="chip wait">не выполнялось</span>
-    <button class="act" id="btnC" onclick="caInstall()">Установить наш CA</button>
-    <span id="r_ca" class="chip wait">не выполнялось</span>
-    <button class="act" id="btnCleanAll" onclick="cleanupAll()">Убрать всё за собой</button>
-    <span id="r_cleanall" class="chip wait">не выполнялось</span>
+    <div id="maint_dev" class="rec">устройство не определено — сначала выполните шаг 3</div>
+    <p class="hint">Всё, что делается через ADB, живёт здесь. У Hub и Mini 2
+    разные пути и скрипты, поэтому набор действий выбирается по станции,
+    которую программа видит сейчас.</p>
+    <div id="maint_actions" class="row" style="gap:8px 6px;margin-top:8px"></div>
+    <div style="margin-top:6px"><span id="r_maint" class="chip wait">не выполнялось</span></div>
     <pre id="o_maint" style="height:210px;margin-top:10px">—</pre>
   </div>
 </section>
@@ -478,21 +468,6 @@ async function hubStatus() {
     if (r.adb) markDone('station_card');
   } catch (e) {}
 }
-
-async function hubGrab() {
-  chip('r_hub', false, 'подключаюсь…');
-  const r = await (await fetch('/api/hub/grab', {method: 'POST', body: ''})).json();
-  chip('r_hub', r.ok, r.ok ? 'ADB: uid=0' : (r.text || 'не вышло'));
-  hubStatus();
-}
-
-async function hubStop() {
-  chip('r_hub', false, 'останавливаю…');
-  const r = await (await fetch('/api/hub/stop', {method: 'POST', body: ''})).json();
-  chip('r_hub', r.ok, r.text || 'службы остановлены');
-  hubStatus();
-}
-
 
 function markDone(id, on = true) {
   const el = $(id);
@@ -819,10 +794,11 @@ function toggleLink() {
 
 function toggleEthAuto() {
   const auto = $('eth_auto').checked;
-  $('station_ip').disabled = auto;
-  $('eth_ip').disabled = auto;
+  const manual = $('eth_manual');
+  // При автоопределении ручные поля и кнопка «Назначить адрес» не нужны.
+  if (manual) manual.style.display = auto ? 'none' : 'block';
   if (auto) {
-    // Возвращаем адрес порта, который выдал общий доступ, и автоадрес станции.
+    // Возвращаем адрес порта, который выдал DHCP, и автоадрес станции.
     refreshIface($('adapter').value);
     state();
   }
@@ -867,20 +843,6 @@ async function refreshIface(adapter) {
   return '';
 }
 
-async function enableShare() {
-  const adapter = $('adapter').value || 'Ethernet';
-  $('btnShare').disabled = true; chip('r_eth', false, 'включаю общий доступ…');
-  const r = await (await fetch('/api/share', {method: 'POST', body: new URLSearchParams({adapter})})).json();
-  $('btnShare').disabled = false;
-  chip('r_eth', r.ok, r.ok ? 'общий доступ включён' : 'ошибка');
-  $('eth_hint').textContent = r.text || '';
-  if (r.ok) state();
-  // Адрес порта подхватываем сами, если включено автоопределение.
-  if (r.ok) {
-    const ip = await refreshIface(adapter);
-    if (ip) append('ethernet: ' + adapter + ' получил адрес ' + ip);
-  }
-}
 
 async function resetLink() {
   chip('r_eth', false, 'перезапускаю линк…');
@@ -941,7 +903,7 @@ async function bleScan() {
   const station = j.items.find(d => d.station && d.suggested_model);
   if (station) {
     $('model').value = station.suggested_model;
-    checkMic(station.suggested_model);
+    onModelChange(station.suggested_model);
     append('bluetooth: нашёл «' + (station.name || station.address) + '» → ' + station.suggested_model);
   }
 }
@@ -965,22 +927,34 @@ async function saveProfile() {
   loadDevice();
 }
 
-function checkMic(model) {
-  const el = $('nomichint');
-  if (el) el.style.display = (model || '').toLowerCase().includes('hub') ? 'block' : 'none';
+// У Хаба нет микрофона: звуковой код ему не подходит, ему нужен Wi-Fi AP.
+// Выбираем способ сопряжения сами по выбранному устройству.
+function apOnly(model) {
+  const m = (model || '').toLowerCase();
+  return m.includes('hub');
+}
+
+function autoPairMode(model) {
+  const want = apOnly(model) ? 'ap' : 'sound';
+  const sel = $('pmode');
+  if (sel && sel.value !== want) sel.value = want;
+  if (typeof pairMode === 'function') pairMode();
+}
+
+function onModelChange(model) {
+  autoPairMode(model);
 }
 
 async function loadProfile() {
   const j = await (await fetch('/api/profile')).json();
-  checkMic(j.model);
   $('model').value = j.model || '';
-  checkMic(j.model || '');
   $('link').value = j.link || 'wifi';
-  checkMic(j.model);
+  onModelChange(j.model || '');
   toggleLink();
   $('model').dispatchEvent(new Event('change'));
   $('link').dispatchEvent(new Event('change'));
   await loadFirmwareOptions(j.firmware || '');
+  toggleEthAuto();
   enhanceSelects();
 }
 
@@ -1006,7 +980,7 @@ async function loadFirmwares() {
         ${f.verified ? '<span class="ok">проверена</span>' : '<span class="muted">не проверена</span>'}
         ${f.adb ? '<span class="ok">ADB откроется</span>' : '<span class="err">ADB не откроется</span>'}
       </span></label>`).join('')
-    : '<span class="muted">для платформы нет прошивок — загрузите базу</span>';
+    : '<span class="muted">для платформы нет прошивок в локальной базе</span>';
   $('fw_hint').textContent = 'платформа: ' + j.platform;
   const dl = $('fwlist');
   if (dl) dl.innerHTML = '<option value="factory"></option>' +
@@ -1016,13 +990,6 @@ async function loadFirmwares() {
 async function allowUpdate(on) {
   const r = await (await fetch('/api/allow', {method: 'POST', body: new URLSearchParams({value: on ? '1' : '0'})})).json();
   append('обновление: ' + r.text);
-}
-
-async function fetchDb() {
-  $('r_db').className = 'chip wait'; $('r_db').textContent = 'скачиваю…';
-  const r = await (await fetch('/api/db', {method: 'POST', body: new URLSearchParams({url: $('dburl').value})})).json();
-  chip('r_db', r.ok, r.text);
-  loadFirmwares();
 }
 
 async function loadAdvice() {
@@ -1075,6 +1042,61 @@ async function loadDevice() {
   if (stationField && (!$('eth_auto') || $('eth_auto').checked)) {
     stationField.value = j.station || '—';
   }
+  // Модель определили сами — подставляем в профиль, чтобы шаг 1 не
+  // оставался с «—». Пользовательский выбор не трогаем.
+  const modelSel = $('model');
+  const want = profileModelFor(j);
+  if (modelSel && !modelSel.value && want) {
+    modelSel.value = want;
+    modelSel.dispatchEvent(new Event('change'));
+    onModelChange(want);
+  }
+  renderMaint(j);
+}
+
+/// Значение селекта «Модель» по семейству, которое вернул /api/device.
+function profileModelFor(j) {
+  if (j.family === 'hub') return 'Station Hub';
+  if (j.family === 'mini2') return 'Station Mini 2';
+  if (j.family === 'station') return 'Station Mini 3 (YNDX-00027)';
+  return '';
+}
+
+// Шаг 4 у каждого устройства свой: набор действий приходит из
+// /api/device вместе с семейством и архитектурой.
+const MAINT_FN = {
+  backup: () => backup(),
+  guard: () => guard(),
+  ca: () => caInstall(),
+  cleanup: () => cleanupAll()
+};
+
+function renderMaint(j) {
+  const box = $('maint_dev');
+  const actions = $('maint_actions');
+  if (!box || !actions) return;
+  const fam = j.family || '';
+  const bits = [j.model || 'устройство не определено'];
+  if (j.device_id) bits.push(j.device_id);
+  if (j.arch) bits.push(j.arch);
+  if (j.firmware) bits.push('прошивка ' + j.firmware);
+  box.textContent = 'Сейчас разблокируется: ' + bits.join(' · ');
+  box.style.borderLeftColor = fam ? '#3aa0ff' : '#ffce6a';
+  const items = j.maint || [];
+  if (!items.length) {
+    actions.innerHTML = '<span class="muted">сначала выполните шаг 3 — без станции набор скриптов неизвестен</span>';
+    return;
+  }
+  actions.innerHTML = items.map(it =>
+    `<button class="act" data-maint="${it.id}" title="${it.hint || ''}"
+      ${j.adb ? '' : 'disabled'}>${it.title}</button>`).join('') +
+    `<span class="muted" style="flex-basis:100%">${items.map(it => it.hint).join(' · ')}</span>`;
+  actions.querySelectorAll('button[data-maint]').forEach(b => {
+    b.onclick = () => {
+      const fn = MAINT_FN[b.dataset.maint];
+      if (fn) fn();
+    };
+  });
 }
 
 async function restartStack() {
@@ -1085,37 +1107,33 @@ async function restartStack() {
 }
 
 async function cleanupAll() {
-  $('btnCleanAll').disabled = true; chip('r_cleanall', false, 'убираю…');
+  chip('r_maint', false, 'убираю…');
   const r = await (await fetch('/api/cleanup-all', {method: 'POST', body: new URLSearchParams({
     adapter: ($('adapter') && $('adapter').value) || 'Ethernet'})})).json();
-  $('btnCleanAll').disabled = false;
   $('o_maint').textContent = r.text || '';
-  chip('r_cleanall', r.ok, r.ok ? 'готово' : 'ошибка');
+  chip('r_maint', r.ok, r.ok ? 'готово' : 'ошибка');
   state(); stackState();
 }
 
 async function guard() {
-  $('btnG').disabled = true; chip('r_guard', false, 'ставлю…');
+  chip('r_maint', false, 'ставлю…');
   const r = await (await fetch('/api/guard', {method: 'POST', body: new URLSearchParams()})).json();
-  $('btnG').disabled = false;
   $('o_maint').textContent = r.text || '';
-  chip('r_guard', r.ok, r.ok ? 'применено' : 'ошибка');
+  chip('r_maint', r.ok, r.ok ? 'применено' : 'ошибка');
 }
 
 async function caInstall() {
-  $('btnC').disabled = true; chip('r_ca', false, 'ставлю…');
+  chip('r_maint', false, 'ставлю…');
   const r = await (await fetch('/api/ca', {method: 'POST', body: new URLSearchParams()})).json();
-  $('btnC').disabled = false;
   $('o_maint').textContent = r.text || '';
-  chip('r_ca', r.ok, r.ok ? 'применено' : 'ошибка');
+  chip('r_maint', r.ok, r.ok ? 'применено' : 'ошибка');
 }
 
 async function backup() {
-  $('btnB').disabled = true; chip('r_backup', false, 'снимаю…');
+  chip('r_maint', false, 'снимаю…');
   const r = await (await fetch('/api/backup', {method: 'POST', body: new URLSearchParams()})).json();
-  $('btnB').disabled = false;
   $('o_maint').textContent = r.text || '';
-  chip('r_backup', r.ok, r.ok ? 'бэкап готов' : 'ошибка');
+  chip('r_maint', r.ok, r.ok ? 'бэкап готов' : 'ошибка');
 }
 
 function renderPreset() {
@@ -1181,8 +1199,12 @@ async function applyAndRestart() {
 }
 
 async function stopStack() {
+  // «Остановить» гасит и стек OTA, и службы Хаба — отдельных кнопок не надо.
   const r = await (await fetch('/api/stack/stop', {method: 'POST'})).json();
   chip('r_stack', r.ok, r.text);
+  const h = await (await fetch('/api/hub/stop', {method: 'POST', body: ''})).json();
+  chip('r_hub', h.ok, 'службы остановлены');
+  hubStatus();
 }
 
 function pairMode() {
@@ -1316,17 +1338,6 @@ async function saveCerts() {
   $('cert_hint').textContent = r.ok ? 'выбор сохранён в data/certs/active.txt' : '';
 }
 
-async function fetchCerts() {
-  const f = new URLSearchParams();
-  f.append('url', $('certs_url').value.trim());
-  $('btnCertsFetch').disabled = true; chip('r_certs', false, 'Загрузка:');
-  const r = await (await fetch('/api/certs/fetch', {method: 'POST', body: f})).json();
-  $('btnCertsFetch').disabled = false;
-  chip('r_certs', r.ok, r.text);
-  if (r.ok) { $('cert_hint').textContent = 'Набор обновлён: выберите цепочку и перезапустите стек'; }
-  await loadCerts();
-}
-
 let SESSION = null;
 
 async function pingSession() {
@@ -1355,11 +1366,14 @@ async function init() {
   ITEMS = (await (await fetch('/api/items')).json()).items;
   renderPreset();
   loadCerts();
-  loadProfile();
+  // Профиль и устройство — по очереди: иначе ответ профиля перетирает
+  // определённую модель и сбрасывает способ сопряжения.
+  await loadProfile();
+  await loadDevice();
   loadFirmwares();
   loadAdvice();
-  loadDevice();
-  state(); stackState(); loadDevice();
+  state(); stackState();
+  toggleEthAuto();
   setInterval(pingSession, 5000);
   setInterval(poll, 2000);
   setInterval(pollStack, 2000);

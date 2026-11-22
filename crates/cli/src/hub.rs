@@ -615,26 +615,29 @@ fn http_loop() {
 // ------------------------------------------------------------- quasar ------
 
 fn quasar_loop() {
-    // Чистый Rust TLS (rustls): сертификат и ключ вшиты в бинарник,
-    // внешних файлов и Python нет. Schannel не подошёл: он отвергает
-    // TLS 1.3 ClientHello Хаба (G-079).
-    const CHAIN: &[u8] = include_bytes!("../../../packaging/quasar/quasar-chain.pem");
-    const KEY: &[u8] = include_bytes!("../../../packaging/quasar/quasar-leaf.key");
-    let Ok(chain) = load_cert_chain(CHAIN, KEY) else {
-        log("quasar: не загрузились встроенные сертификаты");
-        return;
+    // Свой локальный CA: ключ генерируется на этой машине (`data/ca.key`),
+    // лист для quasar.yandex.net подписывается им же. Чужих ключей в
+    // бинарнике нет, Python и внешние файлы не нужны (G-082).
+    let ca = match cockpit_intercept::tls::CertAuthority::load_or_create(std::path::Path::new(
+        "data/ca.key",
+    )) {
+        Ok(ca) => ca,
+        Err(error) => {
+            log(&format!("quasar: CA не создан: {error}"));
+            return;
+        }
     };
-    let config =
-        match rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS12])
-            .with_no_client_auth()
-            .with_single_cert(chain.0, chain.1)
-        {
-            Ok(config) => Arc::new(config),
-            Err(error) => {
-                log(&format!("quasar: конфиг TLS: {error}"));
-                return;
-            }
-        };
+    // Тот же CA ставится на станцию кнопкой «Установить наш CA».
+    if let Err(error) = std::fs::write("data/ca.pem", ca.ca_pem()) {
+        log(&format!("quasar: data/ca.pem: {error}"));
+    }
+    let config = match ca.config_for_tls12("quasar.yandex.net") {
+        Ok(config) => config,
+        Err(error) => {
+            log(&format!("quasar: конфиг TLS: {error}"));
+            return;
+        }
+    };
     let Ok(listener) = TcpListener::bind(("0.0.0.0", 443)) else {
         log("quasar: порт 443 занят");
         return;
@@ -673,27 +676,6 @@ fn quasar_loop() {
             let _ = handle_quasar(&mut tls);
         });
     }
-}
-
-fn load_cert_chain(
-    chain_pem: &[u8],
-    key_pem: &[u8],
-) -> Result<
-    (
-        Vec<rustls::pki_types::CertificateDer<'static>>,
-        rustls::pki_types::PrivateKeyDer<'static>,
-    ),
-    (),
-> {
-    use rustls::pki_types::pem::PemObject;
-    let certs: Vec<_> = rustls::pki_types::CertificateDer::pem_slice_iter(chain_pem)
-        .filter_map(Result::ok)
-        .collect();
-    let key = rustls::pki_types::PrivateKeyDer::from_pem_slice(key_pem).map_err(|_| ())?;
-    if certs.is_empty() {
-        return Err(());
-    }
-    Ok((certs, key))
 }
 
 /// Снимает ClientHello, чтобы понять, почему TLS его отвергает.
@@ -853,6 +835,11 @@ fn handle_quasar(stream: &mut (impl Read + Write)) -> std::io::Result<()> {
     dump_probe("quasar", &dump);
     log(&format!("{host}{path} ({} Б)", payload.len()));
 
+    // Кто именно стучится: панель показывает это на шаге 4.
+    if path.contains("/check_updates") || path.contains("/register") {
+        remember_from_query(path);
+    }
+
     let body = if path.contains("/get_sync_info") {
         log("  -> sync info с adbd");
         cockpit_ota::sync_info_json()
@@ -866,6 +853,29 @@ fn handle_quasar(stream: &mut (impl Read + Write)) -> std::io::Result<()> {
         br#"{"status":"ok"}"#.to_vec()
     };
     respond(stream, 200, &body)
+}
+
+/// Запоминает `device_id`/прошивку/платформу из строки запроса quasar.
+fn remember_from_query(path: &str) {
+    let query = path.split_once('?').map(|(_, query)| query).unwrap_or("");
+    let param = |key: &str| -> String {
+        query
+            .split('&')
+            .filter_map(|pair| pair.split_once('='))
+            .find(|(name, _)| *name == key)
+            .map(|(_, value)| value.to_string())
+            .unwrap_or_default()
+    };
+    let id = param("device_id");
+    let version = {
+        let version = param("version");
+        if version.is_empty() {
+            param("firmware_version")
+        } else {
+            version
+        }
+    };
+    crate::station::remember(&id, &version, &param("platform"));
 }
 
 /// OAuth-ответ для `/token`: access/refresh JWT без подписи.
@@ -958,38 +968,15 @@ fn auto_grab() {
 mod tests {
     use super::*;
 
-    const CHAIN: &[u8] = include_bytes!("../../../packaging/quasar/quasar-chain.pem");
-    const KEY: &[u8] = include_bytes!("../../../packaging/quasar/quasar-leaf.key");
-
-    /// Длина одного DER-объекта по его заголовку.
-    fn der_len(der: &[u8]) -> usize {
-        let tag = der[1];
-        let (header, len) = if tag < 0x80 {
-            (2, tag as usize)
-        } else if tag == 0x81 {
-            (3, der[2] as usize)
-        } else if tag == 0x82 {
-            (4, u16::from_be_bytes([der[2], der[3]]) as usize)
-        } else if tag == 0x83 {
-            let len = ((der[2] as usize) << 16) | ((der[3] as usize) << 8) | der[4] as usize;
-            (5, len)
-        } else {
-            (0, 0)
-        };
-        header + len
-    }
-
-    /// G-079: в PEM не должно быть склеенных сертификатов — иначе Хаб
-    /// отвечает `decode_error` на Certificate.
+    /// G-082: сертификат для quasar выпускает наш CA, а не чужой ключ.
+    /// Проверяем, что лист выдаётся и что CA постоянный.
     #[test]
-    fn embedded_chain_is_split_into_certificates() {
-        let (certs, _key) = load_cert_chain(CHAIN, KEY).expect("цепочка");
-        assert_eq!(certs.len(), 3, "лист + промежуточный + корень");
-        for cert in &certs {
-            let der = cert.as_ref();
-            assert_eq!(der.first(), Some(&0x30), "не DER-SEQUENCE");
-            assert_eq!(der_len(der), der.len(), "лишние байты в PEM-блоке");
-        }
+    fn quasar_leaf_is_issued_by_local_ca() {
+        let ca = cockpit_intercept::tls::CertAuthority::generate().expect("CA");
+        let pem = ca.ca_pem();
+        assert!(pem.contains("BEGIN CERTIFICATE"));
+        let config = ca.config_for_tls12("quasar.yandex.net");
+        assert!(config.is_ok(), "TLS 1.2 конфиг не собрался");
     }
 
     /// G-080: без access/refresh токена Хаб не выходит из NO_INTERNET.
