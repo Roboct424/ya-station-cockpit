@@ -105,6 +105,30 @@ fn push_log(line: impl Into<String>) {
 }
 
 /// Поднимает права: если мы не администратор — перезапускает себя через UAC.
+/// Версия уже запущенной панели на `port` (GET /api/about).
+pub fn about_version(port: u16) -> Option<String> {
+    use std::io::{Read, Write};
+    let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).ok()?;
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_millis(700)))
+        .ok()?;
+    stream
+        .write_all(
+            format!(
+                "GET /api/about HTTP/1.0\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
+            )
+            .as_bytes(),
+        )
+        .ok()?;
+    let mut response = String::new();
+    stream.read_to_string(&mut response).ok()?;
+    let body = response.split("\r\n\r\n").nth(1)?;
+    let json: serde_json::Value = serde_json::from_str(body).ok()?;
+    json.get("version")
+        .and_then(|value| value.as_str())
+        .map(str::to_string)
+}
+
 /// Открывает панель в браузере по умолчанию.
 pub fn open_browser(port: u16) {
     let url = format!("http://127.0.0.1:{port}/");

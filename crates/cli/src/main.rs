@@ -763,14 +763,33 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
         Cmd::Telemetry { cmd } => run_telemetry(&cfg, cmd),
         Cmd::Capture { cmd } => run_capture(&cfg, cmd),
         Cmd::Ui { port } => {
+            let mut port = port;
             if !ui::ensure_admin() {
                 return Ok(ExitCode::SUCCESS);
             }
-            // Если панель уже запущена — не падаем с «порт занят», а
-            // просто открываем её в браузере.
+            // Порт занят: если это та же версия — открываем её. Если старая
+            // панель — поднимаем новую на следующем свободном порту, иначе
+            // пользователь так и видит старый интерфейс.
             if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
-                ui::open_browser(port);
-                return Ok(ExitCode::SUCCESS);
+                let same = ui::about_version(port)
+                    .map(|version| version == env!("CARGO_PKG_VERSION"))
+                    .unwrap_or(false);
+                if same {
+                    ui::open_browser(port);
+                    return Ok(ExitCode::SUCCESS);
+                }
+                match (8791u16..=8809)
+                    .find(|p| std::net::TcpStream::connect(("127.0.0.1", *p)).is_err())
+                {
+                    Some(free) => {
+                        i18n::say(format!("старая панель на {port}; новая на {free}"));
+                        port = free;
+                    }
+                    None => {
+                        ui::open_browser(port);
+                        return Ok(ExitCode::SUCCESS);
+                    }
+                }
             }
             let browser_port = port;
             std::thread::spawn(move || {

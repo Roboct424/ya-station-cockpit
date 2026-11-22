@@ -42,6 +42,10 @@ cargo run -- journal tail           # что произошло
 поднимет панель на 8790 и откроет браузер. Справка CLI — `cockpit --help`,
 принудительный запуск панели — `cockpit ui --port 8790`.
 
+Если 8790 уже занят панелью **другой версии**, новая запустится на
+8791…8809 и откроет её — старую панель нужно закрыть вручную (её
+консольное окно).
+
 ### Шаг 2 «Настройка»
 
 Тип подключения и его настройка перенесены сюда, в общий конфиг:
@@ -178,6 +182,10 @@ live in `data/`. `bin/cockpit.exe` is the current build (rebuild with
 In the release zip, just run **`cockpit.exe` with no arguments**: it starts the
 panel on 8790 and opens the browser. CLI help: `cockpit --help`; force the
 panel: `cockpit ui --port 8790`.
+
+If 8790 is already occupied by a panel of a **different version**, the new one
+starts on 8791…8809 and opens it; close the old panel manually (its console
+window).
 
 ### Step 2 “Setup”
 
