@@ -61,6 +61,8 @@ pub fn family(id: &str) -> &'static str {
         "hub"
     } else if id.starts_with("M00GDW") {
         "mini2"
+    } else if id.starts_with("M01Y") {
+        "mini3"
     } else if id.starts_with("YNDX") {
         "station"
     } else {
@@ -68,10 +70,24 @@ pub fn family(id: &str) -> &'static str {
     }
 }
 
+/// Семейство с учётом платформы от самой станции.
+///
+/// У Mini 3 `device_id` начинается с `M01Y73`, но платформа `bergamot`
+/// надёжнее: по ней же выбираются скрипты шага 4.
+pub fn family_for(id: &str, platform: &str) -> &'static str {
+    match platform {
+        "bergamot" => "mini3",
+        "saturn" => "hub",
+        "yandexmini_2" => "mini2",
+        _ => family(id),
+    }
+}
+
 /// Платформа для запросов quasar, если её не прислали явно.
 pub fn platform_for(id: &str) -> &'static str {
     match family(id) {
         "hub" => "saturn",
+        "mini3" => "bergamot",
         _ => "",
     }
 }
@@ -81,6 +97,7 @@ pub fn family_title(family: &str) -> &'static str {
     match family {
         "hub" => "Station Hub",
         "mini2" => "Station Mini 2",
+        "mini3" => "Station Mini 3",
         "station" => "Station",
         _ => "",
     }
@@ -94,7 +111,16 @@ mod tests {
     fn family_by_prefix() {
         assert_eq!(family("S006NQ20034ZFW"), "hub");
         assert_eq!(family("M00GDW123456"), "mini2");
+        assert_eq!(family("M01Y73000AD77K"), "mini3");
         assert_eq!(family(""), "");
+    }
+
+    #[test]
+    fn family_for_prefers_platform() {
+        assert_eq!(family_for("M01Y73000AD77K", "bergamot"), "mini3");
+        assert_eq!(family_for("S006NQ20034ZFW", "saturn"), "hub");
+        assert_eq!(family_for("M00GDW123456", "yandexmini_2"), "mini2");
+        assert_eq!(family_for("M01Y73000AD77K", ""), "mini3");
     }
 
     #[test]

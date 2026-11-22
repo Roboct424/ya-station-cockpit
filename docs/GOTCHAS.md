@@ -1606,3 +1606,36 @@ factory-прошивка Mini 3.
 `y0__localCockpit`, а не с JWT (см. `data/attempts/attempt-001.log` и
 старый `local-ota`). Поэтому отдельная ветка «для Mini 2» не нужна:
 формат общий и совпадает с настоящим OAuth Яндекса.
+
+---
+
+## G-103. Mini 3: шаг 4 — свои пути и скрипты
+
+**Симптом.** Универсальные «Сторож ADB» и «Установить наш CA» писали в
+`/etc/init.d/S99adbguard` и `/etc/ssl/certs/ca-certificates.crt`. На
+Mini 3 это не работает: CA лежит в
+`/system/vendor/quasar/certs/ca-certificates.crt` (симлинк из
+`quasar/`), а `adbd` поднимается по маркерам в `/data/quasar`.
+
+**Семейство.** Mini 3 определяется по платформе `bergamot` (и по
+префиксу `device_id` `M01Y`). `station::family_for(id, platform)`
+используется и в шапке, и в наборе действий шага 4.
+
+**Скрипты** — `firmware/mini3/`:
+* `backup.sh` — копирует `/data/quasar/*`, `wpa_supplicant.conf`,
+  `version_full`, CA-бандл, `ota_script.pub`, `device_ota_update.sh`,
+  `launch.json`, init-скрипты в `/data/opt/backup/mini3-<время>` и
+  пакует в `.tgz`; панель сразу забирает архив в `data/backups`.
+* `guard.sh` — маркеры `activate_adb_quasmodrom` и
+  `activate_network_adb`, `chattr +i`, автозапуск
+  `/etc/init.d/S99cockpit-adb` и `activate_adb.sh --quasmodrom
+  --network activate`.
+* `ca.sh` — дописывает в retail-бандл корень AAA и наш `data/ca.pem`
+  (идемпотентно, оригинал в `/data/opt/backup/ca-certificates.crt.orig`).
+* `noupdate.sh` — `ota_script.pub` → чужой ключ,
+  `device_ota_update.sh` → заглушка, `--updatesd` из `launch.json`
+  (с проверкой и откатом). Проверка: `sh ... status`.
+
+Шаг 4 для Mini 3 показывает пять действий:
+«Снять бэкап», «Закрепить ADB», «Установить наш CA»,
+«Отключить обновления», «Убрать всё за собой».

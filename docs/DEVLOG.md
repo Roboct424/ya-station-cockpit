@@ -1279,3 +1279,17 @@ http=200 size=577
   регистрацию.
 * Формат общий для Hub и Mini 2: Mini 2 разблокировалась на таком же
   непрозрачном токене, отдельная ветка по модели не нужна.
+
+## 2026-11-23 - v1.6.8: шаг 4 для Mini 3
+
+* `firmware/mini3/`: `backup.sh`, `guard.sh`, `ca.sh`, `noupdate.sh`.
+  Пути Mini 3: `/system/vendor/quasar/certs/ca-certificates.crt`,
+  маркеры в `/data/quasar`, OTA через `device_ota_update.sh` и
+  `ota_script.pub`.
+* `station::family_for` знает `bergamot`/`M01Y` → `mini3`; шапка и
+  шаг 4 показывают Mini 3, а не «Station».
+* `adb.guard`, `ca.install`, `backup.pull` для Mini 3 запускают свои
+  скрипты; новый модуль `adb.noupdate` и кнопка «Отключить обновления»
+  (`/api/noupdate`).
+* Бэкап Mini 3 пакуется в `.tgz` на станции и сразу забирается в
+  `data/backups` ноутбука.

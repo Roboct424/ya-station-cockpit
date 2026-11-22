@@ -1118,6 +1118,7 @@ const MAINT_FN = {
   backup: () => backup(),
   guard: () => guard(),
   ca: () => caInstall(),
+  noupdate: () => noUpdate(),
   cleanup: () => cleanupAll()
 };
 
@@ -1190,6 +1191,13 @@ async function backup() {
   const r = await (await fetch('/api/backup', {method: 'POST', body: new URLSearchParams()})).json();
   $('o_maint').textContent = r.text || '';
   chip('r_maint', r.ok, r.ok ? 'бэкап готов' : 'ошибка');
+}
+
+async function noUpdate() {
+  chip('r_maint', false, 'отключаю…');
+  const r = await (await fetch('/api/noupdate', {method: 'POST', body: new URLSearchParams()})).json();
+  $('o_maint').textContent = r.text || '';
+  chip('r_maint', r.ok, r.ok ? 'обновления закрыты' : 'ошибка');
 }
 
 function renderPreset() {

@@ -626,6 +626,11 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
             let result = run_module("backup.pull", ctx);
             (200, "application/json", result)
         }
+        ("POST", "/api/noupdate") => {
+            let ctx = ctx_from(body);
+            let result = run_module("adb.noupdate", ctx);
+            (200, "application/json", result)
+        }
         ("POST", "/api/stack/start") => {
             let result = start_stack(body);
             (200, "application/json", result)
@@ -1827,7 +1832,7 @@ fn device_json() -> String {
             fresh
         }
     };
-    let family = crate::station::family(&device_id);
+    let family = crate::station::family_for(&device_id, &platform);
     let arch = station_arch(station.as_deref());
 
     // Что мы знаем про эту платформу: только проверенные прошивки.
@@ -2066,6 +2071,12 @@ fn maint_json(family: &str, _arch: &str) -> serde_json::Value {
             "системный якорь (MINI 2)",
             "снять сторож, вернуть /etc и hosts",
         ),
+        "mini3" => (
+            "/data/quasar, /data/wpa_supplicant.conf, /system/vendor/quasar/certs",
+            "маркеры в /data/quasar + chattr +i + S99cockpit-adb",
+            "AAA root и наш CA в /system/vendor/quasar/certs",
+            "снять маркеры, вернуть CA из /data/opt/backup",
+        ),
         _ => (
             "/data/quasar, /etc/hosts",
             "S99adbguard",
@@ -2073,12 +2084,24 @@ fn maint_json(family: &str, _arch: &str) -> serde_json::Value {
             "снять сторож, вернуть /etc и hosts",
         ),
     };
-    serde_json::json!([
-        {"id": "backup", "title": format!("Снять бэкап · {name}"), "hint": backup},
-        {"id": "guard", "title": format!("Закрепить ADB · {name}"), "hint": guard},
-        {"id": "ca", "title": format!("Установить наш CA · {name}"), "hint": ca},
-        {"id": "cleanup", "title": format!("Убрать всё за собой · {name}"), "hint": cleanup},
-    ])
+    let mut items = vec![
+        serde_json::json!({"id": "backup", "title": format!("Снять бэкап · {name}"), "hint": backup}),
+        serde_json::json!({"id": "guard", "title": format!("Закрепить ADB · {name}"), "hint": guard}),
+        serde_json::json!({"id": "ca", "title": format!("Установить наш CA · {name}"), "hint": ca}),
+    ];
+    if family == "mini3" {
+        items.push(serde_json::json!({
+            "id": "noupdate",
+            "title": format!("Отключить обновления · {name}"),
+            "hint": "ota_script.pub, device_ota_update.sh, updatesd"
+        }));
+    }
+    items.push(serde_json::json!({
+        "id": "cleanup",
+        "title": format!("Убрать всё за собой · {name}"),
+        "hint": cleanup
+    }));
+    serde_json::Value::Array(items)
 }
 
 fn stack_json() -> String {

@@ -246,8 +246,19 @@ fn ip_key(ip: &str) -> u32 {
     value
 }
 
+/// Мини 3 (bergamot) требует других путей и скриптов шага 4.
+fn is_mini3() -> bool {
+    let info = crate::station::load();
+    let platform = info.get("platform").and_then(|v| v.as_str()).unwrap_or("");
+    let id = info.get("device_id").and_then(|v| v.as_str()).unwrap_or("");
+    crate::station::family_for(id, platform) == "mini3"
+}
+
 fn backup_pull(ctx: &ModuleCtx) -> Result<String, String> {
     adb_connect(ctx)?;
+    if is_mini3() {
+        return backup_mini3(ctx);
+    }
     let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
     let dir = PathBuf::from("data").join("backups").join(&stamp);
     std::fs::create_dir_all(&dir).map_err(|e| format!("каталог бэкапа: {e}"))?;
@@ -273,6 +284,97 @@ fn backup_pull(ctx: &ModuleCtx) -> Result<String, String> {
     }
     log.push_str(&format!("каталог: {}", dir.display()));
     Ok(log)
+}
+
+fn backup_mini3(ctx: &ModuleCtx) -> Result<String, String> {
+    let script = PathBuf::from("firmware").join("mini3").join("backup.sh");
+    if !script.exists() {
+        return Err(format!("нет {}", script.display()));
+    }
+    adb(
+        ctx,
+        &["shell", "mkdir -p /data/opt/cockpit /data/opt/backup"],
+    )?;
+    adb_push(ctx, &script, "/data/opt/cockpit/backup.sh")?;
+    let out = adb(ctx, &["shell", "sh /data/opt/cockpit/backup.sh"])?;
+    let mut log = out.clone();
+    let remote = out
+        .lines()
+        .find_map(|line| line.strip_prefix("COCKPIT_BACKUP_TGZ="))
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if let Some(remote) = remote {
+        let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
+        let dir = PathBuf::from("data").join("backups");
+        std::fs::create_dir_all(&dir).map_err(|e| format!("каталог бэкапа: {e}"))?;
+        let local = dir.join(format!("mini3-{stamp}.tgz"));
+        let pull = Command::new(&ctx.adb)
+            .args(["-s", &ctx.addr, "pull", remote])
+            .arg(&local)
+            .output()
+            .map_err(|e| format!("adb pull: {e}"))?;
+        if pull.status.success() {
+            log.push_str(&format!("\nархив: {}", local.display()));
+        } else {
+            log.push_str(&format!(
+                "\nархив не забран: {}",
+                String::from_utf8_lossy(&pull.stderr)
+            ));
+        }
+    }
+    Ok(log)
+}
+
+fn guard_mini3(ctx: &ModuleCtx) -> Result<String, String> {
+    let script = PathBuf::from("firmware").join("mini3").join("guard.sh");
+    if !script.exists() {
+        return Err(format!("нет {}", script.display()));
+    }
+    adb(ctx, &["shell", "mkdir -p /data/opt/cockpit"])?;
+    adb_push(ctx, &script, "/data/opt/cockpit/guard.sh")?;
+    adb(ctx, &["shell", "sh /data/opt/cockpit/guard.sh"])
+}
+
+fn ca_install_mini3(ctx: &ModuleCtx) -> Result<String, String> {
+    const AAA: &str = include_str!("../assets/aaa-root.pem");
+    let script = PathBuf::from("firmware").join("mini3").join("ca.sh");
+    if !script.exists() {
+        return Err(format!("нет {}", script.display()));
+    }
+    let dir = std::env::temp_dir().join("cockpit-modules");
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let aaa = dir.join("aaa.pem");
+    std::fs::write(&aaa, AAA.replace("\r\n", "\n")).map_err(|e| e.to_string())?;
+
+    adb(ctx, &["shell", "mkdir -p /data/opt/cockpit"])?;
+    adb_push(ctx, &aaa, "/data/opt/cockpit/aaa.pem")?;
+    let mut log = String::new();
+    if ctx.ca_pem.exists() {
+        adb_push(ctx, &ctx.ca_pem, "/data/opt/cockpit/ca.pem")?;
+        log.push_str("наш CA: передан\n");
+    } else {
+        log.push_str(&format!(
+            "наш CA не найден ({}), ставлю только корень AAA\n",
+            ctx.ca_pem.display()
+        ));
+    }
+    adb_push(ctx, &script, "/data/opt/cockpit/ca.sh")?;
+    let out = adb(ctx, &["shell", "sh /data/opt/cockpit/ca.sh"])?;
+    log.push_str(&out);
+    Ok(log)
+}
+
+fn adb_noupdate(ctx: &ModuleCtx) -> Result<String, String> {
+    adb_connect(ctx)?;
+    let script = PathBuf::from("firmware").join("mini3").join("noupdate.sh");
+    if !script.exists() {
+        return Err(format!("нет {}", script.display()));
+    }
+    adb(ctx, &["shell", "mkdir -p /data/opt"])?;
+    adb_push(ctx, &script, "/data/opt/yandex-noupdate.sh")?;
+    let disable = adb(ctx, &["shell", "sh /data/opt/yandex-noupdate.sh disable"])?;
+    let status = adb(ctx, &["shell", "sh /data/opt/yandex-noupdate.sh status"])?;
+    Ok(format!("{disable}\n{status}"))
 }
 
 /// Ищет adb: переменная окружения, PATH, Android SDK, типовые папки.
@@ -447,6 +549,13 @@ pub const MODULES: &[Module] = &[
         needs_adb: true,
     },
     Module {
+        id: "adb.noupdate",
+        group: "ADB",
+        title: "Отключить обновления",
+        summary: "Подменяет ota_script.pub, глушит device_ota_update.sh, убирает updatesd",
+        needs_adb: true,
+    },
+    Module {
         id: "adb.ensure",
         group: "ADB",
         title: "ADB внутри программы",
@@ -502,6 +611,7 @@ pub fn run(id: &str, ctx: &ModuleCtx) -> Result<String, String> {
         "clock.sync" => clock_sync(ctx),
         "ota.serve" => ota_serve(ctx),
         "adb.guard" => adb_guard(ctx),
+        "adb.noupdate" => adb_noupdate(ctx),
         "adb.ensure" => adb_ensure(),
         "backup.pull" => backup_pull(ctx),
         "verify.configured" => verify_configured(ctx),
@@ -999,6 +1109,9 @@ echo "записей: $(grep -c 192.168.138.1 $H)"
 
 fn ca_install(ctx: &ModuleCtx) -> Result<String, String> {
     adb_connect(ctx)?;
+    if is_mini3() {
+        return ca_install_mini3(ctx);
+    }
     if !ctx.ca_pem.exists() {
         return Err(format!(
             "нет {} — запустите модуль OTA, он создаёт CA",
@@ -1082,6 +1195,9 @@ fn ota_serve(_ctx: &ModuleCtx) -> Result<String, String> {
 
 fn adb_guard(ctx: &ModuleCtx) -> Result<String, String> {
     adb_connect(ctx)?;
+    if is_mini3() {
+        return guard_mini3(ctx);
+    }
     let script = PathBuf::from("firmware").join("S99adbguard");
     if !script.exists() {
         return Err(format!("нет {}", script.display()));
