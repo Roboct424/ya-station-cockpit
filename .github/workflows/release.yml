@@ -32,13 +32,18 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path dist/cockpit | Out-Null
+          New-Item -ItemType Directory -Force -Path dist/cockpit/data/probe/quasar | Out-Null
           Copy-Item target/release/cockpit.exe, cockpit.cmd, cockpit.ps1, packaging/windows/README.txt dist/cockpit
+          Copy-Item data/probe/quasar/fake-quasar.py, data/probe/quasar/quasar-chain.pem, data/probe/quasar/quasar-leaf.key dist/cockpit/data/probe/quasar
           Compress-Archive -Path dist/cockpit/* -DestinationPath cockpit-windows-x86_64.zip
 
       - name: package (linux)
         if: runner.os == 'Linux'
-        run: tar -czf cockpit-linux-x86_64.tar.gz -C target/release cockpit
+        run: |
+          mkdir -p dist/cockpit/data/probe/quasar
+          cp target/release/cockpit dist/cockpit/
+          cp data/probe/quasar/fake-quasar.py data/probe/quasar/quasar-chain.pem data/probe/quasar/quasar-leaf.key dist/cockpit/data/probe/quasar/
+          tar -czf cockpit-linux-x86_64.tar.gz -C dist/cockpit .
 
       - uses: softprops/action-gh-release@v2
         with:

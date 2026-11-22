@@ -1027,3 +1027,23 @@ flex-shrink сжимал секцию ниже содержимого, а `overf
 
 `cockpit.ps1` больше не проверяет 8790 сам — он просто запускает
 `cockpit.exe` без аргументов и доверяет выбор порта программе.
+
+---
+
+## G-076. Хаб отвечает `NO_INTERNET` на `/connect` в релизе
+
+**Симптом.** В релизном zip панель находит Хаб (`/info` отдаёт uuid/mac),
+но `POST /connect` возвращает `error NO_INTERNET`.
+
+**Причина 1.** В zip не было `data/probe/quasar/fake-quasar.py`,
+`quasar-chain.pem`, `quasar-leaf.key`. `hub serve --mode sync` запускался
+без внешнего OpenSSL-quasar на 443, и Хабу некуда регистрироваться.
+
+**Причина 2.** `ensure_admin` повышал права через `Start-Process -Verb RunAs`
+без `-WorkingDirectory`. Elevated-процесс стартовал из
+`C:\Windows\System32`, создавал/искал `data/` не рядом с exe и не видел
+quasar даже при наличии файлов.
+
+**Исправление.** В Windows-zip и Linux-tar добавлены файлы
+`data/probe/quasar/*`; `ensure_admin` передаёт текущий каталог в
+`-WorkingDirectory`. Для запуска quasar нужен Python 3 в PATH.

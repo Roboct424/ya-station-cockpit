@@ -1031,3 +1031,13 @@ http=200 size=577
   quasar; если нет — поднимает `hub serve --mode sync` и ждёт 1.5 с.
   Это убирает ситуацию, когда Хаб после Ethernet уходит в «нет интернета»,
   потому что локальный quasar не был запущен.
+
+## 2026-11-22 - v1.2.7: quasar в релизе и рабочий каталог при UAC
+
+* Причина `NO_INTERNET` на Хабе: в релизном zip не было
+  `data/probe/quasar/fake-quasar.py` (+ chain/key), поэтому локальный
+  quasar на 443 не запускался.
+* `ensure_admin` передаёт `-WorkingDirectory` при повышении прав: раньше
+  elevated-процесс стартовал из `C:\Windows\System32` и не видел `data/`.
+* В Windows-zip и Linux-tar добавлены `data/probe/quasar/*`; в README
+  релиза указано, что нужен Python 3 (панель запускает fake-quasar.py).

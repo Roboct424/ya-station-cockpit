@@ -167,10 +167,19 @@ pub fn ensure_admin() -> bool {
             .map(|a| format!("'{}'", a.replace('\'', "''")))
             .collect::<Vec<_>>()
             .join(",");
+        // GOTCHA: без -WorkingDirectory повышенный процесс стартует с
+        // C:\Windows\System32 и не находит data/probe/quasar, из-за чего
+        // Хаб получает NO_INTERNET. Передаём текущий каталог явно.
+        let cwd = std::env::current_dir().unwrap_or_else(|_| {
+            exe.parent()
+                .map(std::path::Path::to_path_buf)
+                .unwrap_or_default()
+        });
+        let exe_text = exe.display().to_string().replace('\'', "''");
+        let cwd_text = cwd.display().to_string().replace('\'', "''");
         let script = format!(
-            "$env:COCKPIT_ELEVATED='1'; Start-Process -Verb RunAs -FilePath '{}' -ArgumentList {}",
-            exe.display(),
-            quoted
+            "$env:COCKPIT_ELEVATED='1'; Start-Process -Verb RunAs -FilePath '{}' -WorkingDirectory '{}' -ArgumentList {}",
+            exe_text, cwd_text, quoted
         );
         let launched = std::process::Command::new("powershell")
             .args(["-NoProfile", "-NonInteractive", "-Command", &script])
