@@ -78,7 +78,64 @@ pub fn start(cfg: &ApConfig) -> Result<String, NetError> {
         )));
     }
 
-    Ok(band_name.to_string())
+    // WinRT поднимает радио, но общий доступ (ICS) не всегда настраивает:
+    // тогда телефон подключается к сети и не получает адрес. Настраиваем
+    // сами: uplink — публичный, интерфейс точки — частный.
+    let ics = ensure_ics();
+    Ok(format!("{band_name}; {ics}"))
+}
+
+/// Включает ICS между интернет-адаптером и интерфейсом точки доступа.
+fn ensure_ics() -> String {
+    let script = r#"
+$ErrorActionPreference = 'SilentlyContinue'
+$share = New-Object -ComObject HNetCfg.HNetShare
+if (-not $share) { 'нет HNetCfg'; exit 1 }
+$uplink = (Get-NetRoute -DestinationPrefix '0.0.0.0/0' | Sort-Object RouteMetric | Select-Object -First 1).InterfaceAlias
+$apIp = Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -eq '192.168.137.1' } | Select-Object -First 1
+if (-not $apIp) { 'точка ещё без адреса'; exit 1 }
+$ap = $apIp.InterfaceAlias
+if ($uplink -eq $ap) { 'uplink совпал с точкой'; exit 1 }
+$pub = $null; $priv = $null
+foreach ($c in $share.EnumEveryConnection) {
+  $n = $share.NetConnectionProps($c).Name
+  if ($n -eq $uplink) { $pub = $c }
+  if ($n -eq $ap) { $priv = $c }
+}
+if (-not $pub) { 'не нашёл интернет-адаптер'; exit 1 }
+if (-not $priv) { 'не нашёл интерфейс точки'; exit 1 }
+# Другие частные сети (например, Ethernet) гасим: частная может быть одна.
+foreach ($c in $share.EnumEveryConnection) {
+  $n = $share.NetConnectionProps($c).Name
+  if ($n -ne $uplink -and $n -ne $ap) {
+    $cfg = $share.INetSharingConfigurationForINetConnection($c)
+    if ($cfg.SharingEnabled) { $cfg.DisableSharing() }
+  }
+}
+$share.INetSharingConfigurationForINetConnection($pub).EnableSharing(0)
+$share.INetSharingConfigurationForINetConnection($priv).EnableSharing(1)
+'общий доступ включён'
+"#;
+    let out = std::process::Command::new("powershell")
+        .args([
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ])
+        .output();
+    match out {
+        Ok(out) => {
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            text.trim().to_string()
+        }
+        Err(error) => format!("общий доступ не настроен: {error}"),
+    }
 }
 
 pub fn stop() -> Result<(), NetError> {

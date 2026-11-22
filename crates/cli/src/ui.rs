@@ -565,6 +565,9 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
             (200, "application/json", result)
         }
         ("POST", "/api/hotspot") => {
+            // Точка доступа и проводной стек несовместимы: у ICS и нашего
+            // DHCP один порт 67, а DNS — 53. Гасим hub serve перед стартом.
+            kill_child(&HUB_CHILD);
             let ctx = ctx_from(body);
             let result = run_module("net.hotspot", ctx);
             (200, "application/json", result)
@@ -2634,7 +2637,14 @@ fn hub_serve(body: &str) -> String {
     };
     let safe_adapter = adapter.replace('\'', "''");
     let cleanup = format!(
+        // G-078: гасим ICS целиком — и службу, и старую конфигурацию
+        // общего доступа. Иначе Windows держит Ethernet «частной сетью»
+        // ICS и точка доступа потом не получает DHCP/NAT.
         "Stop-Service SharedAccess -Force -ErrorAction SilentlyContinue; \
+         $share = New-Object -ComObject HNetCfg.HNetShare -ErrorAction SilentlyContinue; \
+         if ($share) {{ foreach ($c in $share.EnumEveryConnection) {{ \
+           $cfg = $share.INetSharingConfigurationForINetConnection($c); \
+           if ($cfg.SharingEnabled) {{ $cfg.DisableSharing() }} }} }}; \
          Set-NetIPInterface -InterfaceAlias '{safe_adapter}' -AddressFamily IPv4 -Forwarding Disabled -ErrorAction SilentlyContinue"
     );
     let _ = std::process::Command::new("powershell")
