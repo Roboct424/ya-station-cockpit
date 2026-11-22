@@ -537,83 +537,48 @@ fn http_loop() {
 // ------------------------------------------------------------- quasar ------
 
 fn quasar_loop() {
-    let Ok(chain) = load_cert_chain() else {
-        log("quasar: не загрузились сертификаты data/certs/p384_wide_sha384.*");
-        return;
+    // Нативный TLS (Schannel на Windows, OpenSSL на Linux) — тот же
+    // стек, что был у рабочего OpenSSL-сервера, но без Python.
+    const CHAIN: &[u8] = include_bytes!("../../../packaging/quasar/quasar-chain.pem");
+    const KEY: &[u8] = include_bytes!("../../../packaging/quasar/quasar-leaf.key");
+    let identity = match native_tls::Identity::from_pkcs8(CHAIN, KEY) {
+        Ok(identity) => identity,
+        Err(error) => {
+            log(&format!("quasar: сертификат: {error}"));
+            return;
+        }
     };
-    let config =
-        match rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS12])
-            .with_no_client_auth()
-            .with_single_cert(chain.0, chain.1)
-        {
-            Ok(c) => Arc::new(c),
-            Err(error) => {
-                log(&format!("quasar: конфиг TLS: {error}"));
-                return;
-            }
-        };
+    let acceptor = match native_tls::TlsAcceptor::new(identity) {
+        Ok(acceptor) => Arc::new(acceptor),
+        Err(error) => {
+            log(&format!("quasar: конфиг TLS: {error}"));
+            return;
+        }
+    };
     let Ok(listener) = TcpListener::bind(("0.0.0.0", 443)) else {
         log("quasar: порт 443 занят");
         return;
     };
-    log("quasar: TLS 1.2 на 0.0.0.0:443");
+    log("quasar: TLS на 0.0.0.0:443 (native-tls)");
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
-        let config = Arc::clone(&config);
+        let acceptor = Arc::clone(&acceptor);
         thread::spawn(move || {
             let peer = stream
                 .peer_addr()
                 .map(|a| a.to_string())
                 .unwrap_or_default();
-            log(&format!("quasar: TCP от {peer}"));
-            let mut conn = match rustls::ServerConnection::new(config) {
-                Ok(conn) => conn,
-                Err(e) => {
-                    log(&format!("quasar: конфиг TLS: {e}"));
+            let mut tls = match acceptor.accept(stream) {
+                Ok(tls) => tls,
+                Err(error) => {
+                    log(&format!("quasar: рукопожатие с {peer} не удалось: {error}"));
                     return;
                 }
             };
-            let mut stream = stream;
-            loop {
-                if !conn.is_handshaking() {
-                    break;
-                }
-                match conn.complete_io(&mut stream) {
-                    Ok(_) => {}
-                    Err(e) => {
-                        log(&format!("quasar: рукопожатие с {peer} не удалось: {e}"));
-                        return;
-                    }
-                }
-            }
-            let mut tls = rustls::StreamOwned::new(conn, stream);
-            let sni = tls.conn.server_name().unwrap_or("(без SNI)").to_string();
-            log(&format!("quasar: подключение SNI={sni}"));
+            log(&format!("quasar: подключение {peer}"));
             let _ = handle_quasar(&mut tls);
         });
     }
-}
-
-fn load_cert_chain() -> Result<
-    (
-        Vec<rustls::pki_types::CertificateDer<'static>>,
-        rustls::pki_types::PrivateKeyDer<'static>,
-    ),
-    (),
-> {
-    use rustls::pki_types::pem::PemObject;
-    // Сертификат и ключ вшиты в бинарник: релиз не зависит от внешних
-    // файлов и Python-скрипта. Это те же p384_wide_sha384, что и раньше.
-    const CHAIN: &[u8] = include_bytes!("../../../packaging/quasar/quasar-chain.pem");
-    const KEY: &[u8] = include_bytes!("../../../packaging/quasar/quasar-leaf.key");
-    let certs: Vec<_> = rustls::pki_types::CertificateDer::pem_slice_iter(CHAIN)
-        .filter_map(Result::ok)
-        .collect();
-    let key = rustls::pki_types::PrivateKeyDer::from_pem_slice(KEY).map_err(|_| ())?;
-    if certs.is_empty() {
-        return Err(());
-    }
-    Ok((certs, key))
 }
 
 /// Счётчик дампов: имя файла не должно повторяться.
@@ -631,9 +596,7 @@ fn dump_probe(kind: &str, content: &str) {
     let _ = std::fs::write(dir.join(name), content);
 }
 
-fn handle_quasar(
-    stream: &mut rustls::StreamOwned<rustls::ServerConnection, TcpStream>,
-) -> std::io::Result<()> {
+fn handle_quasar(stream: &mut (impl Read + Write)) -> std::io::Result<()> {
     let mut head = Vec::new();
     let mut byte = [0u8; 1];
     while !head.ends_with(b"\r\n\r\n") && head.len() < 8192 {
@@ -676,7 +639,7 @@ fn handle_quasar(
         }
         payload.truncate(read);
     }
-    let sni = stream.conn.server_name().unwrap_or("(без SNI)").to_string();
+    let sni = "(native-tls)";
     let dump = format!(
         "время: {}\nSNI: {sni}\n\n{}\n--- тело ({} Б) ---\n{}\n--- hex ---\n{}\n",
         chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
@@ -705,11 +668,7 @@ fn handle_quasar(
     respond(stream, 200, &body)
 }
 
-fn respond(
-    stream: &mut rustls::StreamOwned<rustls::ServerConnection, TcpStream>,
-    code: u16,
-    body: &[u8],
-) -> std::io::Result<()> {
+fn respond(stream: &mut impl Write, code: u16, body: &[u8]) -> std::io::Result<()> {
     let reason = match code {
         200 => "OK",
         503 => "Service Unavailable",
