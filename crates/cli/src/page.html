@@ -247,6 +247,7 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
         <label>SSID</label><input type="text" id="ssid" value="YaRig">
         <label>Пароль (не короче 8 символов)</label><input type="text" id="pass" value="11111111">
         <button class="act" id="btnAp" onclick="hotspot()">Поднять точку доступа</button>
+        <button class="act ghost" id="btnApStop" onclick="hotspotStop()">Остановить точку</button>
         <span id="r_ap" class="chip wait">не выполнялось</span>
       </div>
       <div class="col"><p class="hint" id="ap_hint"></p></div>
@@ -343,6 +344,9 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
   </div>
 
   <button class="act apply" id="btnApply" onclick="applyAndRestart()">Применить и перезапустить стек</button>
+  <div style="display:flex;justify-content:flex-end;margin-top:4px">
+    <button class="act" onclick="nextFromSetup()">Далее: попытка →</button>
+  </div>
   <p class="hint" id="apply_hint" style="text-align:center"></p>
 </section>
 
@@ -799,7 +803,28 @@ async function hotspot() {
   $('btnAp').disabled = false;
   chip('r_ap', r.ok, r.ok ? 'точка поднята' : 'ошибка');
   $('ap_hint').textContent = r.text || '';
+  if (r.ok) {
+    // Станции в звуковом коде уходит ровно та сеть, которую подняли.
+    $('pssid').value = $('ssid').value;
+    $('ppass').value = $('pass').value;
+    append('точка: SSID «' + $('ssid').value + '», пароль ' + $('pass').value.length + ' симв.');
+  }
   state();
+}
+
+async function hotspotStop() {
+  const btn = $('btnApStop');
+  if (btn) btn.disabled = true;
+  chip('r_ap', false, 'останавливаю…');
+  try {
+    const r = await (await fetch('/api/hotspot/stop', {method: 'POST', body: ''})).json();
+    chip('r_ap', r.ok, r.ok ? 'точка остановлена' : 'ошибка');
+    $('ap_hint').textContent = r.text || '';
+  } catch (e) {
+    chip('r_ap', false, 'ошибка');
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 }
 
 function toggleLink() {
@@ -1199,6 +1224,7 @@ async function applyAndRestart() {
     update: updating ? '1' : '0',
     version: updating ? fw.value : '',
     platform: LAST_PLATFORM || '',
+    link: $('link').value,
     firmware_path: ''
   });
   if (($('model').value || '').includes('Hub')) {
@@ -1226,6 +1252,16 @@ async function applyAndRestart() {
   append(r.ok ? 'стек перезапущен с новыми параметрами: ' + r.routes + ' маршрутов'
               : 'ошибка запуска: ' + r.text);
   if (r.ok) document.querySelector('.tabs button[data-tab="s3"]').click();
+}
+
+/// «Далее» на шаге 2: если стек ещё не применили — применяем и запускаем,
+/// потом переходим к попытке. Раньше это делала только большая кнопка.
+async function nextFromSetup() {
+  if (!_applied) {
+    await applyAndRestart();
+    return;
+  }
+  goTab('s3');
 }
 
 async function stopStack() {

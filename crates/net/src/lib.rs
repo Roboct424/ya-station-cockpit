@@ -424,3 +424,15 @@ pub fn platform_adapter(runner: Arc<dyn CommandRunner>) -> Box<dyn NetAdapter> {
 pub fn default_adapter() -> Box<dyn NetAdapter> {
     platform_adapter(Arc::new(SystemRunner))
 }
+
+/// Включена ли точка доступа Windows прямо сейчас.
+pub fn hotspot_is_on() -> bool {
+    #[cfg(windows)]
+    {
+        winrt_hotspot::is_on()
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}

@@ -600,6 +600,27 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
             let result = run_module("net.hotspot", ctx);
             (200, "application/json", result)
         }
+        ("POST", "/api/hotspot/stop") => {
+            let adapter = cockpit_net::default_adapter();
+            let result = adapter.stop_hotspot(&cockpit_net::ApHandle {
+                iface: "mobile-hotspot".into(),
+            });
+            let (ok, text) = match result {
+                Ok(()) => {
+                    push_log("точка доступа остановлена");
+                    (true, "точка доступа остановлена".to_string())
+                }
+                Err(error) => {
+                    push_log(format!("✗ точка доступа: {error}"));
+                    (false, error.to_string())
+                }
+            };
+            (
+                200,
+                "application/json",
+                serde_json::json!({ "ok": ok, "text": text }).to_string(),
+            )
+        }
         ("POST", "/api/backup") => {
             let ctx = ctx_from(body);
             let result = run_module("backup.pull", ctx);
@@ -2215,6 +2236,20 @@ fn start_stack(body: &str) -> String {
         "▶ стек: маршрутов {count}, прошивка {version}, платформа {platform}, сертификатов {certs}"
     ));
 
+    // Wi-Fi AP: ICS-DNS отдаёт станции настоящие адреса Яндекса, поэтому
+    // без этих адресов на ноутбуке её запросы уходят в облако мимо нас
+    // (G-048). Для провода не нужно — там свой DNS.
+    if field(body, "link") == "wifi" {
+        let mut ctx = ctx_from(body);
+        if ctx.ethernet.is_empty() {
+            ctx.ethernet = "Ethernet".to_string();
+        }
+        match crate::modules::run("net.yandex-ips", &ctx) {
+            Ok(out) => push_log(format!("  адреса облака на ноутбуке: {}", out.trim())),
+            Err(error) => push_log(format!("  адреса облака не добавлены: {error}")),
+        }
+    }
+
     let exe = std::env::current_exe().unwrap_or_else(|_| "cockpit".into());
     let log = std::fs::File::create("data/ota.log").ok();
     let err = log.as_ref().and_then(|f| f.try_clone().ok());
@@ -2289,6 +2324,12 @@ fn stop_stack() -> String {
             .output();
         push_log(format!("■ стек остановлен (pid {pid})"));
     }
+    // Убираем адреса облака, которые вешали для Wi-Fi-перехвата.
+    let ctx = ModuleCtx {
+        ethernet: "Ethernet".to_string(),
+        ..ModuleCtx::default()
+    };
+    let _ = crate::modules::run("net.yandex-ips-off", &ctx);
     if let Ok(mut s) = stack_state().lock() {
         s.running = false;
     }
@@ -2676,6 +2717,15 @@ fn hub_stop() -> String {
 /// Локальный quasar на 443 встроен в бинарник (G-077); ICC/ICS
 /// выключается, чтобы Windows DHCP не конфликтовал с нашим (G-078).
 fn hub_serve(body: &str) -> String {
+    // Точка доступа Windows держит 53/67 через ICS: наш DNS/DHCP не
+    // поднимутся, а прежнее поведение ещё и гасило саму точку — станция
+    // теряла сеть прямо во время сопряжения.
+    if cockpit_net::hotspot_is_on() {
+        let text =
+            "точка доступа включена — сначала остановите её (шаг 2), потом запускайте службу Хаба";
+        push_log(format!("✗ {text}"));
+        return serde_json::json!({ "ok": false, "text": text }).to_string();
+    }
     let mode = match field(body, "mode").as_str() {
         // base и setup — общие службы без перехвата адресов
         "base" | "setup" => "setup",
