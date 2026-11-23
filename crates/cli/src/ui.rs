@@ -432,6 +432,63 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
         ("GET", "/api/profile") => (200, "application/json", profile_json()),
         ("POST", "/api/profile") => (200, "application/json", set_profile(body)),
         ("GET", "/api/firmwares") => (200, "application/json", firmwares_json()),
+        ("POST", "/api/firmware/fetch") => {
+            let platform = field(body, "platform");
+            let version = field(body, "version");
+            if platform.is_empty() || version.is_empty() {
+                return (
+                    200,
+                    "application/json",
+                    serde_json::json!({
+                        "ok": false,
+                        "text": "нужны platform и version"
+                    })
+                    .to_string(),
+                );
+            }
+            let exe = std::env::current_exe().unwrap_or_else(|_| "cockpit".into());
+            let p = platform.clone();
+            let v = version.clone();
+            let _ = std::fs::create_dir_all("data");
+            std::thread::spawn(move || {
+                let out = std::process::Command::new(exe)
+                    .args([
+                        "ota",
+                        "fetch",
+                        "--manifest",
+                        "data/manifests.json",
+                        "--platform",
+                        &p,
+                        "--version",
+                        &v,
+                    ])
+                    .output();
+                let text = match out {
+                    Ok(out) => format!(
+                        "{}\n{}",
+                        String::from_utf8_lossy(&out.stdout),
+                        String::from_utf8_lossy(&out.stderr)
+                    ),
+                    Err(error) => format!("{error}"),
+                };
+                let _ = std::fs::write("data/firmware-fetch.log", text);
+                let src = format!("data/ota/{p}/{v}.zip");
+                let dst = format!("firmware/{v}.zip");
+                if std::path::Path::new(&src).exists() {
+                    let _ = std::fs::create_dir_all("firmware");
+                    let _ = std::fs::copy(&src, &dst);
+                }
+            });
+            (
+                200,
+                "application/json",
+                serde_json::json!({
+                    "ok": true,
+                    "text": "скачивание с официального CDN началось"
+                })
+                .to_string(),
+            )
+        }
         ("POST", "/api/db") => (200, "application/json", fetch_db(body)),
         ("GET", "/api/device") => (200, "application/json", device_json()),
         ("GET", "/api/advice") => (200, "application/json", advice_json()),
@@ -1264,8 +1321,20 @@ fn firmwares_json() -> String {
 }
 
 fn local_file(version: &str) -> bool {
-    std::path::Path::new(&format!("firmware/{version}.zip.off")).exists()
+    if std::path::Path::new(&format!("firmware/{version}.zip.off")).exists()
         || std::path::Path::new(&format!("firmware/{version}.zip")).exists()
+    {
+        return true;
+    }
+    if let Ok(entries) = std::fs::read_dir("data/ota") {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() && path.join(format!("{version}.zip")).exists() {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn platform_for_model(model: &str) -> String {
@@ -2002,8 +2071,7 @@ fn known_firmware(platform: &str) -> Vec<(String, bool, bool)> {
             continue;
         };
         let adb = item.get("adb").and_then(|v| v.as_bool()).unwrap_or(false);
-        let local = std::path::Path::new(&format!("firmware/{version}.zip.off")).exists()
-            || std::path::Path::new(&format!("firmware/{version}.zip")).exists();
+        let local = local_file(version);
         out.push((version.to_string(), adb, local));
     }
     out
