@@ -1313,3 +1313,12 @@ http=200 size=577
 * Проверено: `/data/opt/backup/mini3-<время>` снят, CA-оригинал сохранён,
   после bind-mount станция принимает `noroot`, `/get_sync_info` отдаёт
   `adbd`, ADB root работает.
+
+## 2026-11-23 - v1.6.11: firmware в релизе
+
+* Windows-zip и Linux-tar теперь содержат `firmware/` (S99adbguard и
+  скрипты Mini 3). Раньше шаг 4 не находил их рядом с exe.
+* `os error 3` на живой машине был из-за отключённого `F:`: программа и
+  `data/` лежали на съёмном диске. Рабочая копия перенесена в
+  `%LOCALAPPDATA%\cockpit`, точка доступа поднята заново, ADB root и
+  bind-mount CA на станции сохранились.
