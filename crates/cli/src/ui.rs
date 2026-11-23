@@ -491,6 +491,44 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
         }
         ("POST", "/api/db") => (200, "application/json", fetch_db(body)),
         ("GET", "/api/device") => (200, "application/json", device_json()),
+        ("GET", "/api/stations") => {
+            let items: Vec<_> = crate::modules::find_stations()
+                .iter()
+                .map(|s| {
+                    serde_json::json!({
+                        "ip": s.ip,
+                        "mac": s.mac,
+                        "adb": s.adb,
+                        "https": s.https,
+                        "http": s.http
+                    })
+                })
+                .collect();
+            let selected = crate::modules::manual_station_ip().unwrap_or_default();
+            (
+                200,
+                "application/json",
+                serde_json::json!({ "items": items, "selected": selected }).to_string(),
+            )
+        }
+        ("POST", "/api/station") => {
+            let ip = field(body, "ip");
+            let _ = std::fs::create_dir_all("data");
+            let path = std::path::Path::new("data/station_ip");
+            let text = if ip.is_empty() {
+                let _ = std::fs::remove_file(path);
+                "авто".to_string()
+            } else {
+                let _ = std::fs::write(path, &ip);
+                format!("выбрана {ip}")
+            };
+            push_log(format!("станция: {text}"));
+            (
+                200,
+                "application/json",
+                serde_json::json!({ "ok": true, "text": text }).to_string(),
+            )
+        }
         ("GET", "/api/advice") => (200, "application/json", advice_json()),
         ("GET", "/api/adapters") => (200, "application/json", adapters_json()),
         ("GET", "/api/ble") => (200, "application/json", ble_json()),
@@ -1918,6 +1956,7 @@ fn device_json() -> String {
     let model = match family {
         "hub" => "Station Hub (Yandex Saturn)".to_string(),
         "mini2" => "Station Mini 2 (YNDX-00020)".to_string(),
+        "mini3" => "Station Mini 3 (YNDX-00027)".to_string(),
         _ if device_id.is_empty() => "не определена".to_string(),
         _ => device_id.clone(),
     };

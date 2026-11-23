@@ -384,6 +384,18 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
         <span id="r_pair" class="chip wait">не выполнялось</span>
       </div>
 
+      <div class="card" id="stations_card">
+        <h2>Станции в сети</h2>
+        <div class="row">
+          <select id="station_pick" onchange="selectStation(this.value)">
+            <option value="">авто</option>
+          </select>
+          <button class="act ghost" onclick="loadStations()">Обновить</button>
+        </div>
+        <p class="hint" id="stations_hint">если к точке подключено несколько
+        станций, выберите нужную — ADB и шаг 4 относятся только к ней.</p>
+      </div>
+
       <div class="card" id="station_card">
         <h2>Станция</h2>
         <div id="dev" class="box muted">…</div>
@@ -431,7 +443,7 @@ document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
   const bar = $('progress');
   if (bar) bar.style.display = b.dataset.tab === 's1' ? 'block' : 'none';
   updateProgress();
-  state(); stackState(); loadDevice(); loadAdvice(); loadAbout();
+  state(); stackState(); loadDevice(); loadStations(); loadAdvice(); loadAbout();
   // Терминал должен начать жить сразу, а не через секунду.
   poll(); pollHub(); pollStack();
 });
@@ -1076,6 +1088,30 @@ async function loadAdvice() {
   // Подсветка рекомендаций в блоке регистрации.
   const rec = document.querySelector(`input[name=reg][value=${j.recommend.reg}]`);
   if (rec) rec.parentElement.style.background = '#16261c';
+}
+
+async function loadStations() {
+  const j = await (await fetch('/api/stations')).json();
+  const sel = $('station_pick');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">авто</option>' + j.items.map(s =>
+    `<option value="${s.ip}">${s.ip} · ${s.mac}${s.adb ? ' · ADB' : ''}</option>`).join('');
+  sel.value = j.selected || '';
+  const hint = $('stations_hint');
+  if (j.items.length > 1) {
+    hint.innerHTML = '<span class="err">В сети несколько станций — выберите нужную. ADB и шаг 4 относятся только к ней.</span>';
+  } else if (j.items.length === 1) {
+    hint.textContent = 'найдена: ' + j.items[0].ip;
+  } else {
+    hint.textContent = 'станции не найдены';
+  }
+}
+
+async function selectStation(ip) {
+  await fetch('/api/station', {method: 'POST', body: new URLSearchParams({ip})});
+  await loadStations();
+  await loadDevice();
+  await loadAbout();
 }
 
 async function loadDevice() {

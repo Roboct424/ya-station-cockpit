@@ -139,6 +139,81 @@ pub fn manual_station_ip() -> Option<String> {
     }
 }
 
+/// Найденная в сети станция (для выбора, если их несколько).
+pub struct FoundStation {
+    pub ip: String,
+    pub mac: String,
+    pub adb: bool,
+    pub https: bool,
+    pub http: bool,
+}
+
+fn tcp_alive(ip: &str, port: u16) -> bool {
+    use std::net::{SocketAddr, TcpStream};
+    use std::time::Duration;
+    match format!("{ip}:{port}").parse::<SocketAddr>() {
+        Ok(addr) => TcpStream::connect_timeout(&addr, Duration::from_millis(250)).is_ok(),
+        Err(_) => false,
+    }
+}
+
+/// Все станции Яндекса в наших подсетях (точка доступа и провод).
+///
+/// Нужно, когда к точке подключены две колонки: панель не должна
+/// молча выбирать одну — пользователь выбирает сам.
+pub fn find_stations() -> Vec<FoundStation> {
+    let out = if cfg!(windows) {
+        Command::new("arp").args(["-a"]).output()
+    } else {
+        Command::new("ip").args(["neigh"]).output()
+    };
+    let Ok(out) = out else { return Vec::new() };
+    let text = String::from_utf8_lossy(&out.stdout).to_string();
+    let mut items: Vec<FoundStation> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for line in text.lines() {
+        let mut parts = line.split_whitespace();
+        let Some(ip) = parts.next() else { continue };
+        if ip.matches('.').count() != 3 {
+            continue;
+        }
+        if !(ip.starts_with("192.168.137.") || ip.starts_with("192.168.138.")) {
+            continue;
+        }
+        let Some(mac) = parts.next() else { continue };
+        if !mac.contains('-') && !mac.contains(':') {
+            continue;
+        }
+        let mac = mac.to_lowercase().replace(':', "-");
+        let yandex = mac.starts_with("b8-87-6e")
+            || mac.starts_with("3c-0b-4f")
+            || mac.starts_with("ac-ba-c0");
+        if !yandex || !seen.insert(ip.to_string()) {
+            continue;
+        }
+        items.push(FoundStation {
+            ip: ip.to_string(),
+            mac,
+            adb: tcp_alive(ip, 5555),
+            https: tcp_alive(ip, 443),
+            http: tcp_alive(ip, 80),
+        });
+    }
+    items.sort_by_key(|s| {
+        let rank = if s.adb {
+            0
+        } else if s.https {
+            1
+        } else if s.http {
+            2
+        } else {
+            3
+        };
+        (rank, ip_key(&s.ip))
+    });
+    items
+}
+
 /// Ищет станцию в ARP-таблице по её MAC (b8:87:6e).
 pub fn find_station() -> Option<String> {
     // Ручной адрес важнее автоопределения.
@@ -194,8 +269,10 @@ pub fn find_station() -> Option<String> {
     let mut yandex: Vec<String> = by_mac
         .iter()
         .filter(|(mac, ip)| {
-            (mac.starts_with("b8-87-6e") || mac.starts_with("3c-0b-4f"))
-                && ip.starts_with("192.168.138.")
+            (mac.starts_with("b8-87-6e")
+                || mac.starts_with("3c-0b-4f")
+                || mac.starts_with("ac-ba-c0"))
+                && (ip.starts_with("192.168.138.") || ip.starts_with("192.168.137."))
         })
         .map(|(_, ip)| ip.clone())
         .collect();
@@ -214,7 +291,7 @@ pub fn find_station() -> Option<String> {
     // 192.168.138.0/24. Иначе в кандидаты попадут чужие устройства из Wi-Fi.
     let candidates: Vec<String> = by_mac
         .values()
-        .filter(|ip| ip.starts_with("192.168.138."))
+        .filter(|ip| ip.starts_with("192.168.138.") || ip.starts_with("192.168.137."))
         .filter(|ip| !ip.ends_with(".1") && !ip.ends_with(".255"))
         .cloned()
         .collect();

@@ -1076,7 +1076,10 @@ fn handle_quasar(stream: &mut (impl Read + Write)) -> std::io::Result<()> {
     log(&format!("{host}{path} ({} Б)", payload.len()));
 
     // Кто именно стучится: панель показывает это на шаге 4.
-    if path.contains("/check_updates") || path.contains("/register") {
+    if path.contains("/check_updates")
+        || path.contains("/register")
+        || path.contains("/get_sync_info")
+    {
         remember_from_query(path);
     }
 
