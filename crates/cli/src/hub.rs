@@ -501,6 +501,12 @@ fn dhcp_loop() {
         return;
     };
     log("DHCP: слушаю 0.0.0.0:67");
+    // Ответы шлём с адреса проводной подсети. Иначе Windows выбирает
+    // облачный алиас 213.180.193.78/32, и Хаб отвергает OFFER: источник
+    // не из его подсети (видно как DISCOVER → OFFER → тишина).
+    if let Ok(tx) = udp_reuse((SERVER_IP.octets(), 67)) {
+        let _ = TX.set(tx);
+    }
     dhcp_recv(rx);
 }
 

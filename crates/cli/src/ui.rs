@@ -1438,7 +1438,8 @@ fn adapters_json() -> String {
     let script = format!(
         "$json = Get-NetAdapter | Where-Object Status -eq 'Up' | ForEach-Object {{ \
            $ip = Get-NetIPAddress -InterfaceIndex $_.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | \
-                 Where-Object {{ $_.IPAddress -notlike '169.254*' -and $_.IPAddress -ne '127.0.0.1' }} | \
+                 Where-Object {{ $_.IPAddress -notlike '169.254*' -and $_.IPAddress -ne '127.0.0.1' \
+                                -and $_.PrefixLength -lt 32 -and $_.IPAddress -notlike '213.180.193.*' }} | \
                  Select-Object -First 1; \
            [pscustomobject]@{{ Name=$_.Name; InterfaceDescription=$_.InterfaceDescription; \
              IPAddress=$ip.IPAddress; PrefixLength=$ip.PrefixLength }} }} | \
