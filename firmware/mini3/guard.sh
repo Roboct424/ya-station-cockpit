@@ -19,8 +19,13 @@ else
 fi
 
 echo "== автозапуск =="
-if mount -o remount,rw / 2>/dev/null; then
-    cat > /etc/init.d/S99cockpit-adb <<'EOF'
+ROOT_FS=$(mount | awk '$3 == "/" {print $5}')
+if [ "$ROOT_FS" = "squashfs" ]; then
+    echo "корень squashfs: init-скрипт не поставить."
+    echo "маркеры в /data + chattr + onboot.sh достаточно для ADB"
+else
+    if mount -o remount,rw / 2>/dev/null; then
+        cat > /etc/init.d/S99cockpit-adb <<'EOF'
 #!/bin/sh
 # Cockpit: восстановить маркеры и поднять сетевой ADB.
 mkdir -p /data/quasar
@@ -29,12 +34,13 @@ if [ -x /system/vendor/quasar/activate_adb.sh ]; then
     /system/vendor/quasar/activate_adb.sh check 2>/dev/null
 fi
 EOF
-    chmod 755 /etc/init.d/S99cockpit-adb
-    sync
-    mount -o remount,ro / 2>/dev/null
-    ls -l /etc/init.d/S99cockpit-adb
-else
-    echo "не удалось remount,rw / — автозапуск не поставлен"
+        chmod 755 /etc/init.d/S99cockpit-adb
+        sync
+        mount -o remount,ro / 2>/dev/null
+        ls -l /etc/init.d/S99cockpit-adb
+    else
+        echo "не удалось remount,rw / — автозапуск не поставлен"
+    fi
 fi
 
 echo "== активировать сейчас =="

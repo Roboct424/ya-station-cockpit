@@ -1655,3 +1655,39 @@ Mini 3 это не работает: CA лежит в
 на `\n`, пишет временную копию и пушит её. Все скрипты Mini 3
 (`backup`, `guard`, `ca`, `noupdate`) идут через него. Встроенные
 скрипты (`adb_script`) уже нормализовали EOL.
+
+---
+
+## G-105. Mini 3: retail — squashfs только для чтения
+
+**Симптом.** `ca.sh` и `noupdate.sh` на Mini 3 не находят
+`/system/vendor/quasar/certs/ca-certificates.crt` в factory, а в normal
+`mount -o remount,rw /` возвращает `Read-only file system`.
+
+**Причина.** На проверенной Mini 3 retail-сборка
+`0.375.1.37.4860938631.20261116.123` лежит в UBI-томе `rootfs` как
+**squashfs** (`magic hsqs`, `/dev/ubiblock_rootfs on / type squashfs
+(ro)`). Гайд для `.50` предполагает ubifs; здесь это не так. Factory-ядро
+(`factory-4`) вообще не умеет ubiblock, поэтому retail из factory не
+смонтировать.
+
+**Что работает.**
+* `backup.sh` — снимает `/data` и читаемые файлы retail.
+* `guard.sh` — маркеры + `chattr +i`; `onboot.sh` сам вызывает
+  `activate_adb.sh check`, поэтому ADB переживает перезагрузку.
+* `ca.sh` — если корень squashfs, копирует бандл в
+  `/data/opt/ca/ca.patched`, дописывает AAA и наш CA и делает
+  `mount --bind` на путь в `/system`, затем перезапускает quasar.
+  Доверие появляется сразу, но **до перезагрузки**.
+* `noupdate.sh` — на squashfs честно отказывается (`exit 2`): файлы OTA
+  внутри образа.
+
+**Постоянный вариант.** Пересобрать squashfs (unsquashfs → правка CA и
+OTA-файлов → mksquashfs с теми же параметрами) и залить в
+`/dev/ubi0_0` через `ubiupdatevol` из factory. Оригинал образа и
+оригинальный CA лежат в `/data/opt/backup`; factory/recovery остаётся
+страховкой. Без пересборки обновления блокируются тем, что наш сервер
+отвечает `hasUpdate=false`.
+
+Проверено: после bind-mount станция принимает `noroot`, в логе идут
+`/register`, `/get_sync_info`, `/check_updates`, ADB `uid=0(root)`.

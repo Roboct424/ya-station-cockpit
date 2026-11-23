@@ -1299,3 +1299,17 @@ http=200 size=577
 * `push_script` переводит `.sh` в LF перед `adb push`: на Windows
   Git отдаёт CRLF, и busybox падал на `#!/bin/sh\r` (G-104).
 * Касается только скриптов Mini 3; логика шага 4 не менялась.
+
+## 2026-11-23 - v1.6.10: Mini 3 и squashfs
+
+* На живой Mini 3 retail оказался **squashfs ro** (`0.375.1.37…`,
+  16.11.2026), а не ubifs из гайда `.50`.
+* `ca.sh` для squashfs делает bind-mount исправленного бандла из
+  `/data/opt/ca` и перезапускает quasar: TLS работает до перезагрузки.
+* `noupdate.sh` на squashfs отказывается с понятным сообщением;
+  постоянная блокировка — только пересборкой образа.
+* `guard.sh` на squashfs не ставит init-скрипт: маркеров + `chattr +i`
+  достаточно, `onboot.sh` поднимает ADB сам.
+* Проверено: `/data/opt/backup/mini3-<время>` снят, CA-оригинал сохранён,
+  после bind-mount станция принимает `noroot`, `/get_sync_info` отдаёт
+  `adbd`, ADB root работает.

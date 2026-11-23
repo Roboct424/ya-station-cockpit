@@ -2,21 +2,16 @@
 # yandex-noupdate.sh — отключение авто-обновлений (OTA) на Яндекс Станции.
 #
 # Источник: Yandex Station Extended (hackalice.me), contrib/yandex-noupdate.sh.
-# Проверено сообществом на Mini 2; на Mini 3 (.50) те же пути:
+# Проверено сообществом на Mini 2; на Mini 3 с writable rootfs те же пути:
 #   /system/vendor/quasar/{ota_script.pub,device_ota_update.sh,launch.json}
 #   device_ota_update.sh -> apply_packed_ota, подпись по ota_script.pub.
+#
+# На новых retail-сборках Mini 3 корень — squashfs (ro): файлы OTA лежат
+# внутри образа, и на месте их не поправить. Скрипт честно скажет об этом.
 #
 #   sh yandex-noupdate.sh            # отключить обновления (по умолчанию)
 #   sh yandex-noupdate.sh status     # показать текущее состояние
 #   sh yandex-noupdate.sh restore    # вернуть всё как было (из бэкапа)
-#
-# Что делает:
-#   1) подменяет ota_script.pub на чужой RSA-ключ -> OTA-пакет не проходит
-#      проверку подписи;
-#   2) заглушает device_ota_update.sh;
-#   3) убирает задачу --updatesd из launch.json (если она есть), с проверкой
-#      и авто-откатом.
-# Оригиналы: /data/opt/backup. Полностью обратимо.
 set -u
 
 Q=/system/vendor/quasar
@@ -40,6 +35,16 @@ err(){ echo "[!] $*" >&2; }
 need_root(){ [ "$(id -u)" = 0 ] || { err "нужен root"; exit 1; }; }
 rw(){ mount -o remount,rw / 2>/dev/null || { err "не удалось remount rw /"; exit 1; }; }
 ro(){ sync; mount -o remount,ro / 2>/dev/null; }
+
+require_writable_root(){
+  fs=$(mount | awk '$3 == "/" {print $5}')
+  if [ "$fs" = "squashfs" ]; then
+    err "корень squashfs только для чтения: OTA-файлы внутри образа."
+    err "Для постоянного отключения нужен пересобранный образ."
+    err "Пока сервер отвечает hasUpdate=false — обновления и так не ставятся."
+    exit 2
+  fi
+}
 
 backup(){
   mkdir -p "$BK" || return 1
@@ -84,6 +89,7 @@ strip_updatesd(){
 
 do_disable(){
   need_root
+  require_writable_root
   backup || { err "резервная копия не создана — системные файлы не изменены"; exit 1; }
   rw
   TMP=/tmp/.noupd.$$
@@ -120,6 +126,7 @@ do_disable(){
 
 do_restore(){
   need_root
+  require_writable_root
   rw
   [ -f "$BK/ota_script.pub.orig" ]       && cp "$BK/ota_script.pub.orig"       "$PUB"   && say "ota_script.pub восстановлен"
   [ -f "$BK/device_ota_update.sh.orig" ] && cp "$BK/device_ota_update.sh.orig" "$OTASH" && chmod +x "$OTASH" && say "device_ota_update.sh восстановлен"
@@ -130,6 +137,8 @@ do_restore(){
 
 do_status(){
   echo "== статус обновлений =="
+  fs=$(mount | awk '$3 == "/" {print $5}')
+  echo "корень      : $fs"
   if [ -f "$LJ" ] && grep -q -- '--updatesd' "$LJ" 2>/dev/null; then
     echo "launch.json : updatesd ПРИСУТСТВУЕТ"
   else
