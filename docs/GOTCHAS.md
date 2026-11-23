@@ -1876,3 +1876,52 @@ Mini 2; шаг 4 показывает скрипты Mini 2.
 * В шаге 3 появился блок «Станции в сети» с выпадающим списком и
   предупреждением, если станций больше одной. Выбранный адрес
   используется ADB и шагом 4.
+
+---
+
+## G-115. Mini 3: /system в RAM, ADB-маркеры в двух путях
+
+**Симптом.** После перезагрузки Mini 3 пропадают правки в
+`/system/vendor/quasar`, `S99cockpit-adb` и CA-патч; при этом ADB может
+открыться или не открыться.
+
+**Причина.** Factory-4 и recovery на Mini 3 грузятся в ramfs:
+`mount` показывает `rootfs` на `/`, `ubi0_0` не смонтирован
+(`/rootfs/ROOTFS_IS_NOT_MOUNTED`). Всё, что записано в `/system`,
+`/etc`, `/usr`, живёт до ребута. Сохраняется только `/data`
+(ubifs, `/bkupgrade/data`).
+
+Маркеры ADB тоже разные:
+
+* factory-4 — `/data/quasar_activate_adb_quasmodrom`,
+  `/data/quasar_activate_network_adb`;
+* retail 0.375 — `/data/quasar/activate_adb_quasmodrom`,
+  `/data/quasar/activate_network_adb`.
+
+Retail при загрузке удаляет корневые маркеры (`onboot.sh`).
+
+**Исправление.** `guard.sh` создаёт оба набора и ставит `chattr +i`
+(на ubifs immutable-файл `rm` даже root не берёт). `/system` не трогаем.
+ADB возвращается после ребута через `onboot.sh` → `activate_adb.sh check`.
+
+---
+
+## G-116. Retail 0.375: 119 корней, AAA нет
+
+**Симптом.** На factory-4 сопряжение с нашим сервером проходит, после
+retail-обновления 0.375 — нет.
+
+**Причина.** В retail `ca-certificates.crt` — симлинк на
+`certs/ca-certificates.crt`: 119 корней, `AAA Certificate Services`
+отсутствует. На factory — 139 корней, AAA есть (2 вхождения).
+Наша цепочка: `leaf → EM OV TLS CA - G3C (eMudhra) → AAA`, поэтому без
+AAA retail её не принимает.
+
+AAA — **публичный** корень Comodo (выдан 01.01.2004, действует до
+31.12.2028), приватного ключа не требует. Достаточно добавить его в
+бандл. Retail-бандл при этом свежий: самые новые корни от 15.05.2024
+(TrustAsia), прошивка собрана 16.11.2026.
+
+**Исправление.** `ca.sh` проверяет наличие AAA: на factory ничего не
+делает, на retail делает bind-mount копии с AAA (до ребута — `/system`
+в RAM). Постоянный вариант — пересобранный squashfs в `ubi0_0`.

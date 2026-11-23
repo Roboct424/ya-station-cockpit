@@ -422,9 +422,11 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
   <div class="card">
     <h2>Обслуживание — только после разблокировки</h2>
     <div id="maint_dev" class="rec">устройство не определено — сначала выполните шаг 3</div>
-    <p class="hint">Всё, что делается через ADB, живёт здесь. У Hub и Mini 2
-    разные пути и скрипты, поэтому набор действий выбирается по станции,
-    которую программа видит сейчас.</p>
+    <p class="hint">Всё, что делается через ADB, живёт здесь. У Hub, Mini 2 и
+    Mini 3 разные пути и скрипты, поэтому набор действий выбирается по
+    станции, которую программа видит сейчас. У Mini 3 /system в RAM:
+    правки и CA-патч живут до перезагрузки, а ADB-маркеры в /data
+    сохраняются.</p>
     <div id="maint_actions" class="row" style="gap:8px 6px;margin-top:8px"></div>
     <div style="margin-top:6px"><span id="r_maint" class="chip wait">не выполнялось</span></div>
     <pre id="o_maint" style="height:210px;margin-top:10px">—</pre>
@@ -1195,6 +1197,7 @@ function renderMaint(j) {
   if (j.device_id) bits.push(j.device_id);
   if (j.arch) bits.push(j.arch);
   if (j.firmware) bits.push('прошивка ' + j.firmware);
+  if (fam === 'mini3') bits.push('/system в RAM — до перезагрузки');
   box.textContent = 'Сейчас разблокируется: ' + bits.join(' · ');
   box.style.borderLeftColor = fam ? '#3aa0ff' : '#ffce6a';
   const items = j.maint || [];

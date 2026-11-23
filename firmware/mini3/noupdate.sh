@@ -13,6 +13,7 @@
 #   sh yandex-noupdate.sh status     # показать текущее состояние
 #   sh yandex-noupdate.sh restore    # вернуть всё как было (из бэкапа)
 set -u
+VOLATILE=0
 
 Q=/system/vendor/quasar
 LJ="$Q/launch.json"
@@ -38,12 +39,19 @@ ro(){ sync; mount -o remount,ro / 2>/dev/null; }
 
 require_writable_root(){
   fs=$(mount | awk '$3 == "/" {print $5}')
-  if [ "$fs" = "squashfs" ]; then
-    err "корень squashfs только для чтения: OTA-файлы внутри образа."
-    err "Для постоянного отключения нужен пересобранный образ."
-    err "Пока сервер отвечает hasUpdate=false — обновления и так не ставятся."
-    exit 2
-  fi
+  case "$fs" in
+    squashfs)
+      err "корень squashfs только для чтения: OTA-файлы внутри образа."
+      err "Для постоянного отключения нужен пересобранный образ."
+      err "Пока сервер отвечает hasUpdate=false — обновления и так не ставятся."
+      exit 2
+      ;;
+    rootfs|ramfs|tmpfs)
+      VOLATILE=1
+      err "корень $fs — RAM: правка живёт до перезагрузки."
+      err "После ребута вернётся штатный applier; постоянный запрет — hasUpdate=false."
+      ;;
+  esac
 }
 
 backup(){
@@ -121,7 +129,11 @@ do_disable(){
 
   ro
   echo
-  say "ГОТОВО. Перезагрузи колонку: reboot"
+  if [ "$VOLATILE" = 1 ]; then
+    say "ГОТОВО (до перезагрузки). Постоянно: сервер отвечает hasUpdate=false."
+  else
+    say "ГОТОВО. Перезагрузи колонку: reboot"
+  fi
 }
 
 do_restore(){
@@ -132,13 +144,20 @@ do_restore(){
   [ -f "$BK/device_ota_update.sh.orig" ] && cp "$BK/device_ota_update.sh.orig" "$OTASH" && chmod +x "$OTASH" && say "device_ota_update.sh восстановлен"
   [ -f "$BK/launch.json.orig" ]          && cp "$BK/launch.json.orig"          "$LJ"    && say "launch.json восстановлен"
   ro
-  say "ГОТОВО. Перезагрузи колонку: reboot"
+  if [ "$VOLATILE" = 1 ]; then
+    say "ГОТОВО (до перезагрузки)."
+  else
+    say "ГОТОВО. Перезагрузи колонку: reboot"
+  fi
 }
 
 do_status(){
   echo "== статус обновлений =="
   fs=$(mount | awk '$3 == "/" {print $5}')
   echo "корень      : $fs"
+  case "$fs" in
+    rootfs|ramfs|tmpfs) echo "режим       : RAM (правки до перезагрузки)" ;;
+  esac
   if [ -f "$LJ" ] && grep -q -- '--updatesd' "$LJ" 2>/dev/null; then
     echo "launch.json : updatesd ПРИСУТСТВУЕТ"
   else
@@ -155,7 +174,7 @@ do_status(){
     echo "ota key     : подменён"
   fi
   echo "-- процессы апдейтера:"
-  ps w 2>/dev/null | grep -q -- '[-]-updatesd' && echo "   maind --updatesd РАБОТАЕТ" || echo "   maind --updatesd не запущен"
+  ps 2>/dev/null | grep -q -- '[-]-updatesd' && echo "   maind --updatesd РАБОТАЕТ" || echo "   maind --updatesd не запущен"
 }
 
 case "${1:-disable}" in

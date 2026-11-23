@@ -2166,9 +2166,9 @@ fn maint_json(family: &str, _arch: &str) -> serde_json::Value {
             "снять сторож, вернуть /etc и hosts",
         ),
         "mini3" => (
-            "/data/quasar, /data/wpa_supplicant.conf, /system/vendor/quasar/certs",
-            "маркеры в /data/quasar + chattr +i + S99cockpit-adb",
-            "AAA root и наш CA в /system/vendor/quasar/certs",
+            "/data/quasar, /data/quasar_*, /data/wpa_supplicant.conf, CA-бандл",
+            "маркеры в /data (factory и retail) + chattr +i — переживают ребут",
+            "AAA root в CA-бандл: на factory уже есть, на retail — bind-mount до ребута",
             "снять маркеры, вернуть CA из /data/opt/backup",
         ),
         _ => (
