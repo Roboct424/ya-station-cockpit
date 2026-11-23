@@ -198,10 +198,25 @@ pub fn leaf_from_ca(
     ca_key_pem: &str,
     host: &str,
 ) -> Result<(String, String), TlsError> {
+    leaf_from_ca_many(ca_cert_pem, ca_key_pem, &[host])
+}
+
+/// То же, но лист покрывает несколько имён (SAN).
+///
+/// Хаб проверяет имя хоста и для `/token` ходит на `oauth.yandex.ru`,
+/// а для синхронизации — на `quasar.yandex.net`. Один SAN
+/// `quasar.yandex.net` даёт `BadCertificate` → `NO_INTERNET`.
+pub fn leaf_from_ca_many(
+    ca_cert_pem: &str,
+    ca_key_pem: &str,
+    hosts: &[&str],
+) -> Result<(String, String), TlsError> {
     let ca_key = load_external_key(ca_key_pem)?;
     let issuer = CertificateParams::from_ca_cert_pem(ca_cert_pem)?.self_signed(&ca_key)?;
-    let mut params = CertificateParams::new(vec![host.to_string()])?;
-    params.distinguished_name.push(DnType::CommonName, host);
+    let names: Vec<String> = hosts.iter().map(|host| (*host).to_string()).collect();
+    let mut params = CertificateParams::new(names)?;
+    let primary = hosts.first().copied().unwrap_or("quasar.yandex.net");
+    params.distinguished_name.push(DnType::CommonName, primary);
     // Без EKU serverAuth и KeyUsage станция отвергает лист как чужой
     // («unknown ca»), даже если цепочка ведёт к публичному корню.
     params.is_ca = IsCa::NoCa;

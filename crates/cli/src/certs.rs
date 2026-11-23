@@ -48,9 +48,24 @@ pub fn harvest() -> Result<String, String> {
     let _ = std::fs::remove_file(&tmp_key);
 
     // Лист под квазар: наша пара ключей, подпись — ключом CA.
-    let (leaf_pem, leaf_key) =
-        cockpit_intercept::tls::leaf_from_ca(&ca_pem, &ca_key, "quasar.yandex.net")
-            .map_err(|e| format!("сборка листа: {e}"))?;
+    // SAN — все имена, к которым ходят станции: Хаб проверяет hostname
+    // и для /token идёт на oauth.yandex.ru, не только на quasar.
+    const HOSTS: &[&str] = &[
+        "quasar.yandex.net",
+        "quasar.yandex.ru",
+        "oauth.yandex.ru",
+        "uniproxy.alice.yandex.net",
+        "rpc.alice.yandex.net",
+        "clck.yandex.net",
+        "scbh.yandex.net",
+        "report.appmetrica.yandex.net",
+        "startup.mobile.yandex.net",
+        "quasar.s3.yandex.net",
+        "*.yandex.net",
+        "*.yandex.ru",
+    ];
+    let (leaf_pem, leaf_key) = cockpit_intercept::tls::leaf_from_ca_many(&ca_pem, &ca_key, HOSTS)
+        .map_err(|e| format!("сборка листа: {e}"))?;
 
     // Цепочка: лист → промежуточный CA → публичный корень.
     let mut chain = String::new();

@@ -830,7 +830,7 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
                     .map(|version| version == env!("CARGO_PKG_VERSION"))
                     .unwrap_or(false);
                 if same {
-                    ui::open_browser(port);
+                    ui::open_window(port);
                     return Ok(ExitCode::SUCCESS);
                 }
                 if ui::close_panel_on(port) {
@@ -852,16 +852,11 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
                         port = free;
                     }
                     None => {
-                        ui::open_browser(port);
+                        ui::open_window(port);
                         return Ok(ExitCode::SUCCESS);
                     }
                 }
             }
-            let browser_port = port;
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(700));
-                ui::open_browser(browser_port);
-            });
             ui::serve(port).map_err(|e| CockpitError::Internal(format!("панель {port}: {e}")))?;
             Ok(ExitCode::SUCCESS)
         }

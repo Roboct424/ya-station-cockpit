@@ -129,25 +129,6 @@ pub fn about_version(port: u16) -> Option<String> {
         .map(str::to_string)
 }
 
-/// Открывает панель в браузере по умолчанию.
-pub fn open_browser(port: u16) {
-    let url = format!("http://127.0.0.1:{port}/?v={}", env!("CARGO_PKG_VERSION"));
-    #[cfg(windows)]
-    {
-        let _ = std::process::Command::new("cmd")
-            .args(["/C", "start", "", &url])
-            .spawn();
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let _ = std::process::Command::new("open").arg(&url).spawn();
-    }
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
-    }
-}
-
 /// Закрывает старую панель на порту, чтобы после обновления не
 /// оставалось окно прежней версии: новая занимает тот же порт.
 ///
@@ -321,7 +302,7 @@ pub fn serve(port: u16) -> std::io::Result<()> {
 ///
 /// GOTCHA: G-037 — «веб» здесь только транспорт: окно без адресной строки и
 /// вкладок, закрывается вместе с программой. Свой UI-фреймворк не тянем.
-fn open_window(port: u16) {
+pub fn open_window(port: u16) {
     let url = format!("http://127.0.0.1:{port}/");
     let candidates = [
         "msedge.exe",
@@ -593,11 +574,13 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
             (200, "application/json", result)
         }
         ("POST", "/api/hotspot") => {
-            // Точка доступа и проводной стек несовместимы: у ICS и нашего
-            // DHCP один порт 67, а DNS — 53. Гасим hub serve перед стартом.
-            kill_child(&HUB_CHILD);
+            // Смена конфига с чистого листа: убираем старые службы, поднимаем
+            // AP и сразу за ней hub serve — без ручного «Запустить».
+            kill_stale_servers();
             let ctx = ctx_from(body);
+            let adapter = ctx.ethernet.clone();
             let result = run_module("net.hotspot", ctx);
+            let _ = hub_serve(&format!("mode=sync&link=wifi&adapter={adapter}"));
             (200, "application/json", result)
         }
         ("POST", "/api/hotspot/stop") => {
@@ -615,6 +598,9 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
                     (false, error.to_string())
                 }
             };
+            // Сразу переходим на проводной сценарий: DHCP на Ethernet,
+            // Хаб получает адрес без ручного перезапуска служб.
+            let _ = hub_serve("mode=sync&link=eth&adapter=Ethernet");
             (
                 200,
                 "application/json",
@@ -2739,10 +2725,56 @@ fn hub_stop() -> String {
 ///
 /// Локальный quasar на 443 встроен в бинарник (G-077); ICC/ICS
 /// выключается, чтобы Windows DHCP не конфликтовал с нашим (G-078).
+/// Убивает чужие/осиротевшие `hub serve` и процессы на наших портах.
+///
+/// Панель (этот процесс) не трогаем. Нужно при каждой смене конфига:
+/// старый сервер может быть запущен вручную и держать 80/443/53/67/123,
+/// тогда новый экземпляр молча не поднимется.
+fn kill_stale_servers() {
+    let me = std::process::id();
+    let script = format!(
+        "$me={me}; \
+         Get-CimInstance Win32_Process -Filter \"Name='cockpit.exe'\" | \
+           Where-Object {{ $_.CommandLine -match 'hub serve|local-ota' -and $_.ProcessId -ne $me }} | \
+           ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}; \
+         foreach ($p in 80,443) {{ \
+           Get-NetTCPConnection -LocalPort $p -State Listen -ErrorAction SilentlyContinue | \
+             ForEach-Object {{ $proc=Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue; \
+               if ($proc -and $proc.ProcessName -match '^(cockpit|cockpit-new|python|python3|node|fake-quasar)') {{ \
+                 Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }} }} }}; \
+         foreach ($p in 53,67,123) {{ \
+           Get-NetUDPEndpoint -LocalPort $p -ErrorAction SilentlyContinue | \
+             ForEach-Object {{ $proc=Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue; \
+               if ($proc -and $proc.ProcessName -match '^(cockpit|cockpit-new|python|python3|node|fake-quasar)') {{ \
+                 Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }} }} }}"
+    );
+    let _ = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-Command", &script])
+        .output();
+    std::thread::sleep(std::time::Duration::from_millis(700));
+}
+
 fn hub_serve(body: &str) -> String {
-    // Точка доступа и hub serve работают ВМЕСТЕ: ICS отдаёт станции
-    // DHCP/DNS/NAT, а мы — quasar и 204 на 80/443. Наши DNS (53) и
-    // DHCP (67) тогда просто не поднимутся, и это нормально.
+    // Смена конфига всегда с чистого листа: чужие/осиротевшие hub serve
+    // (в том числе запущенные вручную) держат 80/443/53/67/123, из-за
+    // чего новый экземпляр молча не поднимается. Убиваем их до старта.
+    kill_stale_servers();
+    let link = field(body, "link");
+    // Проводной Хаб не получит DHCP, если включена точка доступа:
+    // ICS обслуживает только Wi-Fi-подсеть. Для link=eth гасим точку.
+    if link == "eth" && cockpit_net::hotspot_is_on() {
+        let adapter = cockpit_net::default_adapter();
+        let _ = adapter.stop_hotspot(&cockpit_net::ApHandle {
+            iface: "mobile-hotspot".into(),
+        });
+        push_log("точка доступа выключена автоматически: выбран проводной линк");
+        for _ in 0..20 {
+            if !cockpit_net::hotspot_is_on() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        }
+    }
     let hotspot = cockpit_net::hotspot_is_on();
     if hotspot {
         push_log("точка доступа включена: DHCP/DNS оставляем ICS, поднимаем quasar на 80/443");
@@ -2765,6 +2797,12 @@ fn hub_serve(body: &str) -> String {
         }
     };
     let safe_adapter = adapter.replace('\'', "''");
+    // Проводной линк: перезапускаем адаптер, чтобы Хаб заново попросил
+    // DHCP (после смены конфига он мог остаться на 169.254).
+    if link == "eth" {
+        let _ = reset_link(&format!("adapter={adapter}"));
+        push_log("Ethernet перезапущен: Хаб должен получить DHCP заново");
+    }
     // При включённой точке ICS трогать нельзя: он раздаёт ей адреса и NAT.
     if !hotspot {
         let cleanup = format!(
