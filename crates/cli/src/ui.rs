@@ -2956,8 +2956,10 @@ fn hub_serve(body: &str) -> String {
     }
 
     let online = field(body, "online") == "1";
-    let no_quasar = online || field(body, "no_quasar") == "1";
     let only = field(body, "only");
+    // --no-quasar только для полного онлайн-режима. Селективному режиму
+    // quasar нужен: иначе выбранной станции некому отдать OTA и adbd.
+    let no_quasar = field(body, "no_quasar") == "1" || (online && only.is_empty());
     let exe = std::env::current_exe().unwrap_or_else(|_| "cockpit".into());
     let log = std::fs::File::create("data/rushub.log").ok();
     let err = log.as_ref().and_then(|f| f.try_clone().ok());
