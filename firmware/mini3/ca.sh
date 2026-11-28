@@ -26,7 +26,11 @@ T=$(readlink -f "$LINK" 2>/dev/null)
 [ -n "$T" ] || T=$LINK
 mkdir -p "$BK" "$SRC" /data/opt/ca
 
-if grep -q "AAA Certificate Services" "$LINK"; then
+AAA_KEY=$(awk 'BEGIN{p=0} /BEGIN CERTIFICATE/{p=1;next} p{print;exit}' "$SRC/aaa.pem" 2>/dev/null | tr -d '\r\n' | cut -c1-32)
+# В factory-бандле есть текстовые комментарии (# Issuer: ... AAA ...), в
+# retail их нет — там ищем сам сертификат по первым 32 символам base64.
+if grep -q "AAA Certificate Services" "$LINK" ||
+   { [ -n "$AAA_KEY" ] && grep -q "$AAA_KEY" "$LINK"; }; then
     echo "AAA уже есть: $(grep -c 'BEGIN CERTIFICATE' "$LINK") сертификатов"
     echo "патч не нужен"
     exit 0

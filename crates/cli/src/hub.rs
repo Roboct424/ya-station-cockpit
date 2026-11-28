@@ -43,7 +43,7 @@ impl Mode {
 
 /// Запускает все службы и блокируется навсегда.
 pub fn serve(mode: Mode, alias: Ipv4Addr, online: bool, quasar: bool) -> Result<(), String> {
-    if mode == Mode::Sync {
+    if mode == Mode::Sync && !online {
         if let Err(error) = add_alias(alias) {
             // без прав администратора адрес не повесить — службы всё равно поднимаем
             log(&format!("адрес {alias} не добавлен: {error}"));
@@ -52,8 +52,14 @@ pub fn serve(mode: Mode, alias: Ipv4Addr, online: bool, quasar: bool) -> Result<
     prepare_link();
     log(&format!(
         "режим {}: DNS на {SERVER_IP}:53, DHCP :67, SNTP :123{}",
-        if mode == Mode::Sync { "sync" } else { "setup" },
-        if mode == Mode::Sync {
+        if online {
+            "online"
+        } else if mode == Mode::Sync {
+            "sync"
+        } else {
+            "setup"
+        },
+        if mode == Mode::Sync && !online {
             format!(", quasar на 0.0.0.0:443 ({alias})")
         } else {
             String::new()
@@ -61,7 +67,7 @@ pub fn serve(mode: Mode, alias: Ipv4Addr, online: bool, quasar: bool) -> Result<
     ));
     // Оффлайн по умолчанию: наружу не уходит ни один DNS-запрос.
     if online {
-        log("DNS: чужие имена → 8.8.8.8 (интернет, режим --online)");
+        log("DNS: интернет разрешён, Яндекс не перехватываем; телеметрия и OTA — в блоклисте");
     } else {
         log("DNS: внешние имена не разрешаются — оффлайн, наружу ничего не уходит");
     }
@@ -86,7 +92,7 @@ pub fn serve(mode: Mode, alias: Ipv4Addr, online: bool, quasar: bool) -> Result<
     spawn("http", http_loop);
     spawn("sntp", move || sntp_loop(alias));
     spawn("sntp-tcp", sntp_tcp_loop);
-    if mode == Mode::Sync && quasar {
+    if mode == Mode::Sync && quasar && !online {
         spawn("quasar", quasar_loop);
         // как только станция поднимет adbd — сразу подключаемся и закрепляем
         spawn("adb", auto_grab);
@@ -261,6 +267,27 @@ fn ensure_private_profile() {
 
 // ---------------------------------------------------------------- DNS ------
 
+/// Что не пускаем наружу в онлайн-режиме: телеметрия и загрузка OTA.
+/// Сам `quasar.yandex.ru` не трогаем — через него идут аккаунт, Alice и
+/// музыка. Обновления отключаются ещё и на станции (`updatesd`).
+const ONLINE_BLOCK: &[&str] = &[
+    "clck.yandex.net",
+    "clck.yandex.ru",
+    "report.appmetrica.yandex.net",
+    "startup.mobile.yandex.net",
+    "mc.yandex.ru",
+    "metrika.yandex.ru",
+    "yandexmetrica.com",
+    "quasar.s3.yandex.net",
+    "cdnriqbxswemmatxzibl.svc.cdn.yandex.net",
+];
+
+fn online_blocked(name: &str) -> bool {
+    ONLINE_BLOCK
+        .iter()
+        .any(|blocked| name == *blocked || name.ends_with(&format!(".{blocked}")))
+}
+
 fn dns_loop(listen: Ipv4Addr, answer: Ipv4Addr, mode: Mode, online: bool) {
     // 0.0.0.0 — проводной линк. 192.168.137.1 — точка доступа: садимся
     // поверх ICS-DNS с SO_REUSEADDR и отвечаем быстрее него (G-093).
@@ -292,6 +319,27 @@ fn dns_loop(listen: Ipv4Addr, answer: Ipv4Addr, mode: Mode, online: bool) {
             || name.contains(".time.")
             || name == "time.android.com";
         log(&format!("DNS: {name} тип {qtype} от {peer}"));
+        if online {
+            // Онлайн: станция должна видеть настоящий Яндекс, поэтому
+            // A-записи не перехватываем. IPv6 не отдаём вовсе — у точки
+            // доступа его нет, а AAAA уводит клиентов в таймаут.
+            if qtype == 28 {
+                let _ = sock.send_to(&empty_answer(query, q_end), peer);
+                continue;
+            }
+            if qtype == 1 && online_blocked(&name) {
+                log(&format!("DNS: {name} заблокирован (телеметрия/OTA)"));
+                let _ = sock.send_to(&empty_answer(query, q_end), peer);
+                continue;
+            }
+            match forward(query) {
+                Some(reply) => {
+                    let _ = sock.send_to(&reply, peer);
+                }
+                None => log(&format!("DNS: {name} не разрешился")),
+            }
+            continue;
+        }
         if yandex && qtype == 28 {
             // G-056: IPv6 у Хаба нет — отвечаем «пусто», чтобы он шёл по IPv4.
             let _ = sock.send_to(&empty_answer(query, q_end), peer);

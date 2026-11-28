@@ -157,8 +157,21 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
 <main>
 <section id="s1" class="on">
   <div class="cols">
+  <div class="card" id="cert_harvest_card">
+    <h2>1. Сертификаты для станции</h2>
+    <p class="hint">Это первый шаг: без сертификатов станция не примет наш
+    сервер. Кнопка скачивает публичный CA из открытого PoC-репозитория и
+    собирает из него лист для <b>quasar.yandex.net</b> — в
+    <code>data/certs/</code> появятся лист, ключ и цепочка (лист +
+    промежуточный CA + корень). Это единственный шаг программы, который
+    ходит в интернет, и только по нажатию.</p>
+    <button class="act" id="btnHarvest" onclick="harvestCerts()">Собрать сертификаты</button>
+    <span id="r_harvest" class="chip wait">не выполнялось</span>
+    <p class="hint" id="harvest_hint"></p>
+  </div>
+
   <div class="card" id="clean_card">
-    <h2>1. Чистка системы — обязательно</h2>
+    <h2>2. Чистка системы — обязательно</h2>
     <p class="hint">Пока в системе остаются чужие записи и старые прокси, станция
     получает неверные ответы и сбрасывается. Чистим до начала работы.</p>
     <div class="row" style="gap:24px">
@@ -178,7 +191,7 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
   </div>
 
   <div class="card" id="profile_card">
-    <h2>2. Профиль устройства</h2>
+    <h2>3. Профиль устройства</h2>
     <p class="hint">Что известно заранее. Если не знаете — выберите «—»,
     программа предложит варианты на втором шаге.</p>
     <div class="row">
@@ -207,18 +220,6 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
     <div id="blelist" class="muted" style="margin-top:8px"></div>
 
 
-  </div>
-
-  <div class="card" id="cert_harvest_card">
-    <h2>3. Сертификаты для станции</h2>
-    <p class="hint">Станции проверяют цепочку: наш CA они не примут, пока закрыт ADB.
-    Кнопка скачивает публичный CA из открытого PoC-репозитория и собирает из него
-    лист для <b>quasar.yandex.net</b> — в <code>data/certs/</code> появятся
-    лист, ключ и цепочка (лист + промежуточный CA + корень). Это единственный
-    шаг программы, который ходит в интернет, и только по нажатию.</p>
-    <button class="act" id="btnHarvest" onclick="harvestCerts()">Собрать сертификаты</button>
-    <span id="r_harvest" class="chip wait">не выполнялось</span>
-    <p class="hint" id="harvest_hint"></p>
   </div>
 
   <div style="margin-top:12px;display:flex;justify-content:flex-end"><button class="act" onclick="goTab('s2')">Далее: настройка →</button></div>
@@ -313,9 +314,16 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
   <div class="card">
     <h2>3. Регистрация</h2>
     <div class="check"><input type="radio" name="reg" value="offline" checked>
-      <span><b>Оффлайн</b> — токен и регистрация локальные, облако не участвует</span></div>
+      <span><b>Оффлайн</b> — локальный hub, аккаунт и токен наши; облако не участвует</span></div>
     <div class="check"><input type="radio" name="reg" value="online">
-      <span><b>Через облако</b> — регистрацию отдаём в облако (для отдельных моделей)</span></div>
+      <span><b>Онлайн (официальный аккаунт)</b> — станция привязывается к Яндексу,
+      Alice и музыка работают; ADB остаётся открыт</span></div>
+    <div class="check" style="margin-left:22px"><input type="checkbox" id="ex_privacy" checked>
+      <span>Отключить на станции телеметрию, логи и OTA</span></div>
+    <p class="hint">Онлайн-режим требует интернет на точке доступа. Станция должна
+    быть уже разблокирована (ADB открыт). Если она была в оффлайн-аккаунте,
+    добавьте её заново в приложении Яндекса. Телеметрия и обновления
+    выключаются на самой станции, а не только в сети.</p>
   </div>
 
   <div class="card">
@@ -513,9 +521,9 @@ function updateProgress() {
   let done = 0;
   let total = 1;
   if (active === 's1') {
-    // На шаге 1 остались только очистка и профиль: подключение уехало на шаг 2.
-    total = 2;
-    done = ['clean_card', 'profile_card'].filter((id) => {
+    // На шаге 1: сертификаты, очистка и профиль.
+    total = 3;
+    done = ['cert_harvest_card', 'clean_card', 'profile_card'].filter((id) => {
       const el = $(id);
       return el && el.classList.contains('done');
     }).length;
@@ -1184,6 +1192,7 @@ const MAINT_FN = {
   backup: () => backup(),
   guard: () => guard(),
   ca: () => caInstall(),
+  privacy: () => privacyAction(),
   noupdate: () => noUpdate(),
   cleanup: () => cleanupAll()
 };
@@ -1219,11 +1228,16 @@ function renderMaint(j) {
 
 async function restartStack() {
   chip('r_hub', false, 'перезапускаю…');
+  const online = document.querySelector('input[name=reg]:checked').value === 'online';
   const body = new URLSearchParams({
     mode: 'sync',
     link: $('link').value,
     adapter: $('adapter').value || 'Ethernet'
   });
+  if (online) {
+    body.set('online', '1');
+    body.set('no_quasar', '1');
+  }
   const r = await (await fetch('/api/hub/serve', {method: 'POST', body})).json();
   chip('r_hub', r.ok, r.ok ? 'службы перезапущены' : (r.text || 'ошибка'));
   append(r.ok ? 'службы перезапущены' : 'ошибка: ' + r.text);
@@ -1267,6 +1281,13 @@ async function noUpdate() {
   chip('r_maint', r.ok, r.ok ? 'обновления закрыты' : 'ошибка');
 }
 
+async function privacyAction() {
+  chip('r_maint', false, 'отключаю телеметрию…');
+  const r = await (await fetch('/api/privacy', {method: 'POST', body: new URLSearchParams()})).json();
+  $('o_maint').textContent = r.text || '';
+  chip('r_maint', r.ok, r.ok ? 'приватность включена' : 'ошибка');
+}
+
 function renderPreset() {
   const local = [
     ['Проверка связи', '204'],
@@ -1293,6 +1314,7 @@ function selectAll(on) {
 
 async function applyAndRestart() {
   const online = document.querySelector('input[name=reg]:checked').value === 'online';
+  const privacy = $('ex_privacy') && $('ex_privacy').checked;
   // Один сервер на всё: quasar + 204 на 80/443, DNS/DHCP — у ICS, если
   // включена точка. Так службы и точка живут вместе.
   const body = new URLSearchParams({
@@ -1300,14 +1322,32 @@ async function applyAndRestart() {
     link: $('link').value,
     adapter: $('adapter').value || 'Ethernet'
   });
-  if (online) body.set('online', '1');
+  if (online) {
+    body.set('online', '1');
+    // В онлайн-режиме станция должна идти в настоящий Яндекс, а не в наш
+    // quasar: DNS форвардим, перехват TLS не поднимаем.
+    body.set('no_quasar', '1');
+  }
   $('btnApply').disabled = true;
+  if (online && privacy) {
+    $('apply_hint').textContent = 'отключаю телеметрию и OTA на станции…';
+    try {
+      const p = await (await fetch('/api/privacy', {method: 'POST', body: new URLSearchParams()})).json();
+      append('приватность: ' + (p.text || (p.ok ? 'применено' : 'ошибка')));
+    } catch (e) {
+      append('приватность: станция ещё не подключена — примените на шаге 4');
+    }
+  }
   $('apply_hint').textContent = 'поднимаю службы…';
   const r = await (await fetch('/api/hub/serve', {method: 'POST', body})).json();
   $('btnApply').disabled = false;
   if (r.ok) { _applied = true; updateProgress(); }
-  $('apply_hint').textContent = r.ok ? 'службы перехвата работают' : (r.text || 'ошибка');
-  append(r.ok ? 'службы перехвата запущены' : 'ошибка запуска: ' + r.text);
+  $('apply_hint').textContent = r.ok
+    ? (online ? 'онлайн-режим: станция идёт в Яндекс, телеметрия и OTA закрыты' : 'службы перехвата работают')
+    : (r.text || 'ошибка');
+  append(r.ok
+    ? (online ? 'онлайн-службы запущены: DNS форвардит, quasar не перехватываем' : 'службы перехвата запущены')
+    : 'ошибка запуска: ' + r.text);
   if (r.ok) document.querySelector('.tabs button[data-tab="s3"]').click();
 }
 

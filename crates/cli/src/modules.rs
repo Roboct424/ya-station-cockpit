@@ -454,6 +454,22 @@ fn adb_noupdate(ctx: &ModuleCtx) -> Result<String, String> {
     Ok(format!("{disable}\n{status}"))
 }
 
+fn adb_privacy(ctx: &ModuleCtx) -> Result<String, String> {
+    adb_connect(ctx)?;
+    if !is_mini3() {
+        return Err("приватность пока только для Mini 3".to_string());
+    }
+    let script = PathBuf::from("firmware").join("mini3").join("privacy.sh");
+    if !script.exists() {
+        return Err(format!("нет {}", script.display()));
+    }
+    adb(ctx, &["shell", "mkdir -p /data/opt/cockpit"])?;
+    push_script(ctx, &script, "/data/opt/cockpit/privacy.sh")?;
+    let disable = adb(ctx, &["shell", "sh /data/opt/cockpit/privacy.sh disable"])?;
+    let status = adb(ctx, &["shell", "sh /data/opt/cockpit/privacy.sh status"])?;
+    Ok(format!("{disable}\n{status}"))
+}
+
 /// Ищет adb: переменная окружения, PATH, Android SDK, типовые папки.
 pub fn find_adb() -> Option<PathBuf> {
     let own = adb_home().join("adb.exe");
@@ -633,6 +649,13 @@ pub const MODULES: &[Module] = &[
         needs_adb: true,
     },
     Module {
+        id: "adb.privacy",
+        group: "ADB",
+        title: "Приватность: без телеметрии и OTA",
+        summary: "Убирает updatesd, telemetry и fluent-bitd; Alice и музыка остаются",
+        needs_adb: true,
+    },
+    Module {
         id: "adb.ensure",
         group: "ADB",
         title: "ADB внутри программы",
@@ -689,6 +712,7 @@ pub fn run(id: &str, ctx: &ModuleCtx) -> Result<String, String> {
         "ota.serve" => ota_serve(ctx),
         "adb.guard" => adb_guard(ctx),
         "adb.noupdate" => adb_noupdate(ctx),
+        "adb.privacy" => adb_privacy(ctx),
         "adb.ensure" => adb_ensure(),
         "backup.pull" => backup_pull(ctx),
         "verify.configured" => verify_configured(ctx),

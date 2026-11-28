@@ -1925,3 +1925,49 @@ AAA — **публичный** корень Comodo (выдан 01.01.2004, де�
 **Исправление.** `ca.sh` проверяет наличие AAA: на factory ничего не
 делает, на retail делает bind-mount копии с AAA (до ребута — `/system`
 в RAM). Постоянный вариант — пересобранный squashfs в `ubi0_0`.
+
+---
+
+## G-117. Онлайн-режим: Яндекс не перехватываем
+
+**Задача.** Станция должна остаться на официальном аккаунте: Alice и
+музыка работают, но телеметрия и OTA выключены, ADB открыт.
+
+**Как.** `hub serve --online --no-quasar`:
+* DNS форвардит все A-запросы в настоящий интернет, Яндекс не подменяется
+  на 192.168.137.1;
+* AAAA не отдаём вовсе — у точки доступа нет IPv6;
+* `clck.yandex.net`, `report.appmetrica.yandex.net`,
+  `startup.mobile.yandex.net`, `mc.yandex.ru`, `quasar.s3.yandex.net` и
+  CDN OTA отдают пустой ответ;
+* quasar/TLS не поднимаем, alias 213.180.193.78 не вешаем.
+
+**Важно.** Онлайн возможен только через точку доступа с интернетом (ICS):
+на проводном линке hub не включает NAT. ADB должен быть открыт заранее —
+в онлайн-режиме `/get_sync_info` от нашего сервера уже не приходит.
+
+---
+
+## G-118. Mini 3: телеметрия и OTA без поломки Alice
+
+В retail `launch.json` запускает `updatesd`, `mediad`, `telemetry`,
+`maind` (`--platformd`) и `fluent-bitd`. Чтобы прекратить телеметрию и
+обновления, но оставить музыку и Alice:
+
+* убрать `updatesd`, `telemetry`, `fluent-bitd`;
+* оставить `mediad` и `maind` (`--platformd`).
+
+`privacy.sh` делает это через bind-mount `/data/opt/quasar/launch.json`
+поверх `/system/vendor/quasar/launch.json` и перезапускает quasar.
+На retail squashfs ro правка живёт до перезагрузки; для постоянного
+варианта `launch.json` запекается в squashfs.
+
+---
+
+## G-119. AAA в retail: искать сертификат, а не комментарий
+
+В factory-бандле есть текстовые строки `# Issuer: ... AAA Certificate
+Services`, поэтому `grep "AAA Certificate Services"` работает. В retail
+бандл без комментариев, и та же проверка даёт ложное «AAA нет», хотя
+сертификат уже добавлен. Проверять надо первые 32 символа base64 самого
+AAA-сертификата (`MIIEMjCCAxqgAwIBAgIBATANBgkqhkiG`).

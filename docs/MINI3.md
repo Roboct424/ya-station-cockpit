@@ -251,3 +251,31 @@ leaf quasar.yandex.net
 * `ca.sh` — проверка AAA: factory не трогает, retail патчит bind-mount.
 * `noupdate.sh` — `rootfs`/`ramfs` считает RAM и не обещает persistence.
 * Шаг 4 показывает «/system в RAM — до перезагрузки» для Mini 3.
+
+## 11. Онлайн-режим и приватность (v1.6.23)
+
+Онлайн-режим нужен, когда станция остаётся на официальном аккаунте:
+Alice и музыка работают через настоящий Яндекс.
+
+`hub serve --online --no-quasar`:
+
+* DNS форвардит A-запросы в интернет, Яндекс не подменяется;
+* AAAA не отдаётся (у точки доступа нет IPv6);
+* блоклист: `clck.yandex.net`, `report.appmetrica.yandex.net`,
+  `startup.mobile.yandex.net`, `mc.yandex.ru`, `quasar.s3.yandex.net`,
+  CDN OTA;
+* quasar/TLS не поднимается, alias 213.180.193.78 не вешается.
+
+На станции `privacy.sh` убирает из `launch.json` задачи `updatesd`,
+`telemetry` и `fluent-bitd`. Остаются `mediad` и `maind` (`--platformd`),
+поэтому музыка и Alice не ломаются. ADB-маркеры закрепляются
+(`chattr +i`).
+
+Ограничения:
+
+* онлайн — только через точку доступа с интернетом (ICS); на проводном
+  линке NAT нет;
+* ADB должен быть открыт заранее: в онлайн-режиме наш `/get_sync_info`
+  уже не приходит;
+* bind-mount `launch.json` живёт до перезагрузки; постоянный вариант —
+  запечь `launch.json` в squashfs.

@@ -712,6 +712,11 @@ fn route(method: &str, path: &str, body: &str) -> (u16, &'static str, String) {
             let result = run_module("adb.noupdate", ctx);
             (200, "application/json", result)
         }
+        ("POST", "/api/privacy") => {
+            let ctx = ctx_from(body);
+            let result = run_module("adb.privacy", ctx);
+            (200, "application/json", result)
+        }
         ("POST", "/api/stack/start") => {
             let result = start_stack(body);
             (200, "application/json", result)
@@ -2185,6 +2190,11 @@ fn maint_json(family: &str, _arch: &str) -> serde_json::Value {
     ];
     if family == "mini3" {
         items.push(serde_json::json!({
+            "id": "privacy",
+            "title": format!("Приватность · {name}"),
+            "hint": "убрать updatesd, telemetry и fluent-bitd; Alice и музыка остаются"
+        }));
+        items.push(serde_json::json!({
             "id": "noupdate",
             "title": format!("Отключить обновления · {name}"),
             "hint": "ota_script.pub, device_ota_update.sh, updatesd"
@@ -2946,6 +2956,7 @@ fn hub_serve(body: &str) -> String {
     }
 
     let online = field(body, "online") == "1";
+    let no_quasar = online || field(body, "no_quasar") == "1";
     let exe = std::env::current_exe().unwrap_or_else(|_| "cockpit".into());
     let log = std::fs::File::create("data/rushub.log").ok();
     let err = log.as_ref().and_then(|f| f.try_clone().ok());
@@ -2954,6 +2965,9 @@ fn hub_serve(body: &str) -> String {
     cmd.args(["hub", "serve", "--mode", mode]);
     if online {
         cmd.arg("--online");
+    }
+    if no_quasar {
+        cmd.arg("--no-quasar");
     }
     if !alias.is_empty() {
         cmd.args(["--alias", &alias]);
