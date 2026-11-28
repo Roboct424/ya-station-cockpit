@@ -85,12 +85,19 @@ echo "перезапускаю quasar, чтобы он перечитал бан
 export LD_LIBRARY_PATH=$Q:$Q/libs:$LD_LIBRARY_PATH
 export PATH=$Q:$PATH
 export GST_PLUGIN_PATH=$Q/libs
-killall quasar_launcher2 2>/dev/null
-killall maind 2>/dev/null
-sleep 3
 if mount | grep -q " $T "; then
-    (cd "$Q" && ./run.sh) >/dev/null 2>&1 &
-    echo "quasar запущен заново"
+    if [ -x /etc/init.d/S99quasar ]; then
+        /etc/init.d/S99quasar stop 2>/dev/null
+        sleep 2
+        /etc/init.d/S99quasar start 2>/dev/null
+        echo "quasar перезапущен через S99quasar"
+    else
+        killall quasar_launcher2 2>/dev/null
+        killall maind 2>/dev/null
+        sleep 3
+        (cd "$Q" && ./run.sh) >/dev/null 2>&1 &
+        echo "quasar запущен заново"
+    fi
 else
     echo "bind-mount пропал — quasar не перезапускаю"
 fi

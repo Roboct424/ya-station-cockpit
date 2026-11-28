@@ -39,6 +39,16 @@ keep_adb() {
 }
 
 restart_quasar() {
+    if [ -x /etc/init.d/S99quasar ]; then
+        # Штатный путь: onboot.sh сам выставит окружение, поднимет wifid
+        # и проверит маркеры ADB. Ручной killall maind может оставить
+        # станцию без Wi-Fi.
+        /etc/init.d/S99quasar stop 2>/dev/null
+        sleep 2
+        /etc/init.d/S99quasar start 2>/dev/null
+        sleep 2
+        return 0
+    fi
     export LD_LIBRARY_PATH=$Q:$Q/libs:${LD_LIBRARY_PATH:-}
     export PATH=$Q:${PATH:-/bin:/sbin:/usr/bin:/usr/sbin}
     export GST_PLUGIN_PATH=$Q/libs
