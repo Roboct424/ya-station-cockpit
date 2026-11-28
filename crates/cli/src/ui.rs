@@ -2957,6 +2957,7 @@ fn hub_serve(body: &str) -> String {
 
     let online = field(body, "online") == "1";
     let no_quasar = online || field(body, "no_quasar") == "1";
+    let only = field(body, "only");
     let exe = std::env::current_exe().unwrap_or_else(|_| "cockpit".into());
     let log = std::fs::File::create("data/rushub.log").ok();
     let err = log.as_ref().and_then(|f| f.try_clone().ok());
@@ -2968,6 +2969,9 @@ fn hub_serve(body: &str) -> String {
     }
     if no_quasar {
         cmd.arg("--no-quasar");
+    }
+    if !only.is_empty() {
+        cmd.args(["--only", &only]);
     }
     if !alias.is_empty() {
         cmd.args(["--alias", &alias]);

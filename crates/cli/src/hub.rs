@@ -41,9 +41,21 @@ impl Mode {
     }
 }
 
+/// Селективный режим: перехватываем только одну станцию (`--only`).
+/// Остальные клиенты точки доступа идут в настоящий интернет.
+static SELECTIVE: AtomicBool = AtomicBool::new(false);
+
 /// Запускает все службы и блокируется навсегда.
-pub fn serve(mode: Mode, alias: Ipv4Addr, online: bool, quasar: bool) -> Result<(), String> {
-    if mode == Mode::Sync && !online {
+pub fn serve(
+    mode: Mode,
+    alias: Ipv4Addr,
+    online: bool,
+    quasar: bool,
+    only: Option<Ipv4Addr>,
+) -> Result<(), String> {
+    let selective = only.is_some();
+    SELECTIVE.store(selective, Ordering::Relaxed);
+    if mode == Mode::Sync && !online && !selective {
         if let Err(error) = add_alias(alias) {
             // без прав администратора адрес не повесить — службы всё равно поднимаем
             log(&format!("адрес {alias} не добавлен: {error}"));
@@ -51,7 +63,7 @@ pub fn serve(mode: Mode, alias: Ipv4Addr, online: bool, quasar: bool) -> Result<
     }
     prepare_link();
     log(&format!(
-        "режим {}: DNS на {SERVER_IP}:53, DHCP :67, SNTP :123{}",
+        "режим {}: DNS на {SERVER_IP}:53, DHCP :67, SNTP :123{}{}",
         if online {
             "online"
         } else if mode == Mode::Sync {
@@ -59,15 +71,19 @@ pub fn serve(mode: Mode, alias: Ipv4Addr, online: bool, quasar: bool) -> Result<
         } else {
             "setup"
         },
-        if mode == Mode::Sync && !online {
+        if mode == Mode::Sync && !online && !selective {
             format!(", quasar на 0.0.0.0:443 ({alias})")
         } else {
             String::new()
+        },
+        match only {
+            Some(ip) => format!(", только {ip} → локальный hub, остальные → интернет"),
+            None => String::new(),
         }
     ));
     // Оффлайн по умолчанию: наружу не уходит ни один DNS-запрос.
     if online {
-        log("DNS: интернет разрешён, Яндекс не перехватываем; телеметрия и OTA — в блоклисте");
+        log("DNS: интернет разрешён; Яндекс не перехватываем (кроме выбранной станции)");
     } else {
         log("DNS: внешние имена не разрешаются — оффлайн, наружу ничего не уходит");
     }
@@ -82,17 +98,19 @@ pub fn serve(mode: Mode, alias: Ipv4Addr, online: bool, quasar: bool) -> Result<
         // раньше, чем ICS успевает сходить в апстрим.
         let ap = Ipv4Addr::new(192, 168, 137, 1);
         log("точка доступа: DNS перехватываем на 192.168.137.1, DHCP/NAT у ICS");
-        spawn("dns-ap", move || dns_loop(ap, ap, mode, online));
+        spawn("dns-ap", move || dns_loop(ap, ap, mode, online, only));
     } else {
         spawn("dns", move || {
-            dns_loop(Ipv4Addr::UNSPECIFIED, alias, mode, online)
+            dns_loop(Ipv4Addr::UNSPECIFIED, alias, mode, online, only)
         });
         spawn("dhcp", dhcp_loop);
     }
     spawn("http", http_loop);
     spawn("sntp", move || sntp_loop(alias));
     spawn("sntp-tcp", sntp_tcp_loop);
-    if mode == Mode::Sync && quasar && !online {
+    // В селективном режиме quasar нужен даже при online: иначе выбранной
+    // станции некому отдать /get_sync_info и локальный OTA.
+    if mode == Mode::Sync && quasar && (selective || !online) {
         spawn("quasar", quasar_loop);
         // как только станция поднимет adbd — сразу подключаемся и закрепляем
         spawn("adb", auto_grab);
@@ -288,7 +306,7 @@ fn online_blocked(name: &str) -> bool {
         .any(|blocked| name == *blocked || name.ends_with(&format!(".{blocked}")))
 }
 
-fn dns_loop(listen: Ipv4Addr, answer: Ipv4Addr, mode: Mode, online: bool) {
+fn dns_loop(listen: Ipv4Addr, answer: Ipv4Addr, mode: Mode, online: bool, only: Option<Ipv4Addr>) {
     // 0.0.0.0 — проводной линк. 192.168.137.1 — точка доступа: садимся
     // поверх ICS-DNS с SO_REUSEADDR и отвечаем быстрее него (G-093).
     let sock = if listen.is_unspecified() {
@@ -319,7 +337,30 @@ fn dns_loop(listen: Ipv4Addr, answer: Ipv4Addr, mode: Mode, online: bool) {
             || name.contains(".time.")
             || name == "time.android.com";
         log(&format!("DNS: {name} тип {qtype} от {peer}"));
-        if online {
+        let target = only.map(|ip| peer.ip() == ip);
+        // Остальные клиенты (например, Mini 3 на официальном аккаунте)
+        // идут в настоящий интернет, без перехвата.
+        if matches!(target, Some(false)) {
+            match forward(query) {
+                Some(reply) => {
+                    let _ = sock.send_to(&reply, peer);
+                }
+                None => log(&format!("DNS: {name} не разрешился")),
+            }
+            continue;
+        }
+        // Выбранной станции не мешаем ходить на oauth/музыку/Alice:
+        // официальный аккаунт должен остаться живым.
+        if matches!(target, Some(true)) && real_only(&name) {
+            match forward(query) {
+                Some(reply) => {
+                    let _ = sock.send_to(&reply, peer);
+                }
+                None => log(&format!("DNS: {name} не разрешился")),
+            }
+            continue;
+        }
+        if online && only.is_none() {
             // Онлайн: станция должна видеть настоящий Яндекс, поэтому
             // A-записи не перехватываем. IPv6 не отдаём вовсе — у точки
             // доступа его нет, а AAAA уводит клиентов в таймаут.
@@ -362,6 +403,27 @@ fn dns_loop(listen: Ipv4Addr, answer: Ipv4Addr, mode: Mode, online: bool) {
             None => log(&format!("DNS: {name} не разрешился")),
         }
     }
+}
+
+/// Имена, которые выбранной станции отдаём в настоящий интернет даже в
+/// селективном режиме: официальный аккаунт, музыка, Alice.
+fn real_only(name: &str) -> bool {
+    const HOSTS: &[&str] = &[
+        "oauth.yandex.ru",
+        "login.yandex.ru",
+        "passport.yandex.ru",
+        "passport.yandex.net",
+        "mobileproxy.passport.yandex.net",
+        "uniproxy.alice.yandex.net",
+        "music.yandex.net",
+        "api.music.yandex.net",
+        "push.yandex.ru",
+        "storage.mds.yandex.net",
+        "avatars.mds.yandex.net",
+    ];
+    HOSTS
+        .iter()
+        .any(|host| name == *host || name.ends_with(&format!(".{host}")))
 }
 
 fn parse_query(query: &[u8]) -> Option<(String, u16, usize)> {
@@ -1057,6 +1119,79 @@ fn dump_probe(kind: &str, content: &str) {
     let _ = std::fs::write(dir.join(name), content);
 }
 
+/// Локальный OTA для выбранной станции (селективный режим).
+///
+/// Берём `data/ota/yandexmini_2/*.json` (его пишет `ota import/fetch`) и
+/// отдаём станции `hasUpdate` с URL на наш `/firmware/<version>.zip`.
+fn local_update_json() -> Option<Vec<u8>> {
+    let gate = std::fs::read_to_string("data/allow_update").ok()?;
+    if gate.trim() != "1" {
+        return None;
+    }
+    let dir = std::path::Path::new("data/ota/yandexmini_2");
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        let Some(version) = value.get("version").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let crc = value.get("crc32").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+        let file = value.get("file").and_then(|v| v.as_str()).unwrap_or("");
+        let file_str = file.replace('\\', "/");
+        let file_path = std::path::Path::new(&file_str);
+        let zip = if file_path.is_file() {
+            file_path.to_path_buf()
+        } else {
+            dir.join(format!("{version}.zip"))
+        };
+        if !zip.is_file() {
+            continue;
+        }
+        let url = format!("https://quasar.yandex.net/firmware/{version}.zip");
+        let body = serde_json::json!({
+            "hasUpdate": true,
+            "version": version,
+            "downloadUrl": &url,
+            "fallbackUrl": &url,
+            "crc32": crc,
+            "critical": true,
+            "updateId": null,
+        });
+        return serde_json::to_vec(&body).ok();
+    }
+    None
+}
+
+fn local_firmware_path(name: &str) -> Option<std::path::PathBuf> {
+    let name = std::path::Path::new(name).file_name()?.to_str()?;
+    for dir in ["data/ota/yandexmini_2", "firmware"] {
+        let path = std::path::Path::new(dir).join(name);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    None
+}
+
+fn serve_firmware(stream: &mut (impl Read + Write), path: &std::path::Path) -> std::io::Result<()> {
+    let mut file = std::fs::File::open(path)?;
+    let len = file.metadata()?.len();
+    let head = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/zip\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n"
+    );
+    stream.write_all(head.as_bytes())?;
+    std::io::copy(&mut file, stream)?;
+    stream.flush()
+}
+
 fn handle_quasar(stream: &mut (impl Read + Write)) -> std::io::Result<()> {
     let mut head = Vec::new();
     let mut byte = [0u8; 1];
@@ -1077,6 +1212,16 @@ fn handle_quasar(stream: &mut (impl Read + Write)) -> std::io::Result<()> {
                 .then(|| value.trim().to_string())
         })
         .unwrap_or_default();
+    // Локальная прошивка для выбранной станции: качается с нашего же
+    // quasar по URL из /check_updates.
+    if let Some(name) = path.strip_prefix("/firmware/") {
+        if SELECTIVE.load(Ordering::Relaxed) {
+            if let Some(file) = local_firmware_path(name) {
+                log(&format!("  -> firmware {name}"));
+                return serve_firmware(stream, &file);
+            }
+        }
+    }
     // Станция открывает /uni.ws как WebSocket. На 200 JSON её клиент
     // считает backend недоступным и объявляет «нет интернета», поэтому
     // отвечаем настоящим 101 и держим соединение (G-101).
@@ -1135,10 +1280,18 @@ fn handle_quasar(stream: &mut (impl Read + Write)) -> std::io::Result<()> {
         log("  -> sync info с adbd");
         cockpit_ota::sync_info_json()
     } else if path.contains("/check_updates") {
-        br#"{"hasUpdate":false}"#.to_vec()
+        if SELECTIVE.load(Ordering::Relaxed) {
+            local_update_json().unwrap_or_else(|| br#"{"hasUpdate":false}"#.to_vec())
+        } else {
+            br#"{"hasUpdate":false}"#.to_vec()
+        }
     } else if path.contains("/register") {
         // Hub-у хватало {"status":"ok"}, Mini 3 ждёт поля активации.
         br#"{"status":"ok","remoteActivation":true,"hasCriticalUpdate":false}"#.to_vec()
+    } else if path.contains("/token") && SELECTIVE.load(Ordering::Relaxed) {
+        // Выбранная станция остаётся на официальном аккаунте: не отдаём
+        // ей фейковый токен, oauth.yandex.ru идёт в настоящий интернет.
+        br#"{}"#.to_vec()
     } else if path.contains("/token") {
         // Без OAuth-ответа станция не завершает регистрацию (G-080).
         log("  -> OAuth token");
@@ -1426,6 +1579,14 @@ fn auto_grab() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selective_real_only() {
+        assert!(real_only("oauth.yandex.ru"));
+        assert!(real_only("api.music.yandex.net"));
+        assert!(!real_only("quasar.yandex.net"));
+        assert!(!real_only("clck.yandex.net"));
+    }
 
     #[test]
     fn sha1_matches_rfc3174() {

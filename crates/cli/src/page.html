@@ -318,12 +318,21 @@ pre.term{height:100%;min-height:0;overflow-wrap:anywhere;word-break:break-all}
     <div class="check"><input type="radio" name="reg" value="online">
       <span><b>Онлайн (официальный аккаунт)</b> — станция привязывается к Яндексу,
       Alice и музыка работают; ADB остаётся открыт</span></div>
+    <div class="check"><input type="radio" name="reg" value="target">
+      <span><b>Локальный hub только для выбранной станции</b> — остальные
+      (например, Mini 3) остаются на официальном Яндексе</span></div>
+    <div class="row" id="target_row" style="display:none;margin-left:22px">
+      <select id="hub_target" style="flex:1"><option value="">выберите станцию</option></select>
+      <button class="act ghost" onclick="loadHubTargets()">Обновить</button>
+    </div>
     <div class="check" style="margin-left:22px"><input type="checkbox" id="ex_privacy" checked>
       <span>Отключить на станции телеметрию, логи и OTA</span></div>
     <p class="hint">Онлайн-режим требует интернет на точке доступа. Станция должна
     быть уже разблокирована (ADB открыт). Если она была в оффлайн-аккаунте,
     добавьте её заново в приложении Яндекса. Телеметрия и обновления
-    выключаются на самой станции, а не только в сети.</p>
+    выключаются на самой станции, а не только в сети. Режим «только для
+    выбранной станции» нужен, чтобы обновить/разблокировать Mini 2, не
+    перехватывая Mini 3.</p>
   </div>
 
   <div class="card">
@@ -453,7 +462,7 @@ document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
   const bar = $('progress');
   if (bar) bar.style.display = b.dataset.tab === 's1' ? 'block' : 'none';
   updateProgress();
-  state(); stackState(); loadDevice(); loadStations(); loadAdvice(); loadAbout();
+  state(); stackState(); loadDevice(); loadStations(); loadHubTargets(); loadAdvice(); loadAbout();
   // Терминал должен начать жить сразу, а не через секунду.
   poll(); pollHub(); pollStack();
 });
@@ -1124,6 +1133,19 @@ async function selectStation(ip) {
   await loadAbout();
 }
 
+async function loadHubTargets() {
+  try {
+    const j = await (await fetch('/api/stations')).json();
+    const sel = $('hub_target');
+    if (!sel) return;
+    const prev = sel.value;
+    sel.innerHTML = '<option value="">выберите станцию</option>' + j.items.map(s =>
+      `<option value="${s.ip}">${s.ip} · ${s.mac}${s.adb ? ' · ADB' : ''}</option>`).join('');
+    const mini2 = j.items.find(s => s.mac.startsWith('b8-87-6e'));
+    sel.value = prev || (mini2 && mini2.ip) || j.selected || '';
+  } catch (e) { /* список обновится позже */ }
+}
+
 async function loadDevice() {
   const j = await (await fetch('/api/device')).json();
   const row = (k, v) => `<div style="display:flex;gap:8px;padding:3px 0"><span style="color:#8b97a8;min-width:96px">${k}</span><span>${v}</span></div>`;
@@ -1228,7 +1250,9 @@ function renderMaint(j) {
 
 async function restartStack() {
   chip('r_hub', false, 'перезапускаю…');
-  const online = document.querySelector('input[name=reg]:checked').value === 'online';
+  const reg = document.querySelector('input[name=reg]:checked').value;
+  const online = reg === 'online';
+  const target = reg === 'target';
   const body = new URLSearchParams({
     mode: 'sync',
     link: $('link').value,
@@ -1237,6 +1261,13 @@ async function restartStack() {
   if (online) {
     body.set('online', '1');
     body.set('no_quasar', '1');
+  }
+  if (target) {
+    const ip = $('hub_target') && $('hub_target').value;
+    if (ip) {
+      body.set('only', ip);
+      body.set('online', '1');
+    }
   }
   const r = await (await fetch('/api/hub/serve', {method: 'POST', body})).json();
   chip('r_hub', r.ok, r.ok ? 'службы перезапущены' : (r.text || 'ошибка'));
@@ -1308,12 +1339,21 @@ document.querySelectorAll('input[name=mode]').forEach(r => r.onchange = () => {
   $('allow').style.display = document.querySelector('input[name=mode]:checked').value === 'cloud' ? 'block' : 'none';
 });
 
+document.querySelectorAll('input[name=reg]').forEach(r => r.onchange = () => {
+  const value = document.querySelector('input[name=reg]:checked').value;
+  const row = $('target_row');
+  if (row) row.style.display = value === 'target' ? 'flex' : 'none';
+  if (value === 'target') loadHubTargets();
+});
+
 function selectAll(on) {
   ITEMS.forEach(it => $('on_' + it.id).checked = on);
 }
 
 async function applyAndRestart() {
-  const online = document.querySelector('input[name=reg]:checked').value === 'online';
+  const reg = document.querySelector('input[name=reg]:checked').value;
+  const online = reg === 'online';
+  const target = reg === 'target';
   const privacy = $('ex_privacy') && $('ex_privacy').checked;
   // Один сервер на всё: quasar + 204 на 80/443, DNS/DHCP — у ICS, если
   // включена точка. Так службы и точка живут вместе.
@@ -1328,6 +1368,16 @@ async function applyAndRestart() {
     // quasar: DNS форвардим, перехват TLS не поднимаем.
     body.set('no_quasar', '1');
   }
+  if (target) {
+    const ip = $('hub_target') && $('hub_target').value;
+    if (!ip) {
+      $('apply_hint').textContent = 'выберите станцию для локального hub';
+      return;
+    }
+    // Выбранная станция — в локальный hub, остальные (Mini 3) — в Яндекс.
+    body.set('only', ip);
+    body.set('online', '1');
+  }
   $('btnApply').disabled = true;
   if (online && privacy) {
     $('apply_hint').textContent = 'отключаю телеметрию и OTA на станции…';
@@ -1338,16 +1388,20 @@ async function applyAndRestart() {
       append('приватность: станция ещё не подключена — примените на шаге 4');
     }
   }
-  $('apply_hint').textContent = 'поднимаю службы…';
+  if (target && privacy) {
+    append('приватность выбранной станции применим после открытия ADB');
+  }
+  $('apply_hint').textContent = target
+    ? 'поднимаю локальный hub только для выбранной станции…'
+    : 'поднимаю службы…';
   const r = await (await fetch('/api/hub/serve', {method: 'POST', body})).json();
   $('btnApply').disabled = false;
   if (r.ok) { _applied = true; updateProgress(); }
-  $('apply_hint').textContent = r.ok
-    ? (online ? 'онлайн-режим: станция идёт в Яндекс, телеметрия и OTA закрыты' : 'службы перехвата работают')
-    : (r.text || 'ошибка');
-  append(r.ok
-    ? (online ? 'онлайн-службы запущены: DNS форвардит, quasar не перехватываем' : 'службы перехвата запущены')
-    : 'ошибка запуска: ' + r.text);
+  const done = target
+    ? `локальный hub только для ${body.get('only')}`
+    : (online ? 'онлайн-режим: станция идёт в Яндекс, телеметрия и OTA закрыты' : 'службы перехвата работают');
+  $('apply_hint').textContent = r.ok ? done : (r.text || 'ошибка');
+  append(r.ok ? done : 'ошибка запуска: ' + r.text);
   if (r.ok) document.querySelector('.tabs button[data-tab="s3"]').click();
 }
 

@@ -243,6 +243,9 @@ enum HubCmd {
         /// Не поднимать встроенный quasar (его отдаёт внешний сервер)
         #[arg(long)]
         no_quasar: bool,
+        /// Перехватывать только одну станцию, остальные — в настоящий интернет
+        #[arg(long)]
+        only: Option<String>,
     },
 }
 
@@ -804,6 +807,7 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
                 alias,
                 online,
                 no_quasar,
+                only,
             } => {
                 let mode = hub::Mode::parse(&mode).ok_or_else(|| {
                     CockpitError::Config("режим должен быть setup или sync".into())
@@ -811,7 +815,15 @@ fn dispatch(cli: Cli) -> cockpit_core::Result<ExitCode> {
                 let alias = alias
                     .parse::<std::net::Ipv4Addr>()
                     .map_err(|_| CockpitError::Config(format!("неверный адрес: {alias}")))?;
-                hub::serve(mode, alias, online, !no_quasar).map_err(CockpitError::Internal)?;
+                let only = only
+                    .map(|value| {
+                        value.parse::<std::net::Ipv4Addr>().map_err(|_| {
+                            CockpitError::Config(format!("неверный адрес only: {value}"))
+                        })
+                    })
+                    .transpose()?;
+                hub::serve(mode, alias, online, !no_quasar, only)
+                    .map_err(CockpitError::Internal)?;
                 Ok(ExitCode::SUCCESS)
             }
         },
