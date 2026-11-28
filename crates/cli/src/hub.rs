@@ -779,14 +779,27 @@ fn http_loop() {
             let _ = stream.flush();
             continue;
         }
+        if let Some(name) = path.strip_prefix("/firmware/") {
+            if SELECTIVE.load(Ordering::Relaxed) {
+                if let Some(file) = local_firmware_path(name) {
+                    log(&format!("  -> firmware {name} по HTTP"));
+                    let _ = serve_firmware(&mut stream, &file);
+                    continue;
+                }
+            }
+        }
         if path.contains("/check_updates") {
-            let body = br#"{"hasUpdate":false}"#;
+            let body = if SELECTIVE.load(Ordering::Relaxed) {
+                local_update_json().unwrap_or_else(|| br#"{"hasUpdate":false}"#.to_vec())
+            } else {
+                br#"{"hasUpdate":false}"#.to_vec()
+            };
             let head = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                 body.len()
             );
             let _ = stream.write_all(head.as_bytes());
-            let _ = stream.write_all(body);
+            let _ = stream.write_all(&body);
             let _ = stream.flush();
             continue;
         }
